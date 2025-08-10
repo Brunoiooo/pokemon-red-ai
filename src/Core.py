@@ -396,7 +396,7 @@ class Core:
 
         self.count += 1
 
-        if self.count % 50 == 0:
+        if self.count % 1000 == 0:
             sys.stdout.write(f"\rEpsilon: {self.currentEpsilon():.2f} | Reward: {reward} | Count: {self.count} | Progress: {(self.count / self.epsilonDecayCount * 100):.2f}%")
             sys.stdout.flush()
 
