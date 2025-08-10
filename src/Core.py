@@ -29,6 +29,11 @@ class Core:
         self.epsilon = epsilon
         self.pyboy = PyBoy(f"roms/{self.game}/rom.gb", sound_emulated = False, window="null")
         self.modelPokemon = ModelPokemon()
+        self.modelPokemon.to("cuda")
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        torch.backends.cudnn.benchmark = True
+        torch.set_float32_matmul_precision("high")
         if os.path.exists(f"roms/{self.game}/model.pth"):
             self.modelPokemon.load_state_dict(torch.load(f"roms/{self.game}/model.pth"))
         self.optimizer = optim.Adam(self.modelPokemon.parameters(), lr=0.01)
@@ -301,7 +306,7 @@ class Core:
         self.historyInputs = np.roll(self.historyInputs, -1, axis=0)
         self.historyInputs[-1] = data
 
-        return torch.tensor(self.log_transform([item for sublist in self.historyInputs for item in sublist])).float()
+        return torch.tensor(self.log_transform([item for sublist in self.historyInputs for item in sublist]), device="cuda").float()
     
     def log_transform(self, data):
         return [math.log(x + 1) for x in data]
