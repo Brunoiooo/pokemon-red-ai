@@ -12,7 +12,7 @@ class Core:
     def __init__(
             self, 
             game, 
-            epsilon=0.1, 
+            epsilon=1, 
             epsilonBurn=10000, 
             epsilonEnd=0.05, 
             epsilonDecayCount=200000, 
