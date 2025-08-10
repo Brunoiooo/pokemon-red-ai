@@ -353,15 +353,19 @@ class Core:
 
             self.saveCount += 1
     
+    def action(self, inputs):
+        with torch.inference_mode():
+            output = self.modelPokemon(inputs)
+            greedy_action = int(torch.argmax(output).item())
+        if random.random() < self.currentEpsilon():
+            return random.randint(0, 7)
+        
+        return greedy_action
+
     def train(self):
         inputs = self.inputs() 
 
-        output = self.modelPokemon(inputs)
-
-        if random.random() < self.currentEpsilon():
-            action = random.randint(0, 7)
-        else:
-            action = int(torch.argmax(output))
+        action = self.action(inputs)
 
         self.pyboy.button_press(self.buttons[action])
 
@@ -381,6 +385,8 @@ class Core:
         reward += self.panishMenuPosition(primary_memo_before, reward)
         reward += self.panishMenuIn(reward)
         
+        reward = max(-1.0, min(1.0, reward))
+
         self.resetCount = 0 if reward > 0 else self.resetCount + 1
 
         if self.resetCount > self.maxResetCount:
@@ -395,11 +401,6 @@ class Core:
             sys.stdout.flush()
 
     def update(self, state, action, reward, next_state):
-        if reward > 1:
-            reward = 1
-        elif reward < -1:
-            reward = -1
-
         current_q_values = self.modelPokemon(state)
         current_q_value = current_q_values[action]
 
