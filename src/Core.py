@@ -23,7 +23,8 @@ class Core:
             maxWorldPosition = 5,
             maxMenuSelect = 5,
             maxMenuPosition = 10,
-            maxMenuIn = 15
+            maxMenuIn = 15,
+            maxSameAction = 5
         ):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.game = game
@@ -59,6 +60,9 @@ class Core:
         self.menuPositionCount = 0
         self.maxMenuIn = maxMenuIn
         self.menuInCount = 0
+        self.sameActionCount = 0
+        self.maxSameAction = maxSameAction
+        self.lastAction = -1
 
     def currentEpsilon(self):
         if self.count < self.epsilonBurn:
@@ -79,6 +83,8 @@ class Core:
         self.menuInCount = 0
         for i in range(8):
             self.pyboy.button_release(self.buttons[i])
+        self.sameActionCount = 0
+        self.lastAction = -1
 
     def save(self):
         torch.save(self.modelPokemon.state_dict(), f"roms/{self.game}/model.pth")
@@ -378,14 +384,15 @@ class Core:
         
         self.pyboy.button_release(self.buttons[action])
 
-        next_state = self.inputs()
-
         reward += self.panishWorldPosition(primary_memo_before, reward)
         reward += self.panishMenuSelect(primary_memo_before, reward)
         reward += self.panishMenuPosition(primary_memo_before, reward)
         reward += self.panishMenuIn(reward)
-        
+        reward += self.panishSameAction(action, reward)
+
         reward = max(-1.0, min(1.0, reward))
+        
+        next_state = self.inputs()
 
         self.resetCount = 0 if reward > 0 else self.resetCount + 1
 
@@ -420,6 +427,19 @@ class Core:
 
     def isSameMenuPosition(self, primary_memo_before):
         return True if primary_memo_before[0xCC24] == self.pyboy.memory[0xCC24] and primary_memo_before[0xCC25] == self.pyboy.memory[0xCC25] else False
+
+    def panishSameAction(self, action, reward):
+        if reward > 0:
+            self.sameActionCount = 0
+            self.lastAction = action
+            return 0.0
+        if action == self.lastAction:
+            self.sameActionCount += 1
+        else:
+            self.sameActionCount = 0
+            self.lastAction = action
+            
+        return -0.2 if self.sameActionCount > self.maxSameAction else 0.0
 
     def panishWorldPosition(self, primary_memo_before, reward):
         if not self.isWorld() or 0 < reward:
