@@ -33,7 +33,7 @@ class Core:
         self.modelPokemon.to(self.device)
         if os.path.exists(f"roms/{self.game}/model.pth"):
             self.modelPokemon.load_state_dict(torch.load(f"roms/{self.game}/model.pth"))
-        self.optimizer = optim.Adam(self.modelPokemon.parameters(), lr=0.01)
+        self.optimizer = optim.Adam(self.modelPokemon.parameters(), lr=0.0001)
         self.visitedPositions = {}
         self.isStarted = False
         self.gamma = 0.99 
@@ -317,6 +317,8 @@ class Core:
     def start(self):
         self.reset()
 
+        inputs = self.inputs()
+
         while True:
             if keyboard.is_pressed('q'):
                 self.save()
@@ -349,7 +351,7 @@ class Core:
             if self.saveCount % self.saveLoops == 0:
                 self.save()
 
-            self.train()
+            inputs = self.train(inputs)
 
             self.saveCount += 1
     
@@ -362,9 +364,7 @@ class Core:
         
         return greedy_action
 
-    def train(self):
-        inputs = self.inputs() 
-
+    def train(self, inputs):
         action = self.action(inputs)
 
         self.pyboy.button_press(self.buttons[action])
@@ -389,9 +389,6 @@ class Core:
 
         self.resetCount = 0 if reward > 0 else self.resetCount + 1
 
-        if self.resetCount > self.maxResetCount:
-            self.reset()
-
         self.update(inputs, action, reward, next_state)
 
         self.count += 1
@@ -399,6 +396,12 @@ class Core:
         if self.count % 50 == 0:
             sys.stdout.write(f"\rEpsilon: {self.currentEpsilon():.2f} | Reward: {reward} | Count: {self.count} | Progress: {(self.count / self.epsilonDecayCount * 100):.2f}%")
             sys.stdout.flush()
+
+        if self.resetCount > self.maxResetCount:
+            self.reset()
+            return self.inputs()
+
+        return next_state
 
     def update(self, state, action, reward, next_state):
         current_q_values = self.modelPokemon(state)
@@ -526,9 +529,9 @@ class Core:
             reward -= 1
 
         # Pokémon 2
-        if memo_before[0xD1979] << 8 | memo_before[0xD198] < self.pyboy.memory[0xD1979] << 8 | self.pyboy.memory[0xD198]: # Current HP
+        if memo_before[0xD199] << 8 | memo_before[0xD198] < self.pyboy.memory[0xD199] << 8 | self.pyboy.memory[0xD198]: # Current HP
             reward += 1
-        elif memo_before[0xD1979] << 8 | memo_before[0xD198] > self.pyboy.memory[0xD1979] << 8 | self.pyboy.memory[0xD198]:
+        elif memo_before[0xD199] << 8 | memo_before[0xD198] > self.pyboy.memory[0xD199] << 8 | self.pyboy.memory[0xD198]:
             reward -= 1
 
         reward -= self.rewardStatus(memo_before[0xD19B], self.pyboy.memory[0xD19B]) # Status
@@ -763,5 +766,3 @@ class Core:
             return 1
          
         return 0
-        
-        
