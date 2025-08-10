@@ -7,6 +7,7 @@ import keyboard
 import random
 import math
 import numpy as np
+import sys
 
 class Core:
     def __init__(
@@ -390,8 +391,8 @@ class Core:
 
         self.count += 1
 
-        print(f"epsilon: {self.currentEpsilon()}")
-        print(f"reward {reward}")
+        sys.stdout.write(f"\rEpsilon: {self.currentEpsilon()} | Reward: {reward} | Count: {self.count} | Progress: {(self.count / self.epsilonDecayCount * 100):.2f}%")
+        sys.stdout.flush()
 
     def update(self, state, action, reward, next_state):
         if reward > 1:
