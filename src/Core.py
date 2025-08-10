@@ -16,7 +16,9 @@ class Core:
             epsilon=1, 
             epsilonBurn=10000, 
             epsilonEnd=0.05, 
-            epsilonDecayCount=200000, 
+            epsilonDecayCount=200000,
+            tmpEpsilon = 0.2,
+            tmpEpsilonSteps = 50000,
             maxResetCount = 100, 
             ticksPerStep = 15, 
             saveLoops = 5000, 
@@ -63,8 +65,17 @@ class Core:
         self.sameActionCount = 0
         self.maxSameAction = maxSameAction
         self.lastAction = -1
+        self.averages = []
+        self.tmpEpsilon = tmpEpsilon
+        self.tmpEpsilonOn = False
+        self.tmpEpsilonSteps = tmpEpsilonSteps
+        self.tmpEpsilonStepsCount = 0
+        self.tmpEpsilonCooldown = 0
 
     def currentEpsilon(self):
+        if self.tmpEpsilonOn:
+            return self.tmpEpsilon
+
         if self.count < self.epsilonBurn:
             return self.epsilon
         t = min(self.count - self.epsilonBurn, self.epsilonDecayCount)
@@ -85,6 +96,9 @@ class Core:
             self.pyboy.button_release(self.buttons[i])
         self.sameActionCount = 0
         self.lastAction = -1
+        self.averages.append([])
+        if len(self.averages) > 20:
+            self.averages.pop(0)
 
     def save(self):
         torch.save(self.modelPokemon.state_dict(), f"roms/{self.game}/model.pth")
@@ -360,7 +374,21 @@ class Core:
             inputs = self.train(inputs)
 
             self.saveCount += 1
-    
+
+            if self.tmpEpsilonOn:
+                self.tmpEpsilonStepsCount += 1
+
+            if not self.tmpEpsilonOn and 0 < self.tmpEpsilonCooldown:
+                self.tmpEpsilonCooldown -= 1
+
+            if self.tmpEpsilonStepsCount >= self.tmpEpsilonSteps:
+                self.tmpEpsilonOn = False
+                self.tmpEpsilonStepsCount = 0
+                self.tmpEpsilonCooldown = self.tmpEpsilonSteps
+
+            if not self.tmpEpsilonOn and self.count > self.epsilonDecayCount and self.average() < 0.5 and self.tmpEpsilonCooldown <= 0:
+                self.tmpEpsilonOn = True
+
     def action(self, inputs):
         with torch.inference_mode():
             output = self.modelPokemon(inputs)
@@ -400,8 +428,10 @@ class Core:
 
         self.count += 1
 
+        self.averages[-1].append(reward)
+
         if self.count % 1000 == 0:
-            sys.stdout.write(f"\rEpsilon: {self.currentEpsilon():.2f} | Reward: {reward} | Count: {self.count} | Progress: {(self.count / self.epsilonDecayCount * 100):.2f}%")
+            sys.stdout.write(f"\rEpsilon: {self.currentEpsilon():.2f} | Reward: {reward} | Count: {self.count} | Progress: {(self.count / self.epsilonDecayCount * 100):.2f}% | Average: {self.average():.2f}")
             sys.stdout.flush()
 
         if self.resetCount > self.maxResetCount:
@@ -409,6 +439,13 @@ class Core:
             return self.inputs()
 
         return next_state
+    
+    def average(self):
+        averages = []
+        for average in self.averages:
+            averages.append(sum(average))
+
+        return sum(averages) / len(averages)
 
     def update(self, state, action, reward, next_state):
         current_q_values = self.modelPokemon(state)
