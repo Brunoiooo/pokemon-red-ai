@@ -27,7 +27,7 @@ class Core:
         ):
         self.game = game
         self.epsilon = epsilon
-        self.pyboy = PyBoy(f"roms/{self.game}/rom.gb", sound_emulated = False)
+        self.pyboy = PyBoy(f"roms/{self.game}/rom.gb", sound_emulated = False, window="null")
         self.modelPokemon = ModelPokemon()
         if os.path.exists(f"roms/{self.game}/model.pth"):
             self.modelPokemon.load_state_dict(torch.load(f"roms/{self.game}/model.pth"))
@@ -374,9 +374,9 @@ class Core:
 
         next_state = self.inputs()
 
-        reward += self.panishWorldPosition(primary_memo_before)
-        reward += self.panishMenuSelect(primary_memo_before)
-        reward += self.panishMenuPosition(primary_memo_before)
+        reward += self.panishWorldPosition(primary_memo_before, reward)
+        reward += self.panishMenuSelect(primary_memo_before, reward)
+        reward += self.panishMenuPosition(primary_memo_before, reward)
         reward += self.panishMenuIn(reward)
 
         if reward > 0:
@@ -391,7 +391,7 @@ class Core:
 
         self.count += 1
 
-        sys.stdout.write(f"\rEpsilon: {self.currentEpsilon()} | Reward: {reward} | Count: {self.count} | Progress: {(self.count / self.epsilonDecayCount * 100):.2f}%")
+        sys.stdout.write(f"\rEpsilon: {self.currentEpsilon():.2f} | Reward: {reward} | Count: {self.count} | Progress: {(self.count / self.epsilonDecayCount * 100):.2f}%")
         sys.stdout.flush()
 
     def update(self, state, action, reward, next_state):
@@ -414,8 +414,11 @@ class Core:
         loss.backward()
         self.optimizer.step()
 
-    def panishWorldPosition(self, primary_memo_before):
-        if not self.isWorld():
+    def isSameMenuPosition(self, primary_memo_before):
+        return True if primary_memo_before[0xCC24] == self.pyboy.memory[0xCC24] and primary_memo_before[0xCC25] == self.pyboy.memory[0xCC25] else False
+
+    def panishWorldPosition(self, primary_memo_before, reward):
+        if not self.isWorld() or 0 < reward:
             self.worldPositionCount = 0
             return 0
 
@@ -426,8 +429,8 @@ class Core:
         
         return -1 if self.maxWorldPosition < self.worldPositionCount else 0
         
-    def panishMenuSelect(self, primary_memo_before):
-        if not self.isMenu():
+    def panishMenuSelect(self, primary_memo_before, reward):
+        if not self.isMenu() or 0 < reward:
             self.menuSelectCount = 0
             return 0
 
@@ -438,11 +441,8 @@ class Core:
             
         return -1 if self.maxMenuSelect < self.menuSelectCount else 0
     
-    def isSameMenuPosition(self, primary_memo_before):
-        return True if primary_memo_before[0xCC24] == self.pyboy.memory[0xCC24] and primary_memo_before[0xCC25] == self.pyboy.memory[0xCC25] else False
-
-    def panishMenuPosition(self, primary_memo_before):
-        if not self.isMenu():
+    def panishMenuPosition(self, primary_memo_before, reward):
+        if not self.isMenu() or 0 < reward:
             self.menuPositionCount = 0
             return 0
         
@@ -455,16 +455,13 @@ class Core:
         return -1 if self.maxMenuPosition < self.menuPositionCount else 0
    
     def panishMenuIn(self, reward):
-        if not self.isMenu():
+        if not self.isMenu() or 0 < reward:
             self.menuInCount = 0
-            return 0
-
-        if  reward <= 0:
-            self.menuInCount += 1
-        else:
             self.menuSelectCount = 0
             self.menuPositionCount = 0
-            self.menuInCount = 0
+            return 0
+
+        self.menuInCount += 1
         
         return -1 if self.maxMenuIn < self.menuInCount else 0
 
