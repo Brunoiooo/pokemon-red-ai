@@ -4,6 +4,10 @@ sys.path.append('src')
 
 from Core import Core
 
-core = Core("PokemonRed")
+def main():
+    core = Core("PokemonRed")
 
-core.start()
+    core.start()
+
+if __name__ == "__main__":
+    main()
