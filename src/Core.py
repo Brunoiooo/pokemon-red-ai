@@ -16,7 +16,7 @@ class Core:
             epsilonBurn=10000, 
             epsilonEnd=0.05, 
             epsilonDecayCount=200000, 
-            maxResetCount = 25, 
+            maxResetCount = 100, 
             ticksPerStep = 15, 
             saveLoops = 5000, 
             maxWorldPosition = 5,
@@ -430,19 +430,22 @@ class Core:
             self.menuSelectCount = 0
             return 0
 
-        if primary_memo_before[0xCC26] == self.pyboy.memory[0xCC26]:
+        if primary_memo_before[0xCC26] == self.pyboy.memory[0xCC26] and self.isSameMenuPosition(primary_memo_before):
             self.menuSelectCount += 1
         else:
             self.menuSelectCount = 0
             
         return -1 if self.maxMenuSelect < self.menuSelectCount else 0
     
+    def isSameMenuPosition(self, primary_memo_before):
+        return True if primary_memo_before[0xCC24] == self.pyboy.memory[0xCC24] and primary_memo_before[0xCC25] == self.pyboy.memory[0xCC25] else False
+
     def panishMenuPosition(self, primary_memo_before):
         if not self.isMenu():
             self.menuPositionCount = 0
             return 0
         
-        if primary_memo_before[0xCC24] == self.pyboy.memory[0xCC24] and primary_memo_before[0xCC25] == self.pyboy.memory[0xCC25]:
+        if self.isSameMenuPosition(primary_memo_before):
             self.menuPositionCount += 1
         else:
             self.menuSelectCount = 0
