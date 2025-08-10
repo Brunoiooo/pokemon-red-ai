@@ -380,11 +380,8 @@ class Core:
         reward += self.panishMenuSelect(primary_memo_before, reward)
         reward += self.panishMenuPosition(primary_memo_before, reward)
         reward += self.panishMenuIn(reward)
-
-        if reward > 0:
-            self.resetCount = 0
-        else:
-            self.resetCount += 1
+        
+        self.resetCount = 0 if reward > 0 else self.resetCount + 1
 
         if self.resetCount > self.maxResetCount:
             self.reset()
@@ -393,8 +390,9 @@ class Core:
 
         self.count += 1
 
-        sys.stdout.write(f"\rEpsilon: {self.currentEpsilon():.2f} | Reward: {reward} | Count: {self.count} | Progress: {(self.count / self.epsilonDecayCount * 100):.2f}%")
-        sys.stdout.flush()
+        if self.count % 50 == 0:
+            sys.stdout.write(f"\rEpsilon: {self.currentEpsilon():.2f} | Reward: {reward} | Count: {self.count} | Progress: {(self.count / self.epsilonDecayCount * 100):.2f}%")
+            sys.stdout.flush()
 
     def update(self, state, action, reward, next_state):
         if reward > 1:
