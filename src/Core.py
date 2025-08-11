@@ -25,7 +25,9 @@ class Core:
             maxMenuSelect = 5,
             maxMenuPosition = 10,
             maxMenuIn = 15,
-            maxSameAction = 5
+            maxSameAction = 5,
+            worldIllegalMovesMax = 5,
+            menuIllegalMovesMax = 5
         ):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.game = game
@@ -69,6 +71,11 @@ class Core:
         self.tmpEpsilonStepsCount = 0
         self.tmpEpsilonCooldown = 0
         self.menuReward = -0.5
+        self.worldIllegalMovesCount = 0
+        self.worldIllegalMovesMax = worldIllegalMovesMax
+        self.menuIllegalMovesCount = 0
+        self.menuIllegalMovesMax = menuIllegalMovesMax
+        self.done = False
 
     def currentEpsilon(self):
         if self.tmpEpsilonOn:
@@ -97,6 +104,9 @@ class Core:
         if len(self.averages) > 20:
             self.averages.pop(0)
         self.menuReward = -0.5
+        self.worldIllegalMovesCount = 0
+        self.menuIllegalMovesCount = 0
+        self.done = False
 
     def save(self):
         torch.save(self.modelPokemon.state_dict(), f"roms/{self.game}/model.pth")
@@ -401,25 +411,24 @@ class Core:
 
         self.pyboy.button_press(self.buttons[action])
 
-        primary_memo_before = self.pyboy.memory
-        reward = 0
+        primary_memo_before = self.pyboy.memory[0x0000:0x10000]
         for i in range(self.ticksPerStep):
-            memo_before = self.pyboy.memory
             self.pyboy.tick(render = self.draw)
-            reward += self.reward(memo_before) 
+
+        reward = self.reward(primary_memo_before) 
         
         self.pyboy.button_release(self.buttons[action])
 
+        reward += self.panishWorldIllegalMoves(primary_memo_before, reward)
+        reward += self.panishMenuIllegalMoves(primary_memo_before, reward)
         reward += self.rewardPosition()
         reward += self.panishSwitchMenu(reward)
         reward += self.panishMenuSelect(primary_memo_before, reward)
         reward += self.panishMenuPosition(primary_memo_before, reward)
-        reward += self.panishMenuIn()
+        reward += self.panishMenuIn(reward)
         reward += self.panishSameAction(action, reward)
         
         next_state = self.inputs()
-
-        self.resetCount = 0 if reward > 0 else self.resetCount + 1
 
         self.update(inputs, action, reward, next_state)
 
@@ -431,11 +440,46 @@ class Core:
             sys.stdout.write(f"\rEpsilon: {self.currentEpsilon():.2f} | Reward: {reward} | Count: {self.count} | Progress: {(self.count / self.epsilonDecayCount * 100):.2f}% | Average: {self.average():.2f}")
             sys.stdout.flush()
 
-        if self.resetCount > self.maxResetCount:
+        if self.done:
             self.reset()
             return self.inputs()
-
+        
         return next_state
+    
+    def countingReward(self, reward):
+        self.resetCount = 0 if reward > 0 else self.resetCount + 1
+        if self.resetCount > self.maxResetCount:
+            self.done = True
+    
+    def panishWorldIllegalMoves(self, primary_memo_before, reward):
+        if not self.isWorld() or 0 < reward or not self.isSameWorldPosition(primary_memo_before):
+            self.worldIllegalMovesCount = 0
+            return 0
+        
+        self.worldIllegalMovesCount += 1
+
+        if self.worldIllegalMovesMax < self.worldIllegalMovesCount:
+            self.done = True
+
+        if 1 < self.worldIllegalMovesCount:
+            return -3
+        else:
+            return 0
+
+    def panishMenuIllegalMoves(self, primary_memo_before, reward):
+        if not self.isMenu() or 0 < reward or not self.isSameMenuPosition(primary_memo_before) or not self.isSameMenuPosition(primary_memo_before):
+            self.menuIllegalMovesCount = 0
+            return 0
+        
+        self.menuIllegalMovesCount += 1
+
+        if self.menuIllegalMovesMax < self.menuIllegalMovesCount:
+            self.done = True
+
+        if 1 < self.menuIllegalMovesCount:
+            return -3
+        else:
+            return 0
     
     def panishSwitchMenu(self, reward):
         if self.isMenu() and reward <= 0:
@@ -467,8 +511,14 @@ class Core:
         loss.backward()
         self.optimizer.step()
 
+    def isSameWorldPosition(self, primary_memo_before):
+        return True if primary_memo_before[0xD35E] == self.pyboy.memory[0xD35E] and primary_memo_before[0xD361] == self.pyboy.memory[0xD361] and primary_memo_before[0xD362] == self.pyboy.memory[0xD362] else False
+
     def isSameMenuPosition(self, primary_memo_before):
         return True if primary_memo_before[0xCC24] == self.pyboy.memory[0xCC24] and primary_memo_before[0xCC25] == self.pyboy.memory[0xCC25] else False
+    
+    def isSameMenuSelect(self, primary_memo_before):
+        return True if primary_memo_before[0xCC26] == self.pyboy.memory[0xCC26] else False
 
     def panishSameAction(self, action, reward):
         if reward > 0:
@@ -508,8 +558,8 @@ class Core:
         
         return -0.3 if self.maxMenuPosition < self.menuPositionCount else 0
    
-    def panishMenuIn(self):
-        if not self.isMenu():
+    def panishMenuIn(self, reward):
+        if not self.isMenu() or 0 < reward:
             self.menuInCount = 0
             self.menuSelectCount = 0
             self.menuPositionCount = 0
