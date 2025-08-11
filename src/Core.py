@@ -14,11 +14,11 @@ class Core:
             self, 
             game, 
             epsilon=1, 
-            epsilonBurn=10000, 
-            epsilonEnd=0.05, 
-            epsilonDecayCount=200000,
+            epsilonBurn=100000, 
+            epsilonEnd=0.05,
+            epsilonDecayCount=2000000,
             tmpEpsilon = 0.2,
-            tmpEpsilonSteps = 50000,
+            tmpEpsilonSteps = 100000,
             maxResetCount = 100, 
             ticksPerStep = 20, 
             saveLoops = 5000, 
@@ -37,7 +37,7 @@ class Core:
         self.modelPokemon.to(self.device)
         if os.path.exists(f"roms/{self.game}/model.pth"):
             self.modelPokemon.load_state_dict(torch.load(f"roms/{self.game}/model.pth"))
-        self.optimizer = optim.Adam(self.modelPokemon.parameters(), lr=0.0001)
+        self.optimizer = optim.Adam(self.modelPokemon.parameters(), lr=0.03)
         self.visitedPositions = {}
         self.isStarted = False
         self.gamma = 0.99 
