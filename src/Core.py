@@ -20,9 +20,8 @@ class Core:
             tmpEpsilon = 0.2,
             tmpEpsilonSteps = 50000,
             maxResetCount = 100, 
-            ticksPerStep = 15, 
+            ticksPerStep = 20, 
             saveLoops = 5000, 
-            maxWorldPosition = 5,
             maxMenuSelect = 5,
             maxMenuPosition = 10,
             maxMenuIn = 15,
@@ -54,8 +53,6 @@ class Core:
         self.ticksPerStep = ticksPerStep
         self.saveCount = 0
         self.saveLoops = saveLoops
-        self.maxWorldPosition = maxWorldPosition
-        self.worldPositionCount = 0
         self.maxMenuSelect = maxMenuSelect
         self.menuSelectCount = 0
         self.maxMenuPosition = maxMenuPosition
@@ -71,6 +68,7 @@ class Core:
         self.tmpEpsilonSteps = tmpEpsilonSteps
         self.tmpEpsilonStepsCount = 0
         self.tmpEpsilonCooldown = 0
+        self.menuReward = -0.5
 
     def currentEpsilon(self):
         if self.tmpEpsilonOn:
@@ -88,7 +86,6 @@ class Core:
         self.resetCount = 0
         self.historyInputs = np.zeros((16, 1559), dtype=np.float32)
         self.visitedPositions = {}
-        self.worldPositionCount = 0
         self.menuSelectCount = 0
         self.menuPositionCount = 0
         self.menuInCount = 0
@@ -99,6 +96,7 @@ class Core:
         self.averages.append([])
         if len(self.averages) > 20:
             self.averages.pop(0)
+        self.menuReward = -0.5
 
     def save(self):
         torch.save(self.modelPokemon.state_dict(), f"roms/{self.game}/model.pth")
@@ -412,13 +410,12 @@ class Core:
         
         self.pyboy.button_release(self.buttons[action])
 
-        reward += self.panishWorldPosition(primary_memo_before, reward)
+        reward += self.rewardPosition()
+        reward += self.panishSwitchMenu(reward)
         reward += self.panishMenuSelect(primary_memo_before, reward)
         reward += self.panishMenuPosition(primary_memo_before, reward)
-        reward += self.panishMenuIn(reward)
+        reward += self.panishMenuIn()
         reward += self.panishSameAction(action, reward)
-
-        reward = max(-1.0, min(1.0, reward))
         
         next_state = self.inputs()
 
@@ -440,6 +437,14 @@ class Core:
 
         return next_state
     
+    def panishSwitchMenu(self, reward):
+        if self.isMenu() and reward <= 0:
+            if -0.2 < self.menuReward:
+                self.menuReward += -0.05
+            return self.menuReward
+        else:
+            return 0
+
     def average(self):
         averages = []
         for average in self.averages:
@@ -477,18 +482,6 @@ class Core:
             self.lastAction = action
             
         return -0.2 if self.sameActionCount > self.maxSameAction else 0.0
-
-    def panishWorldPosition(self, primary_memo_before, reward):
-        if not self.isWorld() or 0 < reward:
-            self.worldPositionCount = 0
-            return 0
-
-        if primary_memo_before[0xD361] == self.pyboy.memory[0xD361] and primary_memo_before[0xD362] == self.pyboy.memory[0xD362]:
-            self.worldPositionCount += 1
-        else:
-            self.worldPositionCount = 0
-        
-        return -1 if self.maxWorldPosition < self.worldPositionCount else 0
         
     def panishMenuSelect(self, primary_memo_before, reward):
         if not self.isMenu() or 0 < reward:
@@ -500,7 +493,7 @@ class Core:
         else:
             self.menuSelectCount = 0
             
-        return -1 if self.maxMenuSelect < self.menuSelectCount else 0
+        return -0.2 if self.maxMenuSelect < self.menuSelectCount else 0
     
     def panishMenuPosition(self, primary_memo_before, reward):
         if not self.isMenu() or 0 < reward:
@@ -513,10 +506,10 @@ class Core:
             self.menuSelectCount = 0
             self.menuPositionCount = 0
         
-        return -1 if self.maxMenuPosition < self.menuPositionCount else 0
+        return -0.3 if self.maxMenuPosition < self.menuPositionCount else 0
    
-    def panishMenuIn(self, reward):
-        if not self.isMenu() or 0 < reward:
+    def panishMenuIn(self):
+        if not self.isMenu():
             self.menuInCount = 0
             self.menuSelectCount = 0
             self.menuPositionCount = 0
@@ -524,7 +517,7 @@ class Core:
 
         self.menuInCount += 1
         
-        return -1 if self.maxMenuIn < self.menuInCount else 0
+        return -0.4 if self.maxMenuIn < self.menuInCount else 0
 
     def reward(self, memo_before):
         reward = 0
@@ -777,8 +770,6 @@ class Core:
             reward -= 1
 
         reward += self.rewardStatus(memo_before[0xD984], self.pyboy.memory[0xD984]) # Status
-        
-        reward += self.rewardPosition(self.pyboy.memory[0xD35E], f"{self.pyboy.memory[0xD361]}x{self.pyboy.memory[0xD362]}")
 
         return reward
 
@@ -814,12 +805,24 @@ class Core:
 
         return reward
     
-    def rewardPosition(self, map, position):
+    def rewardPosition(self):
+        if not self.isWorld():
+            return 0
+        
+        map = self.pyboy.memory[0xD35E]
+        position = f"{self.pyboy.memory[0xD361]}x{self.pyboy.memory[0xD362]}"
+
         if map not in self.visitedPositions:
-            self.visitedPositions[map] = []
+            self.visitedPositions[map] = {}
+            self.menuReward += 0.2
+            return 2
 
         if position not in self.visitedPositions[map]:
-            self.visitedPositions[map].append(position)
-            return 1
-         
-        return 0
+            self.visitedPositions[map][position] = 0.2
+            self.menuReward += 0.05
+            return self.visitedPositions[map][position]
+        
+        if self.visitedPositions[map][position] > -0.2:
+            self.visitedPositions[map][position] += -0.05
+
+        return self.visitedPositions[map][position]
