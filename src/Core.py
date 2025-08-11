@@ -21,13 +21,15 @@ class Core:
             tmpEpsilonSteps = 100000,
             maxResetCount = 100, 
             ticksPerStep = 20, 
-            saveLoops = 5000, 
             maxMenuSelect = 5,
             maxMenuPosition = 10,
             maxMenuIn = 15,
             maxSameAction = 5,
             worldIllegalMovesMax = 5,
-            menuIllegalMovesMax = 5
+            menuIllegalMovesMax = 5,
+            era = 100000,
+            lr=0.03,
+            testMax = 100
         ):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.game = game
@@ -35,9 +37,11 @@ class Core:
         self.pyboy = PyBoy(f"roms/{self.game}/rom.gb", sound_emulated = False, window="null")
         self.modelPokemon = ModelPokemon()
         self.modelPokemon.to(self.device)
-        if os.path.exists(f"roms/{self.game}/model.pth"):
-            self.modelPokemon.load_state_dict(torch.load(f"roms/{self.game}/model.pth"))
-        self.optimizer = optim.Adam(self.modelPokemon.parameters(), lr=0.03)
+        if os.path.exists(f"roms/{self.game}/latest.pth"):
+            self.modelPokemon.load_state_dict(torch.load(f"roms/{self.game}/latest.pth"))
+        elif os.path.exists(f"roms/{self.game}/best.pth"):
+            self.modelPokemon.load_state_dict(torch.load(f"roms/{self.game}/best.pth"))
+        self.optimizer = optim.Adam(self.modelPokemon.parameters(), lr=lr)
         self.visitedPositions = {}
         self.isStarted = False
         self.gamma = 0.99 
@@ -46,15 +50,12 @@ class Core:
         self.epsilonBurn = epsilonBurn
         self.epsilonEnd = epsilonEnd
         self.epsilonDecayCount = epsilonDecayCount
-        self.draw = True
         self.resetCount = 0
         self.maxResetCount = maxResetCount
         self.count = 0
         self.buttons = ["a", "b", "start", "select", "left", "right", "up", "down"]
         self.historyInputs = np.zeros((16, 1559), dtype=np.float32)
         self.ticksPerStep = ticksPerStep
-        self.saveCount = 0
-        self.saveLoops = saveLoops
         self.maxMenuSelect = maxMenuSelect
         self.menuSelectCount = 0
         self.maxMenuPosition = maxMenuPosition
@@ -76,8 +77,18 @@ class Core:
         self.menuIllegalMovesCount = 0
         self.menuIllegalMovesMax = menuIllegalMovesMax
         self.done = False
+        self.eraCount = 0
+        self.era = era
+        self.isTest = False
+        self.testCount = 0
+        self.lastTestAverage = None
+        self.testAverage = []
+        self.testMax = testMax
 
     def currentEpsilon(self):
+        if self.isTest:
+            return 0
+
         if self.tmpEpsilonOn:
             return self.tmpEpsilon
 
@@ -88,8 +99,12 @@ class Core:
         return self.epsilonEnd + (self.epsilon - self.epsilonEnd) * max(frac, 0.0)
 
     def reset(self):
-        with open(f"roms/{self.game}/saved_game.state", "rb") as load_file:
-            self.pyboy.load_state(load_file)
+        if os.path.exists(f"roms/{self.game}/checkpoint.state"):
+            with open(f"roms/{self.game}/checkpoint.state", "rb") as load_file:
+                self.pyboy.load_state(load_file)
+        else:
+            with open(f"roms/{self.game}/start.state", "rb") as load_file:
+                self.pyboy.load_state(load_file)
         self.resetCount = 0
         self.historyInputs = np.zeros((16, 1559), dtype=np.float32)
         self.visitedPositions = {}
@@ -106,9 +121,12 @@ class Core:
         self.menuIllegalMovesCount = 0
         self.done = False
 
-    def save(self):
-        torch.save(self.modelPokemon.state_dict(), f"roms/{self.game}/model.pth")
-        self.saveCount = 0
+    def saveModel(self, name):
+        torch.save(self.modelPokemon.state_dict(), f"roms/{self.game}/{name}.pth")
+
+    def saveGameState(self, name):
+        with open(f"roms/{self.game}/{name}.state", "wb") as save_file:
+            self.pyboy.save_state(save_file)
 
     def isBattle(self):
         return True if self.pyboy.memory[0xD057] else False
@@ -347,7 +365,6 @@ class Core:
 
         while True:
             if keyboard.is_pressed('q'):
-                self.save()
                 break
             elif keyboard.is_pressed('['):
                 self.isStarted = False
@@ -355,31 +372,19 @@ class Core:
             elif keyboard.is_pressed(']'):
                 print("start")
                 self.isStarted = True
-            elif keyboard.is_pressed('o'):
-                print("draw = False")
-                self.draw = False
-            elif keyboard.is_pressed('p'):
-                print("draw = True")
-                self.draw = True
-            elif keyboard.is_pressed('i'):
-                print("save")
-                with open(f"roms/{self.game}/saved_game.state", "wb") as save_file:
-                    self.pyboy.save_state(save_file)
-            elif keyboard.is_pressed('u'):
-                print("load")
-                with open(f"roms/{self.game}/saved_game.state", "rb") as load_file:
-                    self.pyboy.load_state(load_file)
 
             if not self.isStarted:
                 self.pyboy.tick()
                 continue
-            
-            if self.saveCount % self.saveLoops == 0:
-                self.save()
 
             inputs = self.train(inputs)
 
-            self.saveCount += 1
+            if self.eraCount > self.era:
+                self.eraCount = 0
+                self.reset()
+                self.testAverage = []
+                self.isTest = True
+                inputs = self.inputs()
 
             if self.tmpEpsilonOn:
                 self.tmpEpsilonStepsCount += 1
@@ -404,6 +409,27 @@ class Core:
         
         return greedy_action
 
+    def test(self, reward):
+        self.testAverage.append(reward)
+
+        if self.done:
+            self.testCount += 1
+            
+        if self.testCount >= self.testMax:
+            self.isTest = False
+            self.eraCount = 0
+            self.saveModel("latest")
+            self.saveGameState("checkpoint")
+
+        if self.testCount >= self.testMax and self.lastTestAverage is None:
+            self.lastTestAverage = sum(self.testAverage) / len(self.testAverage)
+        elif self.testCount >= self.testMax and self.lastTestAverage is not None and self.lastTestAverage < sum(self.testAverage) / len(self.testAverage):
+            self.lastTestAverage = sum(self.testAverage) / len(self.testAverage)
+            self.saveModel("best")
+
+        if self.testCount >= self.testMax:
+            self.testCount = 0
+        
     def train(self, inputs):
         action = self.action(inputs)
 
@@ -411,33 +437,28 @@ class Core:
 
         primary_memo_before = self.pyboy.memory[0x0000:0x10000]
         for i in range(self.ticksPerStep):
-            self.pyboy.tick(render = self.draw)
+            self.pyboy.tick()
 
-        reward = self.reward(primary_memo_before) 
+        reward = self.reward(primary_memo_before, action) 
         
         self.pyboy.button_release(self.buttons[action])
-
-        reward += self.panishWorldIllegalMoves(primary_memo_before, reward)
-        reward += self.panishMenuIllegalMoves(primary_memo_before, reward)
-        reward += self.rewardPosition()
-        reward += self.panishSwitchMenu(reward)
-        reward += self.panishMenuSelect(primary_memo_before, reward)
-        reward += self.panishMenuPosition(primary_memo_before, reward)
-        reward += self.panishMenuIn(reward)
-        reward += self.panishSameAction(action, reward)
         
         next_state = self.inputs()
 
-        self.update(inputs, action, reward, next_state)
-
         self.count += 1
 
-        self.averages = np.roll(self.averages, -1, axis=0)
-        self.averages[-1] = reward
+        if not self.isTest:
+            self.update(inputs, action, reward, next_state)
+            self.eraCount += 1
+            self.averages = np.roll(self.averages, -1, axis=0)
+            self.averages[-1] = reward
 
         if self.count % 10 == 0:
-            sys.stdout.write(f"\rEpsilon: {self.currentEpsilon():.2f} | Reward: {reward:.2f} | Count: {self.count} | Progress: {(self.count / self.epsilonDecayCount * 100):.2f}% | Average: {self.average():.2f}")
+            sys.stdout.write(f"\rreward {reward} Era {self.eraCount} testAverage {len(self.testAverage)} testCount {self.testCount} Epsilon: {self.currentEpsilon():.2f} | Reward: {reward:.2f} | Count: {self.count} | Progress: {(self.count / self.epsilonDecayCount * 100):.2f}% | Average: {self.average():.2f}")
             sys.stdout.flush()
+
+        if self.isTest:
+            self.test(reward)
 
         if self.done:
             self.reset()
@@ -564,257 +585,266 @@ class Core:
         
         return -0.4 if self.maxMenuIn < self.menuInCount else 0
 
-    def reward(self, memo_before):
+    def reward(self, primary_memo_before, action):
         reward = 0
 
         # Player's Substitute HP
-        if memo_before[0xCCD7] < self.pyboy.memory[0xCCD7]: 
+        if primary_memo_before[0xCCD7] < self.pyboy.memory[0xCCD7]: 
             reward += 1
-        elif memo_before[0xCCD7] > self.pyboy.memory[0xCCD7]:
+        elif primary_memo_before[0xCCD7] > self.pyboy.memory[0xCCD7]:
             reward -= 1
 
         # Enemy Substitute HP
-        if memo_before[0xCCD8] > self.pyboy.memory[0xCCD8]: 
+        if primary_memo_before[0xCCD8] > self.pyboy.memory[0xCCD8]: 
             reward += 1
-        elif memo_before[0xCCD8] < self.pyboy.memory[0xCCD8]:
+        elif primary_memo_before[0xCCD8] < self.pyboy.memory[0xCCD8]:
             reward -= 1
 
         # Player move that the enemy disabled
-        if memo_before[0xCCEE] != self.pyboy.memory[0xCCEE] and self.pyboy.memory[0xCCEE] == 0: 
+        if primary_memo_before[0xCCEE] != self.pyboy.memory[0xCCEE] and self.pyboy.memory[0xCCEE] == 0: 
             reward += 1
-        elif memo_before[0xCCEE] != self.pyboy.memory[0xCCEE]:
+        elif primary_memo_before[0xCCEE] != self.pyboy.memory[0xCCEE]:
             reward -= 1
 
         # Enemy move that the player disabled
-        if memo_before[0xCCEF] != self.pyboy.memory[0xCCEF] and self.pyboy.memory[0xCCEF] != 0:
+        if primary_memo_before[0xCCEF] != self.pyboy.memory[0xCCEF] and self.pyboy.memory[0xCCEF] != 0:
             reward += 1
 
         # Enemy's HP
-        if memo_before[0xCFE7] << 8 | memo_before[0xCFE6] > self.pyboy.memory[0xCFE7] << 8 | self.pyboy.memory[0xCFE6]:
+        if primary_memo_before[0xCFE7] << 8 | primary_memo_before[0xCFE6] > self.pyboy.memory[0xCFE7] << 8 | self.pyboy.memory[0xCFE6]:
             reward += 1
 
         # Enemy's Status
-        reward += self.rewardStatus(memo_before[0xCFE8], self.pyboy.memory[0xCFE8])
+        reward += self.rewardStatus(primary_memo_before[0xCFE8], self.pyboy.memory[0xCFE8])
 
         # Pokémon 1st Slot (In-Battle)
-        if memo_before[0xD016] << 8 | memo_before[0xD015] < self.pyboy.memory[0xD016] << 8 | self.pyboy.memory[0xD015]: # Current HP
+        if primary_memo_before[0xD016] << 8 | primary_memo_before[0xD015] < self.pyboy.memory[0xD016] << 8 | self.pyboy.memory[0xD015]: # Current HP
             reward += 1
 
         # Status
-        reward -= self.rewardStatus(memo_before[0xD018], self.pyboy.memory[0xD018])
+        reward -= self.rewardStatus(primary_memo_before[0xD018], self.pyboy.memory[0xD018])
 
         #Critical Hit / OHKO Flag
-        if memo_before[0xD05E] != self.pyboy.memory[0xD05E]:
+        if primary_memo_before[0xD05E] != self.pyboy.memory[0xD05E]:
             reward += self.pyboy.memory[0xD05E]
 
-        if memo_before[0xD05F] != self.pyboy.memory[0xD05F] and self.pyboy.memory[0xD05F] == 1:
+        if primary_memo_before[0xD05F] != self.pyboy.memory[0xD05F] and self.pyboy.memory[0xD05F] == 1:
             reward += 1
 
         # Pokémon 1
-        if memo_before[0xD16D] << 8 | memo_before[0xD16C] < self.pyboy.memory[0xD16D] << 8 | self.pyboy.memory[0xD16C]: # Current HP
+        if primary_memo_before[0xD16D] << 8 | primary_memo_before[0xD16C] < self.pyboy.memory[0xD16D] << 8 | self.pyboy.memory[0xD16C]: # Current HP
             reward += 1
-        elif memo_before[0xD16D] << 8 | memo_before[0xD16C] > self.pyboy.memory[0xD16D] << 8 | self.pyboy.memory[0xD16C]:
+        elif primary_memo_before[0xD16D] << 8 | primary_memo_before[0xD16C] > self.pyboy.memory[0xD16D] << 8 | self.pyboy.memory[0xD16C]:
             reward -= 1
 
-        reward -= self.rewardStatus(memo_before[0xD16F], self.pyboy.memory[0xD16F]) # Status
+        reward -= self.rewardStatus(primary_memo_before[0xD16F], self.pyboy.memory[0xD16F]) # Status
 
-        if memo_before[0xD18C] < self.pyboy.memory[0xD18C]: # Level
+        if primary_memo_before[0xD18C] < self.pyboy.memory[0xD18C]: # Level
             reward += 1
-        elif memo_before[0xD18C] > self.pyboy.memory[0xD18C]:
+        elif primary_memo_before[0xD18C] > self.pyboy.memory[0xD18C]:
             reward -= 1
 
         # Pokémon 2
-        if memo_before[0xD199] << 8 | memo_before[0xD198] < self.pyboy.memory[0xD199] << 8 | self.pyboy.memory[0xD198]: # Current HP
+        if primary_memo_before[0xD199] << 8 | primary_memo_before[0xD198] < self.pyboy.memory[0xD199] << 8 | self.pyboy.memory[0xD198]: # Current HP
             reward += 1
-        elif memo_before[0xD199] << 8 | memo_before[0xD198] > self.pyboy.memory[0xD199] << 8 | self.pyboy.memory[0xD198]:
+        elif primary_memo_before[0xD199] << 8 | primary_memo_before[0xD198] > self.pyboy.memory[0xD199] << 8 | self.pyboy.memory[0xD198]:
             reward -= 1
 
-        reward -= self.rewardStatus(memo_before[0xD19B], self.pyboy.memory[0xD19B]) # Status
+        reward -= self.rewardStatus(primary_memo_before[0xD19B], self.pyboy.memory[0xD19B]) # Status
 
-        if memo_before[0xD1B8] < self.pyboy.memory[0xD1B8]: # Level
+        if primary_memo_before[0xD1B8] < self.pyboy.memory[0xD1B8]: # Level
             reward += 1
-        elif memo_before[0xD1B8] > self.pyboy.memory[0xD1B8]:
+        elif primary_memo_before[0xD1B8] > self.pyboy.memory[0xD1B8]:
             reward -= 1
 
         # Pokémon 3
-        if memo_before[0xD1C5] << 8 | memo_before[0xD1C4] < self.pyboy.memory[0xD1C5] << 8 | self.pyboy.memory[0xD1C4]: # Current HP
+        if primary_memo_before[0xD1C5] << 8 | primary_memo_before[0xD1C4] < self.pyboy.memory[0xD1C5] << 8 | self.pyboy.memory[0xD1C4]: # Current HP
             reward += 1
-        elif memo_before[0xD1C5] << 8 | memo_before[0xD1C4] > self.pyboy.memory[0xD1C5] << 8 | self.pyboy.memory[0xD1C4]:
+        elif primary_memo_before[0xD1C5] << 8 | primary_memo_before[0xD1C4] > self.pyboy.memory[0xD1C5] << 8 | self.pyboy.memory[0xD1C4]:
             reward -= 1
 
-        reward -= self.rewardStatus(memo_before[0xD1C7], self.pyboy.memory[0xD1C7]) # Status
+        reward -= self.rewardStatus(primary_memo_before[0xD1C7], self.pyboy.memory[0xD1C7]) # Status
 
-        if memo_before[0xD1E4] < self.pyboy.memory[0xD1E4]: # Level
+        if primary_memo_before[0xD1E4] < self.pyboy.memory[0xD1E4]: # Level
             reward += 1
-        elif memo_before[0xD1E4] > self.pyboy.memory[0xD1E4]:
+        elif primary_memo_before[0xD1E4] > self.pyboy.memory[0xD1E4]:
             reward -= 1
 
         # Pokémon 4
-        if memo_before[0xD1F1] << 8 | memo_before[0xD1F0] < self.pyboy.memory[0xD1F1] << 8 | self.pyboy.memory[0xD1F0]: # Current HP
+        if primary_memo_before[0xD1F1] << 8 | primary_memo_before[0xD1F0] < self.pyboy.memory[0xD1F1] << 8 | self.pyboy.memory[0xD1F0]: # Current HP
             reward += 1
-        elif memo_before[0xD1F1] << 8 | memo_before[0xD1F0] > self.pyboy.memory[0xD1F1] << 8 | self.pyboy.memory[0xD1F0]:
+        elif primary_memo_before[0xD1F1] << 8 | primary_memo_before[0xD1F0] > self.pyboy.memory[0xD1F1] << 8 | self.pyboy.memory[0xD1F0]:
             reward -= 1
 
-        reward -= self.rewardStatus(memo_before[0xD1F3], self.pyboy.memory[0xD1F3]) # Status
+        reward -= self.rewardStatus(primary_memo_before[0xD1F3], self.pyboy.memory[0xD1F3]) # Status
 
-        if memo_before[0xD210] < self.pyboy.memory[0xD210]: # Level
+        if primary_memo_before[0xD210] < self.pyboy.memory[0xD210]: # Level
             reward += 1
-        elif memo_before[0xD210] > self.pyboy.memory[0xD210]:
+        elif primary_memo_before[0xD210] > self.pyboy.memory[0xD210]:
             reward -= 1
 
         # Pokémon 5
-        if memo_before[0xD21D] << 8 | memo_before[0xD21C] < self.pyboy.memory[0xD21D] << 8 | self.pyboy.memory[0xD21C]: # Current HP
+        if primary_memo_before[0xD21D] << 8 | primary_memo_before[0xD21C] < self.pyboy.memory[0xD21D] << 8 | self.pyboy.memory[0xD21C]: # Current HP
             reward += 1
-        elif memo_before[0xD21D] << 8 | memo_before[0xD21C] > self.pyboy.memory[0xD21D] << 8 | self.pyboy.memory[0xD21C]:
+        elif primary_memo_before[0xD21D] << 8 | primary_memo_before[0xD21C] > self.pyboy.memory[0xD21D] << 8 | self.pyboy.memory[0xD21C]:
             reward -= 1
 
-        reward -= self.rewardStatus(memo_before[0xD21F], self.pyboy.memory[0xD21F]) # Status
+        reward -= self.rewardStatus(primary_memo_before[0xD21F], self.pyboy.memory[0xD21F]) # Status
 
-        if memo_before[0xD23C] < self.pyboy.memory[0xD23C]: # Level
+        if primary_memo_before[0xD23C] < self.pyboy.memory[0xD23C]: # Level
             reward += 1
-        elif memo_before[0xD23C] > self.pyboy.memory[0xD23C]:
+        elif primary_memo_before[0xD23C] > self.pyboy.memory[0xD23C]:
             reward -= 1
 
         # Pokémon 6
-        if memo_before[0xD249] << 8 | memo_before[0xD248] < self.pyboy.memory[0xD249] << 8 | self.pyboy.memory[0xD248]: # Current HP
+        if primary_memo_before[0xD249] << 8 | primary_memo_before[0xD248] < self.pyboy.memory[0xD249] << 8 | self.pyboy.memory[0xD248]: # Current HP
             reward += 1
-        elif memo_before[0xD249] << 8 | memo_before[0xD248] > self.pyboy.memory[0xD249] << 8 | self.pyboy.memory[0xD248]:
+        elif primary_memo_before[0xD249] << 8 | primary_memo_before[0xD248] > self.pyboy.memory[0xD249] << 8 | self.pyboy.memory[0xD248]:
             reward -= 1
 
-        reward -= self.rewardStatus(memo_before[0xD24B], self.pyboy.memory[0xD24B]) # Status
+        reward -= self.rewardStatus(primary_memo_before[0xD24B], self.pyboy.memory[0xD24B]) # Status
 
-        if memo_before[0xD268] < self.pyboy.memory[0xD268]: # Level
+        if primary_memo_before[0xD268] < self.pyboy.memory[0xD268]: # Level
             reward += 1
-        elif memo_before[0xD268] > self.pyboy.memory[0xD268]:
+        elif primary_memo_before[0xD268] > self.pyboy.memory[0xD268]:
             reward -= 1
 
         # Pokedex
         for i in range(0xD2F7, 0xD31C):
-            reward += self.rewardPokedex(memo_before[i], self.pyboy.memory[i])
+            reward += self.rewardPokedex(primary_memo_before[i], self.pyboy.memory[i])
 
         # Miscellaneous
-        reward += self.rewardBadges(memo_before[0xD356], self.pyboy.memory[0xD356])
+        reward += self.rewardBadges(primary_memo_before[0xD356], self.pyboy.memory[0xD356])
 
         # Starters Back?
-        if memo_before[0xD5AB] != self.pyboy.memory[0xD5AB] and self.pyboy.memory[0xD5AB]:
+        if primary_memo_before[0xD5AB] != self.pyboy.memory[0xD5AB] and self.pyboy.memory[0xD5AB]:
             reward += 1
 
         # Have Town map?
-        if memo_before[0xD5F3] != self.pyboy.memory[0xD5F3] and self.pyboy.memory[0xD5F3]:
+        if primary_memo_before[0xD5F3] != self.pyboy.memory[0xD5F3] and self.pyboy.memory[0xD5F3]:
             reward += 1
 
         # Have Oak's Parcel?
-        if memo_before[0xD60D] != self.pyboy.memory[0xD60D] and self.pyboy.memory[0xD60D]:
+        if primary_memo_before[0xD60D] != self.pyboy.memory[0xD60D] and self.pyboy.memory[0xD60D]:
             reward += 1
 
         # Fossilized Pokémon?
-        if memo_before[0xD710] != self.pyboy.memory[0xD710] and self.pyboy.memory[0xD710]:
+        if primary_memo_before[0xD710] != self.pyboy.memory[0xD710] and self.pyboy.memory[0xD710]:
             reward += 1
 
         # Did you get Lapras Yet?
-        if memo_before[0xD72E] != self.pyboy.memory[0xD72E] and self.pyboy.memory[0xD72E]:
+        if primary_memo_before[0xD72E] != self.pyboy.memory[0xD72E] and self.pyboy.memory[0xD72E]:
             reward += 1
 
         # Fought Giovanni Yet?
-        if memo_before[0xD751] != self.pyboy.memory[0xD751] and self.pyboy.memory[0xD751]:
+        if primary_memo_before[0xD751] != self.pyboy.memory[0xD751] and self.pyboy.memory[0xD751]:
             reward += 1
 
         # Fought Brock Yet?
-        if memo_before[0xD755] != self.pyboy.memory[0xD755] and self.pyboy.memory[0xD755]:
+        if primary_memo_before[0xD755] != self.pyboy.memory[0xD755] and self.pyboy.memory[0xD755]:
             reward += 1
 
         # Fought Misty Yet?
-        if memo_before[0xD75E] != self.pyboy.memory[0xD75E] and self.pyboy.memory[0xD75E]:
+        if primary_memo_before[0xD75E] != self.pyboy.memory[0xD75E] and self.pyboy.memory[0xD75E]:
             reward += 1
 
         # Fought Lt. Surge Yet?
-        if memo_before[0xD773] != self.pyboy.memory[0xD773] and self.pyboy.memory[0xD773]:
+        if primary_memo_before[0xD773] != self.pyboy.memory[0xD773] and self.pyboy.memory[0xD773]:
             reward += 1
 
         # Fought Erika Yet?
-        if memo_before[0xD77C] != self.pyboy.memory[0xD77C] and self.pyboy.memory[0xD77C]:
+        if primary_memo_before[0xD77C] != self.pyboy.memory[0xD77C] and self.pyboy.memory[0xD77C]:
             reward += 1
 
         # Fought Articuno Yet?
-        if memo_before[0xD782] != self.pyboy.memory[0xD782] and self.pyboy.memory[0xD782]:
+        if primary_memo_before[0xD782] != self.pyboy.memory[0xD782] and self.pyboy.memory[0xD782]:
             reward += 1
 
         # Fought Koga Yet?
-        if memo_before[0xD792] != self.pyboy.memory[0xD792] and self.pyboy.memory[0xD792]:
+        if primary_memo_before[0xD792] != self.pyboy.memory[0xD792] and self.pyboy.memory[0xD792]:
             reward += 1
 
         # Fought Blaine Yet?
-        if memo_before[0xD79A] != self.pyboy.memory[0xD79A] and self.pyboy.memory[0xD79A]:
+        if primary_memo_before[0xD79A] != self.pyboy.memory[0xD79A] and self.pyboy.memory[0xD79A]:
             reward += 1
 
         # Fought Sabrina Yet?
-        if memo_before[0xD7B3] != self.pyboy.memory[0xD7B3] and self.pyboy.memory[0xD7B3]:
+        if primary_memo_before[0xD7B3] != self.pyboy.memory[0xD7B3] and self.pyboy.memory[0xD7B3]:
             reward += 1
 
         # Fought Zapdos Yet?
-        if memo_before[0xD7D4] != self.pyboy.memory[0xD7D4] and self.pyboy.memory[0xD7D4]:
+        if primary_memo_before[0xD7D4] != self.pyboy.memory[0xD7D4] and self.pyboy.memory[0xD7D4]:
             reward += 1
 
         # Fought Snorlax Yet (Vermilion)
-        if memo_before[0xD7D8] != self.pyboy.memory[0xD7D8] and self.pyboy.memory[0xD7D8]:
+        if primary_memo_before[0xD7D8] != self.pyboy.memory[0xD7D8] and self.pyboy.memory[0xD7D8]:
             reward += 1
 
         # Fought Snorlax Yet? (Celadon)
-        if memo_before[0xD7E0] != self.pyboy.memory[0xD7E0] and self.pyboy.memory[0xD7E0]:
+        if primary_memo_before[0xD7E0] != self.pyboy.memory[0xD7E0] and self.pyboy.memory[0xD7E0]:
             reward += 1
 
         # Fought Moltres Yet?
-        if memo_before[0xD7EE] != self.pyboy.memory[0xD7EE] and self.pyboy.memory[0xD7EE]:
+        if primary_memo_before[0xD7EE] != self.pyboy.memory[0xD7EE] and self.pyboy.memory[0xD7EE]:
             reward += 1
 
         # Opponent Trainer’s Pokémon
         # Pokémon 1
-        if memo_before[0xD8A6] << 8 | memo_before[0xD8A5] > self.pyboy.memory[0xD8A6] << 8 | self.pyboy.memory[0xD8A5]: # Current HP
+        if primary_memo_before[0xD8A6] << 8 | primary_memo_before[0xD8A5] > self.pyboy.memory[0xD8A6] << 8 | self.pyboy.memory[0xD8A5]: # Current HP
             reward += 1
-        elif memo_before[0xD8A6] << 8 | memo_before[0xD8A5] < self.pyboy.memory[0xD8A6] << 8 | self.pyboy.memory[0xD8A5]:
+        elif primary_memo_before[0xD8A6] << 8 | primary_memo_before[0xD8A5] < self.pyboy.memory[0xD8A6] << 8 | self.pyboy.memory[0xD8A5]:
             reward -= 1
 
-        reward += self.rewardStatus(memo_before[0xD8A8], self.pyboy.memory[0xD8A8]) # Status
+        reward += self.rewardStatus(primary_memo_before[0xD8A8], self.pyboy.memory[0xD8A8]) # Status
 
         # Pokémon 2
-        if memo_before[0xD8D2] << 8 | memo_before[0xD8D1] > self.pyboy.memory[0xD8D2] << 8 | self.pyboy.memory[0xD8D1]: # Current HP
+        if primary_memo_before[0xD8D2] << 8 | primary_memo_before[0xD8D1] > self.pyboy.memory[0xD8D2] << 8 | self.pyboy.memory[0xD8D1]: # Current HP
             reward += 1
-        elif memo_before[0xD8D2] << 8 | memo_before[0xD8D1] < self.pyboy.memory[0xD8D2] << 8 | self.pyboy.memory[0xD8D1]:
+        elif primary_memo_before[0xD8D2] << 8 | primary_memo_before[0xD8D1] < self.pyboy.memory[0xD8D2] << 8 | self.pyboy.memory[0xD8D1]:
             reward -= 1
 
-        reward += self.rewardStatus(memo_before[0xD8D4], self.pyboy.memory[0xD8D4]) # Status
+        reward += self.rewardStatus(primary_memo_before[0xD8D4], self.pyboy.memory[0xD8D4]) # Status
 
         # Pokémon 3
-        if memo_before[0xD8FE] << 8 | memo_before[0xD8FD] > self.pyboy.memory[0xD8FE] << 8 | self.pyboy.memory[0xD8FD]: # Current HP
+        if primary_memo_before[0xD8FE] << 8 | primary_memo_before[0xD8FD] > self.pyboy.memory[0xD8FE] << 8 | self.pyboy.memory[0xD8FD]: # Current HP
             reward += 1
-        elif memo_before[0xD8FE] << 8 | memo_before[0xD8FD] < self.pyboy.memory[0xD8FE] << 8 | self.pyboy.memory[0xD8FD]:
+        elif primary_memo_before[0xD8FE] << 8 | primary_memo_before[0xD8FD] < self.pyboy.memory[0xD8FE] << 8 | self.pyboy.memory[0xD8FD]:
             reward -= 1
 
-        reward += self.rewardStatus(memo_before[0xD900], self.pyboy.memory[0xD900]) # Status
+        reward += self.rewardStatus(primary_memo_before[0xD900], self.pyboy.memory[0xD900]) # Status
 
         # Pokémon 4
-        if memo_before[0xD92A] << 8 | memo_before[0xD929] > self.pyboy.memory[0xD92A] << 8 | self.pyboy.memory[0xD929]: # Current HP
+        if primary_memo_before[0xD92A] << 8 | primary_memo_before[0xD929] > self.pyboy.memory[0xD92A] << 8 | self.pyboy.memory[0xD929]: # Current HP
             reward += 1
-        elif memo_before[0xD92A] << 8 | memo_before[0xD929] < self.pyboy.memory[0xD92A] << 8 | self.pyboy.memory[0xD929]:
+        elif primary_memo_before[0xD92A] << 8 | primary_memo_before[0xD929] < self.pyboy.memory[0xD92A] << 8 | self.pyboy.memory[0xD929]:
             reward -= 1
 
-        reward += self.rewardStatus(memo_before[0xD92C], self.pyboy.memory[0xD92C]) # Status
+        reward += self.rewardStatus(primary_memo_before[0xD92C], self.pyboy.memory[0xD92C]) # Status
 
         # Pokémon 5
-        if memo_before[0xD956] << 8 | memo_before[0xD955] > self.pyboy.memory[0xD956] << 8 | self.pyboy.memory[0xD955]: # Current HP
+        if primary_memo_before[0xD956] << 8 | primary_memo_before[0xD955] > self.pyboy.memory[0xD956] << 8 | self.pyboy.memory[0xD955]: # Current HP
             reward += 1
-        elif memo_before[0xD956] << 8 | memo_before[0xD955] < self.pyboy.memory[0xD956] << 8 | self.pyboy.memory[0xD955]:
+        elif primary_memo_before[0xD956] << 8 | primary_memo_before[0xD955] < self.pyboy.memory[0xD956] << 8 | self.pyboy.memory[0xD955]:
             reward -= 1
 
-        reward += self.rewardStatus(memo_before[0xD958], self.pyboy.memory[0xD958]) # Status
+        reward += self.rewardStatus(primary_memo_before[0xD958], self.pyboy.memory[0xD958]) # Status
 
         # Pokémon 6
-        if memo_before[0xD982] << 8 | memo_before[0xD981] > self.pyboy.memory[0xD982] << 8 | self.pyboy.memory[0xD981]: # Current HP
+        if primary_memo_before[0xD982] << 8 | primary_memo_before[0xD981] > self.pyboy.memory[0xD982] << 8 | self.pyboy.memory[0xD981]: # Current HP
             reward += 1
-        elif memo_before[0xD982] << 8 | memo_before[0xD981] < self.pyboy.memory[0xD982] << 8 | self.pyboy.memory[0xD981]:
+        elif primary_memo_before[0xD982] << 8 | primary_memo_before[0xD981] < self.pyboy.memory[0xD982] << 8 | self.pyboy.memory[0xD981]:
             reward -= 1
 
-        reward += self.rewardStatus(memo_before[0xD984], self.pyboy.memory[0xD984]) # Status
+        reward += self.rewardStatus(primary_memo_before[0xD984], self.pyboy.memory[0xD984]) # Status
+
+        reward += self.panishWorldIllegalMoves(primary_memo_before, reward)
+        reward += self.panishMenuIllegalMoves(primary_memo_before, reward)
+        reward += self.rewardPosition()
+        reward += self.panishSwitchMenu(reward)
+        reward += self.panishMenuSelect(primary_memo_before, reward)
+        reward += self.panishMenuPosition(primary_memo_before, reward)
+        reward += self.panishMenuIn(reward)
+        reward += self.panishSameAction(action, reward)
 
         return reward
 
