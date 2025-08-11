@@ -64,7 +64,7 @@ class Core:
         self.sameActionCount = 0
         self.maxSameAction = maxSameAction
         self.lastAction = -1
-        self.averages = []
+        self.averages = np.zeros(1000, dtype=np.float32)
         self.tmpEpsilon = tmpEpsilon
         self.tmpEpsilonOn = False
         self.tmpEpsilonSteps = tmpEpsilonSteps
@@ -100,9 +100,7 @@ class Core:
             self.pyboy.button_release(self.buttons[i])
         self.sameActionCount = 0
         self.lastAction = -1
-        self.averages.append([])
-        if len(self.averages) > 20:
-            self.averages.pop(0)
+        self.averages = np.zeros(1000, dtype=np.float32)
         self.menuReward = -0.5
         self.worldIllegalMovesCount = 0
         self.menuIllegalMovesCount = 0
@@ -434,10 +432,11 @@ class Core:
 
         self.count += 1
 
-        self.averages[-1].append(reward)
+        self.averages = np.roll(self.averages, -1, axis=0)
+        self.averages[-1] = reward
 
-        if self.count % 1000 == 0:
-            sys.stdout.write(f"\rEpsilon: {self.currentEpsilon():.2f} | Reward: {reward} | Count: {self.count} | Progress: {(self.count / self.epsilonDecayCount * 100):.2f}% | Average: {self.average():.2f}")
+        if self.count % 10 == 0:
+            sys.stdout.write(f"\rEpsilon: {self.currentEpsilon():.2f} | Reward: {reward:.2f} | Count: {self.count} | Progress: {(self.count / self.epsilonDecayCount * 100):.2f}% | Average: {self.average():.2f}")
             sys.stdout.flush()
 
         if self.done:
@@ -490,11 +489,7 @@ class Core:
             return 0
 
     def average(self):
-        averages = []
-        for average in self.averages:
-            averages.append(sum(average))
-
-        return sum(averages) / len(averages)
+        return sum(self.averages) / len(self.averages)
 
     def update(self, state, action, reward, next_state):
         current_q_values = self.modelPokemon(state)
