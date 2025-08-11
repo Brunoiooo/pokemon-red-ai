@@ -454,7 +454,7 @@ class Core:
             self.averages[-1] = reward
 
         if self.count % 10 == 0:
-            sys.stdout.write(f"\rreward {reward} Era {self.eraCount} testAverage {len(self.testAverage)} testCount {self.testCount} Epsilon: {self.currentEpsilon():.2f} | Reward: {reward:.2f} | Count: {self.count} | Progress: {(self.count / self.epsilonDecayCount * 100):.2f}% | Average: {self.average():.2f}")
+            sys.stdout.write(f"\rReward {reward:.2f} eraCount {self.eraCount} testAverage {len(self.testAverage)} testCount {self.testCount} Epsilon: {self.currentEpsilon():.2f} | Count: {self.count} | Progress: {(self.count / self.epsilonDecayCount * 100):.2f}% | Average: {self.average():.2f}")
             sys.stdout.flush()
 
         if self.isTest:
