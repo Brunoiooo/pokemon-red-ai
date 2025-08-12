@@ -26,10 +26,9 @@ class Core:
             maxMenuIn = 15,
             maxSameAction = 5,
             worldIllegalMovesMax = 5,
-            menuIllegalMovesMax = 5,
+            menuIllegalMovesMax = 10,
             era = 100000,
-            lr=0.03,
-            testMax = 100
+            lr=0.03
         ):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.game = game
@@ -39,10 +38,21 @@ class Core:
         self.targetPokemon = ModelPokemon().to(self.device)
         self.targetPokemon.load_state_dict(self.modelPokemon.state_dict())
         self.tau = 0.005
+        self.modelPokemon = ModelPokemon().to(self.device)
+
+        ckpt_path = None
         if os.path.exists(f"roms/{self.game}/latest.pth"):
-            self.modelPokemon.load_state_dict(torch.load(f"roms/{self.game}/latest.pth"))
+            ckpt_path = f"roms/{self.game}/latest.pth"
         elif os.path.exists(f"roms/{self.game}/best.pth"):
-            self.modelPokemon.load_state_dict(torch.load(f"roms/{self.game}/best.pth"))
+            ckpt_path = f"roms/{self.game}/best.pth"
+
+        if ckpt_path is not None:
+            state = torch.load(ckpt_path, map_location=self.device)
+            if isinstance(state, dict) and "model_state" in state:
+                self.modelPokemon.load_state_dict(state["model_state"])
+            else:
+                self.modelPokemon.load_state_dict(state)
+            self.modelPokemon.to(self.device)
         self.optimizer = optim.Adam(self.modelPokemon.parameters(), lr=lr)
         self.visitedPositions = {}
         self.isStarted = False
@@ -79,13 +89,7 @@ class Core:
         self.menuIllegalMovesCount = 0
         self.menuIllegalMovesMax = menuIllegalMovesMax
         self.done = False
-        self.eraCount = 0
         self.era = era
-        self.isTest = False
-        self.testCount = 0
-        self.lastTestAverage = None
-        self.testAverage = []
-        self.testMax = testMax
         self.ckpt_every = self.era
         self.next_ckpt = self.ckpt_every
         self.need_game_state_ckpt = False
@@ -108,35 +112,41 @@ class Core:
         }, f"roms/{self.game}/best.pth")
 
     def evaluate_greedy(self, episodes=50):
-        was_test = self.isTest
-        self.isTest = True  # erzatz: currentEpsilon() zwróci 0
         total = 0.0
+        was_training = self.modelPokemon.training
+        self.modelPokemon.eval()             # wyłącz dropout/bn, itp.
+
         for _ in range(episodes):
-            # zresetuj do startu/ckptu – użyj start.state aby warunki były porównywalne
-            with open(f"roms/{self.game}/start.state", "rb") as f:
-                self.pyboy.load_state(f)
+            self.reset()            # <--- pełny reset + start.state
             obs = self.inputs()
             ep_ret = 0.0
-            done_local = False
-            while not done_local:
+
+            while True:
                 with torch.inference_mode():
                     q = self.modelPokemon(obs)
-                    a = int(torch.argmax(q).item())
+                    a = int(torch.argmax(q).item())  # greedy
+
                 self.pyboy.button_press(self.buttons[a])
                 before = self.pyboy.memory[0x0000:0x10000]
                 for _ in range(self.ticksPerStep):
                     self.pyboy.tick()
                 r = self.reward(before, a)
                 self.pyboy.button_release(self.buttons[a])
+
                 ep_ret += float(r)
-                done_local = self.done
-                if done_local:
-                    # przywróć flagi
+
+                if self.done:
+                    # ważne: wyczyść tylko flagę terminalu na koniec epizodu ewaluacji
                     self.done = False
                     break
+
                 obs = self.inputs()
+
             total += ep_ret
-        self.isTest = was_test
+
+        if was_training:
+            self.modelPokemon.train()
+
         return total / episodes
 
     def soft_update_target(self):
@@ -145,9 +155,6 @@ class Core:
                 tp.data.copy_(self.tau * p.data + (1 - self.tau) * tp.data)
 
     def currentEpsilon(self):
-        if self.isTest:
-            return 0
-
         if self.tmpEpsilonOn:
             return self.tmpEpsilon
 
@@ -438,13 +445,6 @@ class Core:
 
             inputs = self.train(inputs)
 
-            if self.eraCount > self.era:
-                self.eraCount = 0
-                self.reset()
-                self.testAverage = []
-                self.isTest = True
-                inputs = self.inputs()
-
             if self.tmpEpsilonOn:
                 self.tmpEpsilonStepsCount += 1
 
@@ -467,27 +467,6 @@ class Core:
             return random.randint(0, 7)
         
         return greedy_action
-
-    def test(self, reward):
-        self.testAverage.append(reward)
-
-        if self.done:
-            self.testCount += 1
-            
-        if self.testCount >= self.testMax:
-            self.isTest = False
-            self.eraCount = 0
-            self.saveModel("latest")
-            self.saveGameState("checkpoint")
-
-        if self.testCount >= self.testMax and self.lastTestAverage is None:
-            self.lastTestAverage = sum(self.testAverage) / len(self.testAverage)
-        elif self.testCount >= self.testMax and self.lastTestAverage is not None and self.lastTestAverage < sum(self.testAverage) / len(self.testAverage):
-            self.lastTestAverage = sum(self.testAverage) / len(self.testAverage)
-            self.saveModel("best")
-
-        if self.testCount >= self.testMax:
-            self.testCount = 0
         
     def train(self, inputs):
         action = self.action(inputs)
@@ -514,18 +493,13 @@ class Core:
             self.need_game_state_ckpt = True
             self.next_ckpt += self.ckpt_every
 
-        if not self.isTest:
-            self.update(inputs, action, torch.as_tensor(reward, dtype=torch.float32, device=self.device), next_state, self.done)
-            self.eraCount += 1
-            self.averages = np.roll(self.averages, -1, axis=0)
-            self.averages[-1] = reward
-
-        if self.count % 10 == 0:
-            sys.stdout.write(f"\rReward {reward:.2f} eraCount {self.eraCount} testAverage {len(self.testAverage)} testCount {self.testCount} Epsilon: {self.currentEpsilon():.2f} | Count: {self.count} | Progress: {(self.count / self.epsilonDecayCount * 100):.2f}% | Average: {self.average():.2f}")
+        self.update(inputs, action, torch.as_tensor(reward, dtype=torch.float32, device=self.device), next_state, self.done)
+        self.averages = np.roll(self.averages, -1, axis=0)
+        self.averages[-1] = reward   
+        
+        if self.cokunt % 10 == 100:
+            sys.stdout.write(f"\risWorld: {self.isWorld()} isMenu: {self.isMenu()} isBattle: {self.isBattle()} Reward {reward:.2f} Epsilon: {self.currentEpsilon():.2f} | Count: {self.count} | Progress: {(self.count / self.epsilonDecayCount * 100):.2f}% | Average: {self.average():.2f} Button {self.buttons[action]}")
             sys.stdout.flush()
-
-        if self.isTest:
-            self.test(reward)
 
         if self.done:
             if self.need_game_state_ckpt:
