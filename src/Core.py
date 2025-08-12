@@ -36,7 +36,9 @@ class Core:
         self.epsilon = epsilon
         self.pyboy = PyBoy(f"roms/{self.game}/rom.gb", sound_emulated = False, window="null")
         self.modelPokemon = ModelPokemon()
-        self.modelPokemon.to(self.device)
+        self.targetPokemon = ModelPokemon().to(self.device)
+        self.targetPokemon.load_state_dict(self.modelPokemon.state_dict())
+        self.tau = 0.005
         if os.path.exists(f"roms/{self.game}/latest.pth"):
             self.modelPokemon.load_state_dict(torch.load(f"roms/{self.game}/latest.pth"))
         elif os.path.exists(f"roms/{self.game}/best.pth"):
@@ -84,6 +86,63 @@ class Core:
         self.lastTestAverage = None
         self.testAverage = []
         self.testMax = testMax
+        self.ckpt_every = self.era
+        self.next_ckpt = self.ckpt_every
+        self.need_game_state_ckpt = False
+        self.best_eval_return = -float("inf")
+
+    def save_latest(self):
+        torch.save({
+            "step": self.count,
+            "model_state": self.modelPokemon.state_dict(),
+            "optimizer_state": self.optimizer.state_dict(),
+            "target_state": self.targetPokemon.state_dict(),
+        }, f"roms/{self.game}/latest.pth")
+
+    def save_best(self, avg_return):
+        self.best_eval_return = avg_return
+        torch.save({
+            "step": self.count,
+            "best_return": float(avg_return),
+            "model_state": self.modelPokemon.state_dict(),
+        }, f"roms/{self.game}/best.pth")
+
+    def evaluate_greedy(self, episodes=50):
+        was_test = self.isTest
+        self.isTest = True  # erzatz: currentEpsilon() zwróci 0
+        total = 0.0
+        for _ in range(episodes):
+            # zresetuj do startu/ckptu – użyj start.state aby warunki były porównywalne
+            with open(f"roms/{self.game}/start.state", "rb") as f:
+                self.pyboy.load_state(f)
+            obs = self.inputs()
+            ep_ret = 0.0
+            done_local = False
+            while not done_local:
+                with torch.inference_mode():
+                    q = self.modelPokemon(obs)
+                    a = int(torch.argmax(q).item())
+                self.pyboy.button_press(self.buttons[a])
+                before = self.pyboy.memory[0x0000:0x10000]
+                for _ in range(self.ticksPerStep):
+                    self.pyboy.tick()
+                r = self.reward(before, a)
+                self.pyboy.button_release(self.buttons[a])
+                ep_ret += float(r)
+                done_local = self.done
+                if done_local:
+                    # przywróć flagi
+                    self.done = False
+                    break
+                obs = self.inputs()
+            total += ep_ret
+        self.isTest = was_test
+        return total / episodes
+
+    def soft_update_target(self):
+        with torch.no_grad():
+            for p, tp in zip(self.modelPokemon.parameters(), self.targetPokemon.parameters()):
+                tp.data.copy_(self.tau * p.data + (1 - self.tau) * tp.data)
 
     def currentEpsilon(self):
         if self.isTest:
@@ -362,7 +421,7 @@ class Core:
         self.reset()
 
         inputs = self.inputs()
-
+        torch.set_printoptions(threshold=float('inf'))
         while True:
             if keyboard.is_pressed('q'):
                 break
@@ -447,8 +506,16 @@ class Core:
 
         self.count += 1
 
+        if self.count >= self.next_ckpt:
+            self.save_latest()
+            avg_ret = self.evaluate_greedy(episodes=50)
+            if avg_ret > self.best_eval_return + 0.5: 
+                self.save_best(avg_ret)
+            self.need_game_state_ckpt = True
+            self.next_ckpt += self.ckpt_every
+
         if not self.isTest:
-            self.update(inputs, action, reward, next_state)
+            self.update(inputs, action, torch.as_tensor(reward, dtype=torch.float32, device=self.device), next_state, self.done)
             self.eraCount += 1
             self.averages = np.roll(self.averages, -1, axis=0)
             self.averages[-1] = reward
@@ -461,6 +528,9 @@ class Core:
             self.test(reward)
 
         if self.done:
+            if self.need_game_state_ckpt:
+                self.saveGameState("checkpoint")
+                self.need_game_state_ckpt = False
             self.reset()
             return self.inputs()
         
@@ -512,20 +582,26 @@ class Core:
     def average(self):
         return sum(self.averages) / len(self.averages)
 
-    def update(self, state, action, reward, next_state):
-        current_q_values = self.modelPokemon(state)
-        current_q_value = current_q_values[action]
+    def update(self, state, action, reward, next_state, done: bool):
+        current_q_values = self.modelPokemon(state)         # [nA]
+        current_q_value  = current_q_values[action]         # skalar
 
         with torch.no_grad():
-            max_next_q_value = self.modelPokemon(next_state).max()
+            # Double-DQN krok (opcjonalnie): online wybiera, target ocenia
+            next_q_online = self.modelPokemon(next_state)
+            next_action   = int(torch.argmax(next_q_online).item())
+            next_q_target = self.targetPokemon(next_state)
+            max_next_q_value = next_q_target[next_action]
 
-        target = reward + self.gamma * max_next_q_value
+            target = reward if done else reward + self.gamma * max_next_q_value
 
         loss = (current_q_value - target) ** 2
-
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
+
+        # stabilizacja
+        self.soft_update_target()
 
     def isSameWorldPosition(self, primary_memo_before):
         return True if primary_memo_before[0xD35E] == self.pyboy.memory[0xD35E] and primary_memo_before[0xD361] == self.pyboy.memory[0xD361] and primary_memo_before[0xD362] == self.pyboy.memory[0xD362] else False
