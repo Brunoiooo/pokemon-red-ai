@@ -27,18 +27,13 @@ class Core:
             maxSameAction = 5,
             worldIllegalMovesMax = 5,
             menuIllegalMovesMax = 10,
-            era = 100000,
-            lr=0.03
+            ckpt_every = 100000,
+            lr=0.001
         ):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.game = game
         self.epsilon = epsilon
         self.pyboy = PyBoy(f"roms/{self.game}/rom.gb", sound_emulated = False, window="null")
-        self.modelPokemon = ModelPokemon()
-        self.targetPokemon = ModelPokemon().to(self.device)
-        self.targetPokemon.load_state_dict(self.modelPokemon.state_dict())
-        self.tau = 0.005
-        self.modelPokemon = ModelPokemon().to(self.device)
 
         ckpt_path = None
         if os.path.exists(f"roms/{self.game}/latest.pth"):
@@ -46,18 +41,21 @@ class Core:
         elif os.path.exists(f"roms/{self.game}/best.pth"):
             ckpt_path = f"roms/{self.game}/best.pth"
 
+        self.modelPokemon = ModelPokemon().to(self.device)
+
         if ckpt_path is not None:
             state = torch.load(ckpt_path, map_location=self.device)
-            if isinstance(state, dict) and "model_state" in state:
-                self.modelPokemon.load_state_dict(state["model_state"])
-            else:
-                self.modelPokemon.load_state_dict(state)
-            self.modelPokemon.to(self.device)
+            self.modelPokemon.load_state_dict(state["model_state"] if isinstance(state, dict) and "model_state" in state else state)
+
+        self.targetPokemon = ModelPokemon().to(self.device)
+        self.targetPokemon.load_state_dict(self.modelPokemon.state_dict())
+        self.tau = 0.005
+        self.criterion = torch.nn.SmoothL1Loss()
+
         self.optimizer = optim.Adam(self.modelPokemon.parameters(), lr=lr)
         self.visitedPositions = {}
         self.isStarted = False
         self.gamma = 0.99 
-        self.alpha = 0.001 
         self.epsilon = epsilon
         self.epsilonBurn = epsilonBurn
         self.epsilonEnd = epsilonEnd
@@ -89,8 +87,7 @@ class Core:
         self.menuIllegalMovesCount = 0
         self.menuIllegalMovesMax = menuIllegalMovesMax
         self.done = False
-        self.era = era
-        self.ckpt_every = self.era
+        self.ckpt_every = ckpt_every
         self.next_ckpt = self.ckpt_every
         self.need_game_state_ckpt = False
         self.best_eval_return = -float("inf")
@@ -114,21 +111,21 @@ class Core:
     def evaluate_greedy(self, episodes=50):
         total = 0.0
         was_training = self.modelPokemon.training
-        self.modelPokemon.eval()             # wyłącz dropout/bn, itp.
+        self.modelPokemon.eval()
 
         for _ in range(episodes):
-            self.reset()            # <--- pełny reset + start.state
+            self.reset("start")
             obs = self.inputs()
             ep_ret = 0.0
 
             while True:
                 with torch.inference_mode():
                     q = self.modelPokemon(obs)
-                    a = int(torch.argmax(q).item())  # greedy
+                    a = int(torch.argmax(q).item())
 
                 self.pyboy.button_press(self.buttons[a])
                 before = self.pyboy.memory[0x0000:0x10000]
-                for _ in range(self.ticksPerStep):
+                for __ in range(self.ticksPerStep):
                     self.pyboy.tick()
                 r = self.reward(before, a)
                 self.pyboy.button_release(self.buttons[a])
@@ -136,13 +133,15 @@ class Core:
                 ep_ret += float(r)
 
                 if self.done:
-                    # ważne: wyczyść tylko flagę terminalu na koniec epizodu ewaluacji
                     self.done = False
                     break
 
                 obs = self.inputs()
-
+                
             total += ep_ret
+
+            sys.stdout.write(f"\rAvg: {((total / episodes) * 100):.2f}% ep_ret: {ep_ret:.2f} button: {self.buttons[a]} episode: {_}")
+            sys.stdout.flush()
 
         if was_training:
             self.modelPokemon.train()
@@ -164,12 +163,9 @@ class Core:
         frac = 1.0 - (t / self.epsilonDecayCount)
         return self.epsilonEnd + (self.epsilon - self.epsilonEnd) * max(frac, 0.0)
 
-    def reset(self):
-        if os.path.exists(f"roms/{self.game}/checkpoint.state"):
-            with open(f"roms/{self.game}/checkpoint.state", "rb") as load_file:
-                self.pyboy.load_state(load_file)
-        else:
-            with open(f"roms/{self.game}/start.state", "rb") as load_file:
+    def reset(self, stateName):
+        if os.path.exists(f"roms/{self.game}/{stateName}.state"):
+            with open(f"roms/{self.game}/{stateName}.state", "rb") as load_file:
                 self.pyboy.load_state(load_file)
         self.resetCount = 0
         self.historyInputs = np.zeros((16, 1559), dtype=np.float32)
@@ -293,17 +289,17 @@ class Core:
         )
     
     def moneyData(self):
-        data = [int("".join(f"{b:02X}" for b in [
-            self.pyboy.memory[0xD347],
-            self.pyboy.memory[0xD348],
-            self.pyboy.memory[0xD349]
-        ]))]
-        
-        return (
-            data
-            if self.isMenu()
-            else [0] * len(data)
+        b0 = self.pyboy.memory[0xD347]
+        b1 = self.pyboy.memory[0xD348]
+        b2 = self.pyboy.memory[0xD349]
+
+        money = (
+            (b0 & 0x0F) * 10**5 + (b0 >> 4) * 10**6 +
+            (b1 & 0x0F) * 10**3 + (b1 >> 4) * 10**4 +
+            (b2 & 0x0F) * 10**1 + (b2 >> 4) * 10**2
         )
+
+        return [money] if self.isMenu() else [0]
     
     def rivalData(self):
         data = [self.pyboy.memory[i] for i in range(0xD347, 0xD350)]
@@ -328,16 +324,15 @@ class Core:
         )
     
     def gameCoinsData(self):
-        data = [int("".join(f"{b:02X}" for b in [
-            self.pyboy.memory[0xD5A4],
-            self.pyboy.memory[0xD5A5]
-        ]))]
-        
-        return (
-            data
-            if self.isMenu()
-            else [0] * len(data)
+        b0 = self.pyboy.memory[0xD5A4]
+        b1 = self.pyboy.memory[0xD5A5]
+
+        coins = (
+            (b0 & 0x0F) * 10**1 + (b0 >> 4) * 10**2 +
+            (b1 & 0x0F) * 10**3 + (b1 >> 4) * 10**4
         )
+
+        return [coins] if self.isMenu() else [0]
     
     def eventFlagsData(self):
         return [
@@ -425,7 +420,7 @@ class Core:
         return [bool(byte & (1 << i)) for i in range(start_bit, end_bit + 1)]
     
     def start(self):
-        self.reset()
+        self.reset("checkpoint")
 
         inputs = self.inputs()
         torch.set_printoptions(threshold=float('inf'))
@@ -485,6 +480,10 @@ class Core:
 
         self.count += 1
 
+        self.update(inputs, action, torch.as_tensor(reward, dtype=torch.float32, device=self.device), next_state, self.done)
+        self.averages = np.roll(self.averages, -1, axis=0)
+        self.averages[-1] = reward   
+
         if self.count >= self.next_ckpt:
             self.save_latest()
             avg_ret = self.evaluate_greedy(episodes=50)
@@ -492,12 +491,8 @@ class Core:
                 self.save_best(avg_ret)
             self.need_game_state_ckpt = True
             self.next_ckpt += self.ckpt_every
-
-        self.update(inputs, action, torch.as_tensor(reward, dtype=torch.float32, device=self.device), next_state, self.done)
-        self.averages = np.roll(self.averages, -1, axis=0)
-        self.averages[-1] = reward   
         
-        if self.count % 100 == 0:
+        if self.count % 10 == 0:
             sys.stdout.write(f"\risWorld: {self.isWorld()} isMenu: {self.isMenu()} isBattle: {self.isBattle()} Reward {reward:.2f} Epsilon: {self.currentEpsilon():.2f} | Count: {self.count} | Progress: {(self.count / self.epsilonDecayCount * 100):.2f}% | Average: {self.average():.2f} Button {self.buttons[action]}")
             sys.stdout.flush()
 
@@ -505,7 +500,7 @@ class Core:
             if self.need_game_state_ckpt:
                 self.saveGameState("checkpoint")
                 self.need_game_state_ckpt = False
-            self.reset()
+            self.reset("checkpoint")
             return self.inputs()
         
         return next_state
@@ -569,12 +564,12 @@ class Core:
 
             target = reward if done else reward + self.gamma * max_next_q_value
 
-        loss = (current_q_value - target) ** 2
+        loss = self.criterion(current_q_value, target)
         self.optimizer.zero_grad()
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.modelPokemon.parameters(), 10.0)  
         self.optimizer.step()
 
-        # stabilizacja
         self.soft_update_target()
 
     def isSameWorldPosition(self, primary_memo_before):
