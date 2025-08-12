@@ -497,7 +497,7 @@ class Core:
         self.averages = np.roll(self.averages, -1, axis=0)
         self.averages[-1] = reward   
         
-        if self.count % 10 == 100:
+        if self.count % 100 == 0:
             sys.stdout.write(f"\risWorld: {self.isWorld()} isMenu: {self.isMenu()} isBattle: {self.isBattle()} Reward {reward:.2f} Epsilon: {self.currentEpsilon():.2f} | Count: {self.count} | Progress: {(self.count / self.epsilonDecayCount * 100):.2f}% | Average: {self.average():.2f} Button {self.buttons[action]}")
             sys.stdout.flush()
 
