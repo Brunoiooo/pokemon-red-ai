@@ -8,6 +8,7 @@ import random
 import math
 import numpy as np
 import sys
+from collections import deque
 
 class Core:
     def __init__(
@@ -28,7 +29,8 @@ class Core:
             worldIllegalMovesMax = 5,
             menuIllegalMovesMax = 10,
             ckpt_every = 100000,
-            lr=0.001
+            lr=0.0001,
+            weight_decay=0.0001
         ):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.game = game
@@ -51,8 +53,14 @@ class Core:
         self.targetPokemon.load_state_dict(self.modelPokemon.state_dict())
         self.tau = 0.005
         self.criterion = torch.nn.SmoothL1Loss()
+        self.optimizer = optim.AdamW(self.modelPokemon.parameters(), lr=lr, weight_decay=weight_decay)
+        self.buffer = deque(maxlen=200_000)
+        self.batch_size = 512       
+        self.optimize_every = 4  
+        self.updates_per_opt = 4 
+        self.grad_accum_steps = 1
+        self.replay_start = 20_000
 
-        self.optimizer = optim.Adam(self.modelPokemon.parameters(), lr=lr)
         self.visitedPositions = {}
         self.isStarted = False
         self.gamma = 0.99 
@@ -408,19 +416,27 @@ class Core:
         self.historyInputs = np.roll(self.historyInputs, -1, axis=0)
         self.historyInputs[-1] = data
 
-        return torch.tensor(self.log_transform([item for sublist in self.historyInputs for item in sublist]), device=self.device).float()
+        arr = np.asarray(self.log_transform([item for sublist in self.historyInputs for item in sublist]), dtype=np.float32)
+
+        arr = np.clip(arr, 0, 255) / 255.0
+
+        return torch.from_numpy(arr).to(self.device)
     
     def log_transform(self, data):
-        return [math.log(x + 1) for x in data]
+        return [math.log(x+1) if x > 3 else float(x) for x in data]
 
     def bitsExtractor(self, byte, start_bit = 0, end_bit = 7):
         if start_bit < 0 or end_bit > 7 or start_bit > end_bit:
             raise ValueError("Invalid bit range")
 
-        return [bool(byte & (1 << i)) for i in range(start_bit, end_bit + 1)]
+        return [1 if (byte & (1<<i)) else 0 for i in range(start_bit, end_bit+1)]
     
     def start(self):
+        self.modelPokemon.train()
+        self.targetPokemon.eval()
+
         self.reset("checkpoint")
+        self.isStarted = True
 
         inputs = self.inputs()
         torch.set_printoptions(threshold=float('inf'))
@@ -463,13 +479,52 @@ class Core:
         
         return greedy_action
         
+    def optimize_batch(self):
+        batch = random.sample(self.buffer, self.batch_size)
+        states_cpu, actions, rewards, next_states_cpu, dones = zip(*batch)
+
+        states      = torch.stack(states_cpu).to(self.device, non_blocking=True)
+        next_states = torch.stack(next_states_cpu).to(self.device, non_blocking=True)
+        actions     = torch.tensor(actions, device=self.device, dtype=torch.long)
+        rewards     = torch.tensor(rewards, device=self.device, dtype=torch.float32)
+        dones       = torch.tensor(dones,   device=self.device, dtype=torch.bool)
+
+        rewards = rewards.clamp_(-1.0, 1.0)
+
+        micro = self.batch_size // self.grad_accum_steps
+        assert self.batch_size % self.grad_accum_steps == 0
+
+        self.optimizer.zero_grad(set_to_none=True)
+
+        for i in range(self.grad_accum_steps):
+            sl = slice(i*micro, (i+1)*micro)
+            s, ns = states[sl], next_states[sl]
+            a, r, d = actions[sl], rewards[sl], dones[sl]
+
+            q_all = self.modelPokemon(s)                  
+            q_sa  = q_all.gather(1, a.view(-1,1)).squeeze(1)    
+
+            with torch.no_grad():
+                next_q_online = self.modelPokemon(ns)                  
+                next_a        = torch.argmax(next_q_online, dim=1) 
+                next_q_target = self.targetPokemon(ns).gather(1, next_a.view(-1,1)).squeeze(1)
+                target = torch.where(d, r, r + self.gamma * next_q_target)
+
+            loss = self.criterion(q_sa, target) / self.grad_accum_steps
+            loss.backward()
+
+        torch.nn.utils.clip_grad_norm_(self.modelPokemon.parameters(), 10.0)
+        self.optimizer.step()
+
+        self.soft_update_target()
+
     def train(self, inputs):
         action = self.action(inputs)
 
         self.pyboy.button_press(self.buttons[action])
 
         primary_memo_before = self.pyboy.memory[0x0000:0x10000]
-        for i in range(self.ticksPerStep):
+        for _ in range(self.ticksPerStep):
             self.pyboy.tick()
 
         reward = self.reward(primary_memo_before, action) 
@@ -480,9 +535,20 @@ class Core:
 
         self.count += 1
 
-        self.update(inputs, action, torch.as_tensor(reward, dtype=torch.float32, device=self.device), next_state, self.done)
         self.averages = np.roll(self.averages, -1, axis=0)
         self.averages[-1] = reward   
+
+        self.buffer.append((
+            inputs.detach().to("cpu"),
+            action,
+            float(reward),
+            next_state.detach().to("cpu"),
+            bool(self.done)
+        ))
+
+        if len(self.buffer) >= self.replay_start and (self.count % self.optimize_every == 0):
+            for _ in range(self.updates_per_opt):
+                self.optimize_batch()
 
         if self.count >= self.next_ckpt:
             self.save_latest()
@@ -550,27 +616,6 @@ class Core:
 
     def average(self):
         return sum(self.averages) / len(self.averages)
-
-    def update(self, state, action, reward, next_state, done: bool):
-        current_q_values = self.modelPokemon(state)         # [nA]
-        current_q_value  = current_q_values[action]         # skalar
-
-        with torch.no_grad():
-            # Double-DQN krok (opcjonalnie): online wybiera, target ocenia
-            next_q_online = self.modelPokemon(next_state)
-            next_action   = int(torch.argmax(next_q_online).item())
-            next_q_target = self.targetPokemon(next_state)
-            max_next_q_value = next_q_target[next_action]
-
-            target = reward if done else reward + self.gamma * max_next_q_value
-
-        loss = self.criterion(current_q_value, target)
-        self.optimizer.zero_grad()
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.modelPokemon.parameters(), 10.0)  
-        self.optimizer.step()
-
-        self.soft_update_target()
 
     def isSameWorldPosition(self, primary_memo_before):
         return True if primary_memo_before[0xD35E] == self.pyboy.memory[0xD35E] and primary_memo_before[0xD361] == self.pyboy.memory[0xD361] and primary_memo_before[0xD362] == self.pyboy.memory[0xD362] else False
