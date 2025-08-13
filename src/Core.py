@@ -54,10 +54,10 @@ class Core:
         self.tau = 0.005
         self.criterion = torch.nn.SmoothL1Loss()
         self.optimizer = optim.AdamW(self.modelPokemon.parameters(), lr=lr, weight_decay=weight_decay)
-        self.buffer = deque(maxlen=200_000)
         self.batch_size = 512       
-        self.optimize_every = 4  
-        self.updates_per_opt = 4 
+        self.buffer = deque(maxlen=50000)
+        self.optimize_every = 4
+        self.updates_per_opt = 2 
         self.grad_accum_steps = 1
         self.replay_start = 20_000
 
