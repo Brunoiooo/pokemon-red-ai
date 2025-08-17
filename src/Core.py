@@ -945,6 +945,7 @@ class Core:
         reward += self.panishMenuPosition(primary_memo_before, reward)
         reward += self.panishMenuIn(reward)
         reward += self.panishSameAction(action, reward)
+        self.countingReward(reward)
 
         return reward
 
