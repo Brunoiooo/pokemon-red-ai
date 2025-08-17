@@ -98,7 +98,7 @@ class Core:
         for actorId in range(n_workers):
             parent_conn, child_conn = mp.Pipe(duplex=True)
             p = mp.Process(
-                target=Emulator,
+                target=Emulator.start,
                 args=(self.dataQ, child_conn, self.game, self.maxResetCount, self.ticksPerStep, self.maxMenuSelect, self.maxMenuPosition, self.maxMenuIn, self.maxSameAction, self.worldIllegalMovesMax, self.menuIllegalMovesMax, self.tmpEpsilonSteps, self.epsilon, self.tmpEpsilon),
                 daemon=True,
             )

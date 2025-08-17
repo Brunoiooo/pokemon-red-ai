@@ -1,5 +1,5 @@
 from pyboy import PyBoy
-import os, struct, torch, random, sys, io
+import os, struct, torch, random, sys, io, math
 import numpy as np
 from multiprocessing import Queue
 import torch
@@ -79,6 +79,9 @@ class Emulator:
 
     def average(self):
         return sum(self.averages) / len(self.averages)
+
+    def log_transform(self, data):
+        return [math.log(x+1) if x > 3 else float(x) for x in data]
 
     def getMsg(self, msg):
         type = msg["type"]
