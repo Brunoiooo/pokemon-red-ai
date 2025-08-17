@@ -146,10 +146,10 @@ class Core:
 
                 obs = self.inputs()
                 
+                sys.stdout.write(f"\rAvg: {((total / episodes) * 100):.2f}% ep_ret: {ep_ret:.2f} button: {self.buttons[a]} episode: {_}")
+                sys.stdout.flush()
+                
             total += ep_ret
-
-            sys.stdout.write(f"\rAvg: {((total / episodes) * 100):.2f}% ep_ret: {ep_ret:.2f} button: {self.buttons[a]} episode: {_}")
-            sys.stdout.flush()
 
         if was_training:
             self.modelPokemon.train()
@@ -443,6 +443,16 @@ class Core:
         while True:
             if keyboard.is_pressed('q'):
                 break
+            elif keyboard.is_pressed('w'):
+                self.pyboy.stop(False)
+                self.pyboy = PyBoy(f"roms/{self.game}/rom.gb", sound_emulated = False, window="null")
+                self.reset("checkpoint")
+                print("w")
+            elif keyboard.is_pressed('e'):
+                self.pyboy.stop(False)
+                self.pyboy = PyBoy(f"roms/{self.game}/rom.gb", sound_emulated = False)
+                self.reset("start")
+                print("e")
             elif keyboard.is_pressed('['):
                 self.isStarted = False
                 print("stop")
