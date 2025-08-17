@@ -138,7 +138,7 @@ class Core:
                 self.next_ckpt += self.ckpt_every
 
             if self.count % 10 == 0:
-                sys.stdout.write(f"\rEpsilon: {self.currentEpsilon():.2f} | Count: {self.count} | Progress: {(self.count / self.epsilonDecayCount * 100):.2f}%")
+                sys.stdout.write(f"\rEpsilon: {self.currentEpsilon():.2f} | Count: {self.count} | Progress: {(self.count / self.epsilonDecayCount * 100):.2f}% dataQ: {self.dataQ.qsize()}")
                 sys.stdout.flush()
         
     def currentEpsilon(self):

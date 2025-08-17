@@ -155,13 +155,16 @@ class Emulator:
         self.averages = np.roll(self.averages, -1, axis=0)
         self.averages[-1] = reward   
 
-        dataQ.put_nowait((
-            inputs.detach().to("cpu"),
-            action,
-            float(reward),
-            next_state.detach().to("cpu"),
-            bool(self.done)
-        ))
+        try:
+            dataQ.put_nowait((
+                    inputs.detach().to("cpu"),
+                    action,
+                    float(reward),
+                    next_state.detach().to("cpu"),
+                    bool(self.done)
+                ))
+        except dataQ.Full:
+            pass
 
         if self.done:
             if self.need_game_state_ckpt:
