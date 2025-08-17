@@ -8,9 +8,12 @@ import torch
 from ModelPokemon import ModelPokemon
 
 class Emulator:
-    def init(self, actorId, game, maxResetCount, ticksPerStep, maxMenuSelect, maxMenuPosition, maxMenuIn, maxSameAction, worldIllegalMovesMax, menuIllegalMovesMax, tmpEpsilonSteps, epsilon, tmpEpsilon):
+    def init(self, actorId, window, game, maxResetCount, ticksPerStep, maxMenuSelect, maxMenuPosition, maxMenuIn, maxSameAction, worldIllegalMovesMax, menuIllegalMovesMax, tmpEpsilonSteps, epsilon, tmpEpsilon):
         self.game = game
-        self.pyboy = PyBoy(f"roms/{self.game}/rom.gb", sound_emulated = False, window="null")
+        if window:
+            self.pyboy = PyBoy(f"roms/{self.game}/rom.gb", sound_emulated = False)
+        else:
+            self.pyboy = PyBoy(f"roms/{self.game}/rom.gb", sound_emulated = False, window="null")
         self.maxResetCount = maxResetCount
         self.buttons = ["a", "b", "start", "select", "left", "right", "up", "down"]
         self.ticksPerStep = ticksPerStep
@@ -51,8 +54,8 @@ class Emulator:
         torch.set_num_threads(1)
         self.reset()
 
-    def start(self, dataQ: Queue, conn, actorId, game, maxResetCount, ticksPerStep, maxMenuSelect, maxMenuPosition, maxMenuIn, maxSameAction, worldIllegalMovesMax, menuIllegalMovesMax, tmpEpsilonSteps, epsilon, tmpEpsilon):
-        self.init(actorId, game, maxResetCount, ticksPerStep, maxMenuSelect, maxMenuPosition, maxMenuIn, maxSameAction, worldIllegalMovesMax, menuIllegalMovesMax, tmpEpsilonSteps, epsilon, tmpEpsilon)
+    def start(self, dataQ: Queue, conn, actorId, window, game, maxResetCount, ticksPerStep, maxMenuSelect, maxMenuPosition, maxMenuIn, maxSameAction, worldIllegalMovesMax, menuIllegalMovesMax, tmpEpsilonSteps, epsilon, tmpEpsilon):
+        self.init(actorId, window, game, maxResetCount, ticksPerStep, maxMenuSelect, maxMenuPosition, maxMenuIn, maxSameAction, worldIllegalMovesMax, menuIllegalMovesMax, tmpEpsilonSteps, epsilon, tmpEpsilon)
 
         inputs = self.inputs()
 
@@ -99,9 +102,17 @@ class Emulator:
             with torch.no_grad():
                 self.modelPokemon.load_state_dict(state, strict=False)
             self.modelPokemon.eval()
+        elif type == "window" and msg["value"] == False:
+            self.pyboy.stop(False)
+            self.pyboy = PyBoy(f"roms/{self.game}/rom.gb", sound_emulated = False, window="null")
+            self.reset()
+        elif type == "window" and msg["value"] == True:
+            self.pyboy.stop(False)
+            self.pyboy = PyBoy(f"roms/{self.game}/rom.gb", sound_emulated = False)
+            self.reset()
 
-    def evaluate_greedy(self, episodes, actorId, game, maxResetCount, ticksPerStep, maxMenuSelect, maxMenuPosition, maxMenuIn, maxSameAction, worldIllegalMovesMax, menuIllegalMovesMax, tmpEpsilonSteps, epsilon, tmpEpsilon):
-        self.init(actorId, game, maxResetCount, ticksPerStep, maxMenuSelect, maxMenuPosition, maxMenuIn, maxSameAction, worldIllegalMovesMax, menuIllegalMovesMax, tmpEpsilonSteps, epsilon, tmpEpsilon)
+    def evaluate_greedy(self, episodes, actorId, window, game, maxResetCount, ticksPerStep, maxMenuSelect, maxMenuPosition, maxMenuIn, maxSameAction, worldIllegalMovesMax, menuIllegalMovesMax, tmpEpsilonSteps, epsilon, tmpEpsilon):
+        self.init(actorId, window, game, maxResetCount, ticksPerStep, maxMenuSelect, maxMenuPosition, maxMenuIn, maxSameAction, worldIllegalMovesMax, menuIllegalMovesMax, tmpEpsilonSteps, epsilon, tmpEpsilon)
         total = 0.0
 
         for _ in range(episodes):

@@ -89,12 +89,14 @@ class Core:
         self.conns  = {}
         self.procs  = {}
 
+        window = False
+
         for actorId in range(n_workers):
             parent_conn, child_conn = mp.Pipe(duplex=True)
             emulator = Emulator()
             p = mp.Process(
                 target=emulator.start,
-                args=(self.dataQ, child_conn, actorId, self.game, self.maxResetCount, self.ticksPerStep, self.maxMenuSelect, self.maxMenuPosition, self.maxMenuIn, self.maxSameAction, self.worldIllegalMovesMax, self.menuIllegalMovesMax, self.tmpEpsilonSteps, self.epsilon, self.tmpEpsilon),
+                args=(self.dataQ, child_conn, actorId, window, self.game, self.maxResetCount, self.ticksPerStep, self.maxMenuSelect, self.maxMenuPosition, self.maxMenuIn, self.maxSameAction, self.worldIllegalMovesMax, self.menuIllegalMovesMax, self.tmpEpsilonSteps, self.epsilon, self.tmpEpsilon),
                 daemon=True,
             )
             p.start()
@@ -102,6 +104,19 @@ class Core:
             self.procs[actorId] = p 
 
         while True:
+            if keyboard.is_pressed('q'):
+                break
+            elif keyboard.is_pressed('w'):
+                for wid, conn in self.conns.items():
+                    conn.send({"type": "window", "value": False})
+                window = False
+                print("w")
+            elif keyboard.is_pressed('e'):
+                for wid, conn in self.conns.items():
+                    conn.send({"type": "window", "value": True})
+                window = True
+                print("e")
+
             try:
                 item = self.dataQ.get()
                 self.count += 1
@@ -124,7 +139,7 @@ class Core:
             if self.count >= self.next_ckpt:
                 self.save_latest()
                 emulator = Emulator()
-                avg_ret = emulator.evaluate_greedy(50, 0, self.game, self.maxResetCount, self.ticksPerStep, self.maxMenuSelect, self.maxMenuPosition, self.maxMenuIn, self.maxSameAction, self.worldIllegalMovesMax, self.menuIllegalMovesMax, self.tmpEpsilonSteps, self.epsilon, self.tmpEpsilon)
+                avg_ret = emulator.evaluate_greedy(50, 0, window, self.game, self.maxResetCount, self.ticksPerStep, self.maxMenuSelect, self.maxMenuPosition, self.maxMenuIn, self.maxSameAction, self.worldIllegalMovesMax, self.menuIllegalMovesMax, self.tmpEpsilonSteps, self.epsilon, self.tmpEpsilon)
                 if avg_ret > self.best_eval_return + 0.5: 
                     self.save_best(avg_ret)
                 for wid, conn in self.conns.items():
@@ -134,6 +149,11 @@ class Core:
             if self.count % 10 == 0:
                 sys.stdout.write(f"\rEpsilon: {self.currentEpsilon():.2f} | Count: {self.count} | Progress: {(self.count / self.epsilonDecayCount * 100):.2f}% dataQ: {self.dataQ.qsize()}")
                 sys.stdout.flush()
+
+        for p in self.procs.values():
+            if p.is_alive():
+                p.terminate()
+                p.join(timeout=1.0)
         
     def currentEpsilon(self):
         if self.count < self.epsilonBurn:
