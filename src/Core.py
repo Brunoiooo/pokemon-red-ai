@@ -1,14 +1,8 @@
-from pyboy import PyBoy
 import torch
 import torch.optim as optim
 from Emulator import Emulator
 from ModelPokemon import ModelPokemon
-import os, io
-import keyboard
-import random
-import math
-import numpy as np
-import sys
+import os, io, keyboard, random, sys
 from collections import deque
 import multiprocessing as mp
 
