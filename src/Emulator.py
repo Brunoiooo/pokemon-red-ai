@@ -28,6 +28,7 @@ class Emulator:
         self.tmpEpsilonCooldown = 0
         self.tmpEpsilonSteps = tmpEpsilonSteps
         self.tmpEpsilon = tmpEpsilon
+        self.count = 0
         
         ckpt_path = None
         if os.path.exists(f"roms/{self.game}/latest.pth"):
