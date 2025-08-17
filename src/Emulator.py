@@ -2,6 +2,7 @@ from pyboy import PyBoy
 import os, struct, torch, random, sys, io, math
 import numpy as np
 from multiprocessing import Queue
+from queue import Full
 import torch
 
 from ModelPokemon import ModelPokemon
@@ -50,8 +51,8 @@ class Emulator:
         torch.set_num_threads(1)
         self.reset()
 
-    def start(self, dataQ: Queue, conn, game, maxResetCount, ticksPerStep, maxMenuSelect, maxMenuPosition, maxMenuIn, maxSameAction, worldIllegalMovesMax, menuIllegalMovesMax, tmpEpsilonSteps, epsilon, tmpEpsilon):
-        self.init(dataQ, game, maxResetCount, ticksPerStep, maxMenuSelect, maxMenuPosition, maxMenuIn, maxSameAction, worldIllegalMovesMax, menuIllegalMovesMax, tmpEpsilonSteps, epsilon, tmpEpsilon)
+    def start(self, dataQ: Queue, conn, actorId, game, maxResetCount, ticksPerStep, maxMenuSelect, maxMenuPosition, maxMenuIn, maxSameAction, worldIllegalMovesMax, menuIllegalMovesMax, tmpEpsilonSteps, epsilon, tmpEpsilon):
+        self.init(actorId, game, maxResetCount, ticksPerStep, maxMenuSelect, maxMenuPosition, maxMenuIn, maxSameAction, worldIllegalMovesMax, menuIllegalMovesMax, tmpEpsilonSteps, epsilon, tmpEpsilon)
 
         inputs = self.inputs()
 
@@ -99,8 +100,8 @@ class Emulator:
                 self.modelPokemon.load_state_dict(state, strict=False)
             self.modelPokemon.eval()
 
-    def evaluate_greedy(self, episodes, game, maxResetCount, ticksPerStep, maxMenuSelect, maxMenuPosition, maxMenuIn, maxSameAction, worldIllegalMovesMax, menuIllegalMovesMax, tmpEpsilonSteps, epsilon, tmpEpsilon):
-        self.init(game, maxResetCount, ticksPerStep, maxMenuSelect, maxMenuPosition, maxMenuIn, maxSameAction, worldIllegalMovesMax, menuIllegalMovesMax, tmpEpsilonSteps, epsilon, tmpEpsilon)
+    def evaluate_greedy(self, episodes, actorId, game, maxResetCount, ticksPerStep, maxMenuSelect, maxMenuPosition, maxMenuIn, maxSameAction, worldIllegalMovesMax, menuIllegalMovesMax, tmpEpsilonSteps, epsilon, tmpEpsilon):
+        self.init(actorId, game, maxResetCount, ticksPerStep, maxMenuSelect, maxMenuPosition, maxMenuIn, maxSameAction, worldIllegalMovesMax, menuIllegalMovesMax, tmpEpsilonSteps, epsilon, tmpEpsilon)
         total = 0.0
 
         for _ in range(episodes):
@@ -163,7 +164,7 @@ class Emulator:
                     next_state.detach().to("cpu"),
                     bool(self.done)
                 ))
-        except dataQ.Full:
+        except Full:
             pass
 
         if self.done:
@@ -176,6 +177,7 @@ class Emulator:
         return next_state
     
     def saveGameState(self):
+        os.makedirs(f"roms/{self.game}/{self.actorId}", exist_ok=True)
         with open(f"roms/{self.game}/{self.actorId}/checkpoint.state", "wb") as save_file:
             self.pyboy.save_state(save_file)
     
@@ -544,7 +546,7 @@ class Emulator:
         return True if primary_memo_before[0xCC24] == self.pyboy.memory[0xCC24] and primary_memo_before[0xCC25] == self.pyboy.memory[0xCC25] else False
     
     def panishMenuIllegalMoves(self, primary_memo_before, reward):
-        if not self.isMenu() or 0 < reward or not self.isSameMenuPosition(primary_memo_before) or not self.isSameMenuPosition(primary_memo_before):
+        if not self.isMenu() or 0 < reward or not self.isSameMenuPosition(primary_memo_before):
             self.menuIllegalMovesCount = 0
             return 0
         

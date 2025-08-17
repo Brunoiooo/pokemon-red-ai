@@ -87,7 +87,7 @@ class Core:
         self.sync_interval = sync_interval
         
     def start(self):
-        self.dataQ = mp.Queue(maxsize=20000)
+        self.dataQ = mp.Queue(maxsize=10000)
 
         n_cores = os.cpu_count() or 1
         n_workers = max(1, n_cores - 1)
@@ -100,7 +100,7 @@ class Core:
             emulator = Emulator()
             p = mp.Process(
                 target=emulator.start,
-                args=(self.dataQ, child_conn, self.game, self.maxResetCount, self.ticksPerStep, self.maxMenuSelect, self.maxMenuPosition, self.maxMenuIn, self.maxSameAction, self.worldIllegalMovesMax, self.menuIllegalMovesMax, self.tmpEpsilonSteps, self.epsilon, self.tmpEpsilon),
+                args=(self.dataQ, child_conn, actorId, self.game, self.maxResetCount, self.ticksPerStep, self.maxMenuSelect, self.maxMenuPosition, self.maxMenuIn, self.maxSameAction, self.worldIllegalMovesMax, self.menuIllegalMovesMax, self.tmpEpsilonSteps, self.epsilon, self.tmpEpsilon),
                 daemon=True,
             )
             p.start()
@@ -130,7 +130,7 @@ class Core:
             if self.count >= self.next_ckpt:
                 self.save_latest()
                 emulator = Emulator()
-                avg_ret = emulator.evaluate_greedy(50, self.game, self.maxResetCount, self.ticksPerStep, self.maxMenuSelect, self.maxMenuPosition, self.maxMenuIn, self.maxSameAction, self.worldIllegalMovesMax, self.menuIllegalMovesMax, self.tmpEpsilonSteps, self.epsilon, self.tmpEpsilon)
+                avg_ret = emulator.evaluate_greedy(50, 0, self.game, self.maxResetCount, self.ticksPerStep, self.maxMenuSelect, self.maxMenuPosition, self.maxMenuIn, self.maxSameAction, self.worldIllegalMovesMax, self.menuIllegalMovesMax, self.tmpEpsilonSteps, self.epsilon, self.tmpEpsilon)
                 if avg_ret > self.best_eval_return + 0.5: 
                     self.save_best(avg_ret)
                 for wid, conn in self.conns.items():
