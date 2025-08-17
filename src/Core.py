@@ -25,9 +25,9 @@ class Core:
             maxMenuSelect = 5,
             maxMenuPosition = 10,
             maxMenuIn = 15,
-            maxSameAction = 5,
+            maxSameAction = 10,
             worldIllegalMovesMax = 5,
-            menuIllegalMovesMax = 10,
+            menuIllegalMovesMax = 20,
             ckpt_every = 100000,
             lr=0.0001,
             weight_decay=0.0001
