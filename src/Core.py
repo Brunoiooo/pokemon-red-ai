@@ -116,6 +116,10 @@ class Core:
                     conn.send({"type": "window", "value": True})
                 window = True
                 print("e")
+            elif keyboard.is_pressed('r'):
+                emulator = Emulator()
+                emulator.auto(self.game, self.ticksPerStep)
+                print("r")
 
             try:
                 item = self.dataQ.get()

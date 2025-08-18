@@ -1,3 +1,4 @@
+import keyboard
 from pyboy import PyBoy
 import os, struct, torch, random, sys, io, math
 import numpy as np
@@ -110,6 +111,31 @@ class Emulator:
             self.pyboy.stop(False)
             self.pyboy = PyBoy(f"roms/{self.game}/rom.gb", sound_emulated = False)
             self.reset()
+
+    def auto(self, game, ticksPerStep):
+        self.init(0, True, game, 0, ticksPerStep, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        self.reset(True)
+
+        obs = self.inputs()
+
+        while True:
+            if keyboard.is_pressed('q'):
+                break
+
+            with torch.inference_mode():
+                    q = self.modelPokemon(obs)
+                    a = int(torch.argmax(q).item())
+
+            self.pyboy.button_press(self.buttons[a])
+            
+            for __ in range(self.ticksPerStep):
+                self.pyboy.tick()
+
+            self.pyboy.button_release(self.buttons[a])
+
+            obs = self.inputs()
+
+        self.pyboy.stop(False)
 
     def evaluate_greedy(self, episodes, actorId, window, game, maxResetCount, ticksPerStep, maxMenuSelect, maxMenuPosition, maxMenuIn, maxSameAction, worldIllegalMovesMax, menuIllegalMovesMax, tmpEpsilonSteps, epsilon, tmpEpsilon):
         self.init(actorId, window, game, maxResetCount, ticksPerStep, maxMenuSelect, maxMenuPosition, maxMenuIn, maxSameAction, worldIllegalMovesMax, menuIllegalMovesMax, tmpEpsilonSteps, epsilon, tmpEpsilon)
