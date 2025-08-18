@@ -145,6 +145,8 @@ class Emulator:
                 
             total += ep_ret
 
+        self.pyboy.stop(False)
+
         return total / episodes
 
     def train(self, inputs, dataQ: Queue):
