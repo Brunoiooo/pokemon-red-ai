@@ -926,12 +926,12 @@ class Emulator:
     def setDialogId(self):
         self.lastDialogId = 0
 
-        if not self.isMenu():
+        if self.pyboy.memory[0xFF8C] == 6 or self.pyboy.memory[0xFF8C] == 0 or not self.isMenu():
             return
 
         last = 0
         while True:
-            if self.pyboy.memory[0xFF8C] == 6:
+            if self.pyboy.memory[0xFF8C] == 6 or self.pyboy.memory[0xFF8C] == 0 or not self.isMenu():
                 break
 
             last = self.pyboy.memory[0xFF8C]
