@@ -496,7 +496,7 @@ class Emulator:
         if map not in self.visitedDialog:
             self.visitedDialog[map] = {}
 
-        if self.lastDialogId not in self.visitedPositions[map]:
+        if self.lastDialogId not in self.lastDialogId[map]:
             self.visitedDialog[map][self.lastDialogId] = 0.5
             return self.visitedDialog[map][self.lastDialogId]
         
