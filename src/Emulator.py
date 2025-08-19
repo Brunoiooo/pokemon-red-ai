@@ -935,6 +935,6 @@ class Emulator:
                 break
 
             last = self.pyboy.memory[0xFF8C]
-            self.pyboy.tick(render=False)
+            self.pyboy.tick()
         
         self.lastDialogId = last
