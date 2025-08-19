@@ -181,8 +181,10 @@ class Emulator:
         self.pyboy.button_press(self.buttons[action])
 
         primary_memo_before = self.pyboy.memory[0x0000:0x10000]
-        for _ in range(self.ticksPerStep):
-            self.pyboy.tick()
+
+        self.pyboy.tick(count=self.ticksPerStep)
+
+        self.setDialogId()
 
         reward = self.reward(primary_memo_before, action) 
         
@@ -472,6 +474,7 @@ class Emulator:
 
         reward += self.rewardStatus(primary_memo_before[0xD984], self.pyboy.memory[0xD984]) # Status
 
+        reward += self.rewardDialog()
         reward += self.panishWorldIllegalMoves(primary_memo_before, reward)
         reward += self.panishMenuIllegalMoves(primary_memo_before, reward)
         reward += self.rewardPosition()
@@ -484,6 +487,24 @@ class Emulator:
 
         return reward
     
+    def rewardDialog(self):
+        if self.lastDialogId != 0 or not self.isMenu():
+            return 0
+        
+        map = self.pyboy.memory[0xD35E]
+
+        if map not in self.visitedDialog:
+            self.visitedDialog[map] = {}
+
+        if self.lastDialogId not in self.visitedPositions[map]:
+            self.visitedDialog[map][self.lastDialogId] = 0.5
+            return self.visitedDialog[map][self.lastDialogId]
+        
+        if self.visitedDialog[map][self.lastDialogId] > -0.2:
+            self.visitedDialog[map][self.lastDialogId] += -0.05
+
+        return self.visitedDialog[map][self.lastDialogId]
+
     def rewardPokedex(self, before, after):
         reward = 0
 
@@ -516,7 +537,7 @@ class Emulator:
         return -0.2 if self.sameActionCount > self.maxSameAction else 0.0
 
     def panishMenuIn(self, reward):
-        if not self.isMenu() or 0 < reward:
+        if not self.isMenu() or 0 < reward or self.lastDialogId == 0:
             self.menuInCount = 0
             self.menuSelectCount = 0
             self.menuPositionCount = 0
@@ -527,7 +548,7 @@ class Emulator:
         return -0.4 if self.maxMenuIn < self.menuInCount else 0
     
     def panishMenuPosition(self, primary_memo_before, reward):
-        if not self.isMenu() or 0 < reward:
+        if not self.isMenu() or 0 < reward or self.lastDialogId == 0:
             self.menuPositionCount = 0
             return 0
         
@@ -539,12 +560,15 @@ class Emulator:
         
         return -0.3 if self.maxMenuPosition < self.menuPositionCount else 0
 
+    def isSameMenuSelected(self, primary_memo_before):
+        return True if primary_memo_before[0xCC26] == self.pyboy.memory[0xCC26] and self.isSameMenuPosition(primary_memo_before) else False
+
     def panishMenuSelect(self, primary_memo_before, reward):
-        if not self.isMenu() or 0 < reward:
+        if not self.isMenu() or 0 < reward or self.lastDialogId == 0:
             self.menuSelectCount = 0
             return 0
 
-        if primary_memo_before[0xCC26] == self.pyboy.memory[0xCC26] and self.isSameMenuPosition(primary_memo_before):
+        if self.isSameMenuSelected():
             self.menuSelectCount += 1
         else:
             self.menuSelectCount = 0
@@ -585,7 +609,7 @@ class Emulator:
         return True if primary_memo_before[0xCC24] == self.pyboy.memory[0xCC24] and primary_memo_before[0xCC25] == self.pyboy.memory[0xCC25] else False
     
     def panishMenuIllegalMoves(self, primary_memo_before, reward):
-        if not self.isMenu() or 0 < reward or not self.isSameMenuPosition(primary_memo_before):
+        if not self.isMenu() or 0 < reward or not self.isSameMenuPosition(primary_memo_before) or self.lastDialogId == 0:
             self.menuIllegalMovesCount = 0
             return 0
         
@@ -640,7 +664,6 @@ class Emulator:
         
         return greedy_action
 
-
     def reset(self, stateStart = False):
         if os.path.exists(f"roms/{self.game}/{self.actorId}/checkpoint.state") and not stateStart:
             with open(f"roms/{self.game}/{self.actorId}/checkpoint.state", "rb") as load_file:
@@ -662,6 +685,8 @@ class Emulator:
         self.worldIllegalMovesCount = 0
         self.menuIllegalMovesCount = 0
         self.done = False
+        self.lastDialogId = 0
+        self.visitedDialog = {}
 
     def inputs(self):
         data = self.spriteData()
@@ -897,3 +922,19 @@ class Emulator:
         self.resetCount = 0 if reward > 0 else self.resetCount + 1
         if self.resetCount > self.maxResetCount:
             self.done = True
+
+    def setDialogId(self):
+        self.lastDialogId = 0
+
+        if not self.isMenu():
+            return
+
+        last = 0
+        while True:
+            if self.pyboy.memory[0xFF8C] == 6:
+                break
+
+            last = self.pyboy.memory[0xFF8C]
+            self.pyboy.tick()
+        
+        self.lastDialogId = last

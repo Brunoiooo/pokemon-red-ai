@@ -85,6 +85,7 @@ class Core:
 
         n_cores = os.cpu_count() or 1
         n_workers = max(1, n_cores - 1)
+        n_workers = 1
 
         self.conns  = {}
         self.procs  = {}
