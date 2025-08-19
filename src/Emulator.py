@@ -184,11 +184,11 @@ class Emulator:
 
         self.pyboy.tick(count=self.ticksPerStep)
 
+        self.pyboy.button_release(self.buttons[action])
+
         self.setDialogId()
 
         reward = self.reward(primary_memo_before, action) 
-        
-        self.pyboy.button_release(self.buttons[action])
         
         next_state = self.inputs()
 
@@ -930,7 +930,7 @@ class Emulator:
             return
 
         last = 0
-        for _ in range(50):
+        while True:
             if self.pyboy.memory[0xFF8C] == 6 or self.pyboy.memory[0xFF8C] == 0 or not self.isMenu():
                 break
 
