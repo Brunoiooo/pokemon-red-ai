@@ -568,7 +568,7 @@ class Emulator:
             self.menuSelectCount = 0
             return 0
 
-        if self.isSameMenuSelected():
+        if self.isSameMenuSelected(primary_memo_before):
             self.menuSelectCount += 1
         else:
             self.menuSelectCount = 0
