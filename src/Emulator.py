@@ -930,7 +930,7 @@ class Emulator:
             return
 
         last = 0
-        while True:
+        for _ in range(50):
             if self.pyboy.memory[0xFF8C] == 6 or self.pyboy.memory[0xFF8C] == 0 or not self.isMenu():
                 break
 
