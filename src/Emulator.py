@@ -670,7 +670,7 @@ class Emulator:
             with open(f"roms/{self.game}/start.state", "rb") as load_file:
                 self.pyboy.load_state(load_file)
         self.resetCount = 0
-        self.historyInputs = np.zeros((16, 1559), dtype=np.float32)
+        self.historyInputs = np.zeros((16, 1562), dtype=np.float32)
         self.visitedPositions = {}
         self.menuSelectCount = 0
         self.menuPositionCount = 0

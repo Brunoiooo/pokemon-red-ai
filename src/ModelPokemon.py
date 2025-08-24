@@ -4,7 +4,7 @@ class ModelPokemon(nn.Module):
     def __init__(self):
         super().__init__()
         self.model = nn.Sequential(
-            nn.Linear(24944, 512),
+            nn.Linear(24992, 512),
             nn.LayerNorm(512),
             nn.GELU(),
             nn.Dropout(0.1),
