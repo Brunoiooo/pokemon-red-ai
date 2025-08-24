@@ -238,10 +238,8 @@ class Emulator:
             reward -= 1
 
         # Player move that the enemy disabled
-        if primary_memo_before[0xCCEE] != self.pyboy.memory[0xCCEE] and self.pyboy.memory[0xCCEE] == 0: 
-            reward += 1
-        elif primary_memo_before[0xCCEE] != self.pyboy.memory[0xCCEE]:
-            reward -= 1
+        if primary_memo_before[0xCCEE] != self.pyboy.memory[0xCCEE]: 
+            reward += 1 if self.pyboy.memory[0xCCEE] == 0 else -1
 
         # Enemy move that the player disabled
         if primary_memo_before[0xCCEF] != self.pyboy.memory[0xCCEF] and self.pyboy.memory[0xCCEF] != 0:
@@ -510,7 +508,7 @@ class Emulator:
 
         for i in range(8):
             if after & (1 << i) and before & (1 << i) != after & (1 << i):
-                reward += 1
+                reward += 10
 
         return reward
     
