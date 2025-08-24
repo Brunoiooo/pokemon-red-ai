@@ -687,7 +687,9 @@ class Emulator:
         self.visitedDialog = {}
 
     def inputs(self):
-        data = self.spriteData()
+        data = self.dialogData()
+
+        data += self.spriteData()
             
         data += self.menuData()
 
@@ -724,6 +726,9 @@ class Emulator:
 
         return torch.from_numpy(arr).to("cpu")
     
+    def dialogData(self):
+        return [self.pyboy.memory[0xCF13], self.pyboy.memory[0xCFC4], self.pyboy.memory[0xFF8C]]
+
     def isBattle(self):
         return True if self.pyboy.memory[0xD057] else False
     
