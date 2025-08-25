@@ -6,30 +6,31 @@ import os, io, keyboard, random, sys
 from collections import deque
 import multiprocessing as mp
 
+
 class Core:
     def __init__(
-            self, 
-            game = "PokemonRed",
-            epsilon=1, 
-            epsilonBurn=100000, 
-            epsilonEnd=0.05,
-            epsilonDecayCount=2000000,
-            tmpEpsilon = 0.2,
-            tmpEpsilonSteps = 100000,
-            maxResetCount = 100, 
-            ticksPerStep = 20, 
-            maxMenuSelect = 5,
-            maxMenuPosition = 10,
-            maxMenuIn = 15,
-            maxSameAction = 20,
-            worldIllegalMovesMax = 5,
-            menuIllegalMovesMax = 20,
-            ckpt_every = 100000,
-            lr=0.0001,
-            weight_decay=0.0001,
-            sync_interval=2000,
-            wrongDialogActionMax = 5
-        ):
+        self,
+        game="PokemonRed",
+        epsilon=1,
+        epsilonBurn=100000,
+        epsilonEnd=0.05,
+        epsilonDecayCount=2000000,
+        tmpEpsilon=0.2,
+        tmpEpsilonSteps=100000,
+        maxResetCount=100,
+        ticksPerStep=20,
+        maxMenuSelect=5,
+        maxMenuPosition=10,
+        maxMenuIn=15,
+        maxSameAction=20,
+        worldIllegalMovesMax=5,
+        menuIllegalMovesMax=20,
+        ckpt_every=100000,
+        lr=0.0001,
+        weight_decay=0.0001,
+        sync_interval=2000,
+        wrongDialogActionMax=5,
+    ):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.game = game
 
@@ -43,20 +44,26 @@ class Core:
 
         if ckpt_path is not None:
             state = torch.load(ckpt_path, map_location=self.device)
-            self.modelPokemon.load_state_dict(state["model_state"] if isinstance(state, dict) and "model_state" in state else state)
+            self.modelPokemon.load_state_dict(
+                state["model_state"]
+                if isinstance(state, dict) and "model_state" in state
+                else state
+            )
         self.modelPokemon.train()
 
         self.targetPokemon = ModelPokemon().to(self.device)
         self.targetPokemon.load_state_dict(self.modelPokemon.state_dict())
         self.targetPokemon.eval()
-        
+
         self.tau = 0.005
         self.criterion = torch.nn.SmoothL1Loss()
-        self.optimizer = optim.AdamW(self.modelPokemon.parameters(), lr=lr, weight_decay=weight_decay)
-        self.batch_size = 512       
+        self.optimizer = optim.AdamW(
+            self.modelPokemon.parameters(), lr=lr, weight_decay=weight_decay
+        )
+        self.batch_size = 512
         self.buffer = deque(maxlen=50000)
         self.optimize_every = 4
-        self.updates_per_opt = 2 
+        self.updates_per_opt = 2
         self.grad_accum_steps = 1
         self.replay_start = 20_000
 
@@ -81,15 +88,15 @@ class Core:
         self.count = 0
         self.sync_interval = sync_interval
         self.wrongDialogActionMax = wrongDialogActionMax
-        
+
     def start(self):
         self.dataQ = mp.Queue(maxsize=10000)
 
         n_cores = os.cpu_count() or 1
         n_workers = max(1, n_cores - 1)
 
-        self.conns  = {}
-        self.procs  = {}
+        self.conns = {}
+        self.procs = {}
 
         window = False
 
@@ -98,27 +105,45 @@ class Core:
             emulator = Emulator()
             p = mp.Process(
                 target=emulator.start,
-                args=(self.dataQ, child_conn, actorId, window, self.game, self.maxResetCount, self.ticksPerStep, self.maxMenuSelect, self.maxMenuPosition, self.maxMenuIn, self.maxSameAction, self.worldIllegalMovesMax, self.menuIllegalMovesMax, self.tmpEpsilonSteps, self.epsilon, self.tmpEpsilon, self.wrongDialogActionMax),
+                args=(
+                    self.dataQ,
+                    child_conn,
+                    actorId,
+                    window,
+                    self.game,
+                    self.maxResetCount,
+                    self.ticksPerStep,
+                    self.maxMenuSelect,
+                    self.maxMenuPosition,
+                    self.maxMenuIn,
+                    self.maxSameAction,
+                    self.worldIllegalMovesMax,
+                    self.menuIllegalMovesMax,
+                    self.tmpEpsilonSteps,
+                    self.epsilon,
+                    self.tmpEpsilon,
+                    self.wrongDialogActionMax,
+                ),
                 daemon=True,
             )
             p.start()
             self.conns[actorId] = parent_conn
-            self.procs[actorId] = p 
+            self.procs[actorId] = p
 
         while True:
-            if keyboard.is_pressed('q'):
+            if keyboard.is_pressed("q"):
                 break
-            elif keyboard.is_pressed('w'):
+            elif keyboard.is_pressed("w"):
                 for wid, conn in self.conns.items():
                     conn.send({"type": "window", "value": False})
                 window = False
                 print("w")
-            elif keyboard.is_pressed('e'):
+            elif keyboard.is_pressed("e"):
                 for wid, conn in self.conns.items():
                     conn.send({"type": "window", "value": True})
                 window = True
                 print("e")
-            elif keyboard.is_pressed('r'):
+            elif keyboard.is_pressed("r"):
                 emulator = Emulator()
                 emulator.auto(self.game, self.ticksPerStep)
                 print("r")
@@ -130,14 +155,16 @@ class Core:
                 break
             self.buffer.append(item)
 
-            if len(self.buffer) >= self.replay_start and (self.count % self.optimize_every == 0):
+            if len(self.buffer) >= self.replay_start and (
+                self.count % self.optimize_every == 0
+            ):
                 for _ in range(self.updates_per_opt):
                     self.optimize_batch()
 
-            if self.count % self.sync_interval == 0: 
+            if self.count % self.sync_interval == 0:
                 buf = io.BytesIO()
                 torch.save(self.modelPokemon.state_dict(), buf)
-                
+
                 for wid, conn in self.conns.items():
                     conn.send({"type": "load_state_dict", "value": buf.getvalue()})
                     conn.send({"type": "epsilon", "value": self.currentEpsilon()})
@@ -145,22 +172,41 @@ class Core:
             if self.count >= self.next_ckpt:
                 self.save_latest()
                 emulator = Emulator()
-                avg_ret = emulator.evaluate_greedy(50, 0, window, self.game, self.maxResetCount, self.ticksPerStep, self.maxMenuSelect, self.maxMenuPosition, self.maxMenuIn, self.maxSameAction, self.worldIllegalMovesMax, self.menuIllegalMovesMax, self.tmpEpsilonSteps, self.epsilon, self.tmpEpsilon, self.wrongDialogActionMax)
-                if avg_ret > self.best_eval_return + 0.5: 
+                avg_ret = emulator.evaluate_greedy(
+                    50,
+                    0,
+                    window,
+                    self.game,
+                    self.maxResetCount,
+                    self.ticksPerStep,
+                    self.maxMenuSelect,
+                    self.maxMenuPosition,
+                    self.maxMenuIn,
+                    self.maxSameAction,
+                    self.worldIllegalMovesMax,
+                    self.menuIllegalMovesMax,
+                    self.tmpEpsilonSteps,
+                    self.epsilon,
+                    self.tmpEpsilon,
+                    self.wrongDialogActionMax,
+                )
+                if avg_ret > self.best_eval_return + 0.5:
                     self.save_best(avg_ret)
                 for wid, conn in self.conns.items():
                     conn.send({"type": "need_game_state_ckpt", "value": True})
                 self.next_ckpt += self.ckpt_every
 
             if self.count % 10 == 0:
-                sys.stdout.write(f"\rEpsilon: {self.currentEpsilon():.2f} | Count: {self.count} | Progress: {(self.count / self.epsilonDecayCount * 100):.2f}% dataQ: {self.dataQ.qsize()}")
+                sys.stdout.write(
+                    f"\rEpsilon: {self.currentEpsilon():.2f} | Count: {self.count} | Progress: {(self.count / self.epsilonDecayCount * 100):.2f}% dataQ: {self.dataQ.qsize()}"
+                )
                 sys.stdout.flush()
 
         for p in self.procs.values():
             if p.is_alive():
                 p.terminate()
                 p.join(timeout=1.0)
-        
+
     def currentEpsilon(self):
         if self.count < self.epsilonBurn:
             return self.epsilon
@@ -172,11 +218,11 @@ class Core:
         batch = random.sample(self.buffer, self.batch_size)
         states_cpu, actions, rewards, next_states_cpu, dones = zip(*batch)
 
-        states      = torch.stack(states_cpu).to(self.device, non_blocking=True)
+        states = torch.stack(states_cpu).to(self.device, non_blocking=True)
         next_states = torch.stack(next_states_cpu).to(self.device, non_blocking=True)
-        actions     = torch.tensor(actions, device=self.device, dtype=torch.long)
-        rewards     = torch.tensor(rewards, device=self.device, dtype=torch.float32)
-        dones       = torch.tensor(dones,   device=self.device, dtype=torch.bool)
+        actions = torch.tensor(actions, device=self.device, dtype=torch.long)
+        rewards = torch.tensor(rewards, device=self.device, dtype=torch.float32)
+        dones = torch.tensor(dones, device=self.device, dtype=torch.bool)
 
         rewards = rewards.clamp_(-1.0, 1.0)
 
@@ -186,17 +232,19 @@ class Core:
         self.optimizer.zero_grad(set_to_none=True)
 
         for i in range(self.grad_accum_steps):
-            sl = slice(i*micro, (i+1)*micro)
+            sl = slice(i * micro, (i + 1) * micro)
             s, ns = states[sl], next_states[sl]
             a, r, d = actions[sl], rewards[sl], dones[sl]
 
-            q_all = self.modelPokemon(s)                  
-            q_sa  = q_all.gather(1, a.view(-1,1)).squeeze(1)    
+            q_all = self.modelPokemon(s)
+            q_sa = q_all.gather(1, a.view(-1, 1)).squeeze(1)
 
             with torch.no_grad():
-                next_q_online = self.modelPokemon(ns)                  
-                next_a        = torch.argmax(next_q_online, dim=1) 
-                next_q_target = self.targetPokemon(ns).gather(1, next_a.view(-1,1)).squeeze(1)
+                next_q_online = self.modelPokemon(ns)
+                next_a = torch.argmax(next_q_online, dim=1)
+                next_q_target = (
+                    self.targetPokemon(ns).gather(1, next_a.view(-1, 1)).squeeze(1)
+                )
                 target = torch.where(d, r, r + self.gamma * next_q_target)
 
             loss = self.criterion(q_sa, target) / self.grad_accum_steps
@@ -209,21 +257,29 @@ class Core:
 
     def soft_update_target(self):
         with torch.no_grad():
-            for p, tp in zip(self.modelPokemon.parameters(), self.targetPokemon.parameters()):
+            for p, tp in zip(
+                self.modelPokemon.parameters(), self.targetPokemon.parameters()
+            ):
                 tp.data.copy_(self.tau * p.data + (1 - self.tau) * tp.data)
 
     def save_latest(self):
-        torch.save({
-            "step": self.count,
-            "model_state": self.modelPokemon.state_dict(),
-            "optimizer_state": self.optimizer.state_dict(),
-            "target_state": self.targetPokemon.state_dict(),
-        }, f"roms/{self.game}/latest.pth")
+        torch.save(
+            {
+                "step": self.count,
+                "model_state": self.modelPokemon.state_dict(),
+                "optimizer_state": self.optimizer.state_dict(),
+                "target_state": self.targetPokemon.state_dict(),
+            },
+            f"roms/{self.game}/latest.pth",
+        )
 
     def save_best(self, avg_return):
         self.best_eval_return = avg_return
-        torch.save({
-            "step": self.count,
-            "best_return": float(avg_return),
-            "model_state": self.modelPokemon.state_dict(),
-        }, f"roms/{self.game}/best.pth")
+        torch.save(
+            {
+                "step": self.count,
+                "best_return": float(avg_return),
+                "model_state": self.modelPokemon.state_dict(),
+            },
+            f"roms/{self.game}/best.pth",
+        )
