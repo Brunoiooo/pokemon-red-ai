@@ -9,7 +9,7 @@ import torch
 from ModelPokemon import ModelPokemon
 
 class Emulator:
-    def init(self, actorId, window, game, maxResetCount, ticksPerStep, maxMenuSelect, maxMenuPosition, maxMenuIn, maxSameAction, worldIllegalMovesMax, menuIllegalMovesMax, tmpEpsilonSteps, epsilon, tmpEpsilon):
+    def init(self, actorId, window, game, maxResetCount, ticksPerStep, maxMenuSelect, maxMenuPosition, maxMenuIn, maxSameAction, worldIllegalMovesMax, menuIllegalMovesMax, tmpEpsilonSteps, epsilon, tmpEpsilon, wrongDialogActionMax):
         self.game = game
         if window:
             self.pyboy = PyBoy(f"roms/{self.game}/rom.gb", sound_emulated = False)
@@ -34,6 +34,7 @@ class Emulator:
         self.tmpEpsilonSteps = tmpEpsilonSteps
         self.tmpEpsilon = tmpEpsilon
         self.count = 0
+        self.wrongDialogActionMax = wrongDialogActionMax
         
         ckpt_path = None
         if os.path.exists(f"roms/{self.game}/latest.pth"):
@@ -55,8 +56,8 @@ class Emulator:
         torch.set_num_threads(1)
         self.reset()
 
-    def start(self, dataQ: Queue, conn, actorId, window, game, maxResetCount, ticksPerStep, maxMenuSelect, maxMenuPosition, maxMenuIn, maxSameAction, worldIllegalMovesMax, menuIllegalMovesMax, tmpEpsilonSteps, epsilon, tmpEpsilon):
-        self.init(actorId, window, game, maxResetCount, ticksPerStep, maxMenuSelect, maxMenuPosition, maxMenuIn, maxSameAction, worldIllegalMovesMax, menuIllegalMovesMax, tmpEpsilonSteps, epsilon, tmpEpsilon)
+    def start(self, dataQ: Queue, conn, actorId, window, game, maxResetCount, ticksPerStep, maxMenuSelect, maxMenuPosition, maxMenuIn, maxSameAction, worldIllegalMovesMax, menuIllegalMovesMax, tmpEpsilonSteps, epsilon, tmpEpsilon, wrongDialogActionMax):
+        self.init(actorId, window, game, maxResetCount, ticksPerStep, maxMenuSelect, maxMenuPosition, maxMenuIn, maxSameAction, worldIllegalMovesMax, menuIllegalMovesMax, tmpEpsilonSteps, epsilon, tmpEpsilon, wrongDialogActionMax)
 
         inputs = self.inputs()
 
@@ -113,7 +114,7 @@ class Emulator:
             self.reset()
 
     def auto(self, game, ticksPerStep):
-        self.init(0, True, game, 0, ticksPerStep, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        self.init(0, True, game, 0, ticksPerStep, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
         self.reset(True)
 
         obs = self.inputs()
@@ -137,8 +138,8 @@ class Emulator:
 
         self.pyboy.stop(False)
 
-    def evaluate_greedy(self, episodes, actorId, window, game, maxResetCount, ticksPerStep, maxMenuSelect, maxMenuPosition, maxMenuIn, maxSameAction, worldIllegalMovesMax, menuIllegalMovesMax, tmpEpsilonSteps, epsilon, tmpEpsilon):
-        self.init(actorId, window, game, maxResetCount, ticksPerStep, maxMenuSelect, maxMenuPosition, maxMenuIn, maxSameAction, worldIllegalMovesMax, menuIllegalMovesMax, tmpEpsilonSteps, epsilon, tmpEpsilon)
+    def evaluate_greedy(self, episodes, actorId, window, game, maxResetCount, ticksPerStep, maxMenuSelect, maxMenuPosition, maxMenuIn, maxSameAction, worldIllegalMovesMax, menuIllegalMovesMax, tmpEpsilonSteps, epsilon, tmpEpsilon, wrongDialogActionMax):
+        self.init(actorId, window, game, maxResetCount, ticksPerStep, maxMenuSelect, maxMenuPosition, maxMenuIn, maxSameAction, worldIllegalMovesMax, menuIllegalMovesMax, tmpEpsilonSteps, epsilon, tmpEpsilon, wrongDialogActionMax)
         total = 0.0
 
         for _ in range(episodes):
@@ -478,9 +479,22 @@ class Emulator:
         reward += self.panishMenuPosition(primary_memo_before, reward)
         reward += self.panishMenuIn(reward)
         reward += self.panishSameAction(action, reward)
+        reward += self.panishWrongDialogAction(action)
         self.countingReward(reward)
 
         return reward
+    
+    def panishWrongDialogAction(self, action):
+        if not self.isDialog() or action == 0 or action == 1:
+            self.wrongDialogActionCount = 0
+            return 0
+
+        self.wrongDialogActionCount += 1
+
+        if self.wrongDialogActionMax < self.wrongDialogActionCount:
+            self.done = True
+
+        return -3
     
     def rewardDialog(self):
         if not self.isDialog():
@@ -682,6 +696,7 @@ class Emulator:
         self.menuIllegalMovesCount = 0
         self.done = False
         self.visitedDialog = {}
+        self.wrongDialogActionCount = 0
 
     def inputs(self):
         data = self.dialogData()

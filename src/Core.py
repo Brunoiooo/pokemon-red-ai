@@ -27,7 +27,8 @@ class Core:
             ckpt_every = 100000,
             lr=0.0001,
             weight_decay=0.0001,
-            sync_interval=2000
+            sync_interval=2000,
+            wrongDialogActionMax = 5
         ):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.game = game
@@ -79,6 +80,7 @@ class Core:
         self.best_eval_return = -float("inf")
         self.count = 0
         self.sync_interval = sync_interval
+        self.wrongDialogActionMax = wrongDialogActionMax
         
     def start(self):
         self.dataQ = mp.Queue(maxsize=10000)
@@ -96,7 +98,7 @@ class Core:
             emulator = Emulator()
             p = mp.Process(
                 target=emulator.start,
-                args=(self.dataQ, child_conn, actorId, window, self.game, self.maxResetCount, self.ticksPerStep, self.maxMenuSelect, self.maxMenuPosition, self.maxMenuIn, self.maxSameAction, self.worldIllegalMovesMax, self.menuIllegalMovesMax, self.tmpEpsilonSteps, self.epsilon, self.tmpEpsilon),
+                args=(self.dataQ, child_conn, actorId, window, self.game, self.maxResetCount, self.ticksPerStep, self.maxMenuSelect, self.maxMenuPosition, self.maxMenuIn, self.maxSameAction, self.worldIllegalMovesMax, self.menuIllegalMovesMax, self.tmpEpsilonSteps, self.epsilon, self.tmpEpsilon, self.wrongDialogActionMax),
                 daemon=True,
             )
             p.start()
@@ -143,7 +145,7 @@ class Core:
             if self.count >= self.next_ckpt:
                 self.save_latest()
                 emulator = Emulator()
-                avg_ret = emulator.evaluate_greedy(50, 0, window, self.game, self.maxResetCount, self.ticksPerStep, self.maxMenuSelect, self.maxMenuPosition, self.maxMenuIn, self.maxSameAction, self.worldIllegalMovesMax, self.menuIllegalMovesMax, self.tmpEpsilonSteps, self.epsilon, self.tmpEpsilon)
+                avg_ret = emulator.evaluate_greedy(50, 0, window, self.game, self.maxResetCount, self.ticksPerStep, self.maxMenuSelect, self.maxMenuPosition, self.maxMenuIn, self.maxSameAction, self.worldIllegalMovesMax, self.menuIllegalMovesMax, self.tmpEpsilonSteps, self.epsilon, self.tmpEpsilon, self.wrongDialogActionMax)
                 if avg_ret > self.best_eval_return + 0.5: 
                     self.save_best(avg_ret)
                 for wid, conn in self.conns.items():
