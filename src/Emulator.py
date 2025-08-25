@@ -301,7 +301,7 @@ class Emulator:
 
         if self.done or abs(reward) > 0.0 or self.count % 3 == 0:
             try:
-                dataQ.put(
+                dataQ.put_nowait(
                     (
                         inputs.detach().to("cpu"),
                         action,
