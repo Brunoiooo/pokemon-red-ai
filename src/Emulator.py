@@ -1,3 +1,4 @@
+import time
 import keyboard
 from pyboy import PyBoy
 import os, struct, torch, random, sys, io, math
@@ -298,18 +299,20 @@ class Emulator:
         self.averages = np.roll(self.averages, -1, axis=0)
         self.averages[-1] = reward
 
-        try:
-            dataQ.put_nowait(
-                (
-                    inputs.detach().to("cpu"),
-                    action,
-                    float(reward),
-                    next_state.detach().to("cpu"),
-                    bool(self.done),
+        if self.done or abs(reward) > 0.0 or self.count % 3 == 0:
+            try:
+                dataQ.put(
+                    (
+                        inputs.detach().to("cpu"),
+                        action,
+                        float(reward),
+                        next_state.detach().to("cpu"),
+                        bool(self.done),
+                    )
                 )
-            )
-        except Full:
-            pass
+            except Full:
+                time.sleep(0.001)
+                pass
 
         if self.done:
             if self.need_game_state_ckpt:

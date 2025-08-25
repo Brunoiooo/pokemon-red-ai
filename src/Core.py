@@ -65,7 +65,7 @@ class Core:
         self.optimize_every = 4
         self.updates_per_opt = 2
         self.grad_accum_steps = 1
-        self.replay_start = 20_000
+        self.replay_start = 5000
 
         self.gamma = 0.99
         self.epsilon = epsilon
