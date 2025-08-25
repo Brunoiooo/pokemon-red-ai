@@ -1,4 +1,5 @@
 import keyboard
+from matplotlib import pyplot as plt
 from pyboy import PyBoy
 import os, struct, torch, random, sys, io, math
 import numpy as np
@@ -118,6 +119,12 @@ class Emulator:
 
         obs = self.inputs()
 
+        x1 = []
+        x2 = []
+        x3 = []
+        plt.ion()
+        fig, ax = plt.subplots()
+
         while True:
             if keyboard.is_pressed('q'):
                 break
@@ -126,10 +133,24 @@ class Emulator:
                     q = self.modelPokemon(obs)
                     a = int(torch.argmax(q).item())
 
-            self.pyboy.button_press(self.buttons[a])
+            # self.pyboy.button_press(self.buttons[a])
             
             for __ in range(self.ticksPerStep):
+                # if self.pyboy.memory[0xFFF8] != 0:
                 self.pyboy.tick()
+
+            x1.append(self.pyboy.memory[0xCF13])
+            # x2.append(self.pyboy.memory[0xCFC4])
+            # x3.append(self.pyboy.memory[0xFF8C])
+            ax.clear()
+            ax.plot([i for i in range(len(x1))], x1)
+            ax.plot([i for i in range(len(x2))], x2)
+            ax.plot([i for i in range(len(x3))], x3)
+            plt.draw()
+            plt.pause(0.5)
+
+            # plt.ioff()
+            # plt.show()
 
             self.pyboy.button_release(self.buttons[a])
 
@@ -612,6 +633,7 @@ class Emulator:
         self.menuIllegalMovesCount += 1
 
         if self.menuIllegalMovesMax < self.menuIllegalMovesCount:
+            print("panishMenuIllegalMoves")
             self.done = True
 
         if 1 < self.menuIllegalMovesCount:
@@ -630,6 +652,7 @@ class Emulator:
         self.worldIllegalMovesCount += 1
 
         if self.worldIllegalMovesMax < self.worldIllegalMovesCount:
+            print("panishWorldIllegalMoves")
             self.done = True
 
         if 1 < self.worldIllegalMovesCount:
@@ -927,4 +950,5 @@ class Emulator:
     def countingReward(self, reward):
         self.resetCount = 0 if reward > 0 else self.resetCount + 1
         if self.resetCount > self.maxResetCount:
+            print("countingReward")
             self.done = True
