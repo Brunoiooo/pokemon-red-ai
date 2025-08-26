@@ -120,7 +120,7 @@ class Core:
         self.dataQ = mp.Queue(maxsize=10000)
 
         n_cores = os.cpu_count() or 1
-        n_workers = 1
+        n_workers = max(1, n_cores - 1)
 
         self.conns = {}
         self.procs = {}
