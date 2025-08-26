@@ -11,7 +11,7 @@ from ModelPokemon import ModelPokemon
 
 
 class Emulator:
-    def init(
+    def __init__(
         self,
         actorId,
         window,
@@ -29,15 +29,27 @@ class Emulator:
         tmpEpsilon,
         wrongDialogActionMax,
     ):
+        self.ALL_BUTTONS = ["a", "b", "start", "select", "left", "right", "up", "down"]
         self.game = game
-        if window:
-            self.pyboy = PyBoy(f"roms/{self.game}/rom.gb", sound_emulated=False)
-        else:
-            self.pyboy = PyBoy(
-                f"roms/{self.game}/rom.gb", sound_emulated=False, window="null"
-            )
+        self.window = window
+        self.pyboy_init()
         self.maxResetCount = maxResetCount
-        self.buttons = ["a", "b", "start", "select", "left", "right", "up", "down"]
+        self.buttons = [
+            [],
+            ["a"],
+            ["b"],
+            ["start"],
+            ["select"],
+            ["left"],
+            ["right"],
+            ["up"],
+            ["down"],
+            ["left", "b"],
+            ["right", "b"],
+            ["up", "b"],
+            ["down", "b"],
+        ]
+        self.ticks = [1, 2, 4, 8, 16, 32]
         self.ticksPerStep = ticksPerStep
         self.maxMenuSelect = maxMenuSelect
         self.maxMenuPosition = maxMenuPosition
@@ -56,6 +68,8 @@ class Emulator:
         self.tmpEpsilon = tmpEpsilon
         self.count = 0
         self.wrongDialogActionMax = wrongDialogActionMax
+        self._historyInputs = None
+        self.modelLen = 16
 
         ckpt_path = None
         if os.path.exists(f"roms/{self.game}/latest.pth"):
@@ -63,7 +77,12 @@ class Emulator:
         elif os.path.exists(f"roms/{self.game}/best.pth"):
             ckpt_path = f"roms/{self.game}/best.pth"
 
-        self.modelPokemon = ModelPokemon().to("cpu")
+        self.modelPokemon = ModelPokemon(
+            len(self.data()) * self.modelLen, len(self.buttons) * len(self.ticks)
+        ).to("cpu")
+
+        self.pyboy.stop(False)
+        self.pyboy = None
 
         if ckpt_path is not None:
             state = torch.load(ckpt_path, map_location="cpu")
@@ -79,45 +98,42 @@ class Emulator:
         random.seed(seed)
         np.random.seed(seed % (2**32 - 1))
         torch.set_num_threads(1)
-        self.reset()
 
-    def start(
-        self,
-        dataQ: Queue,
-        conn,
-        actorId,
-        window,
-        game,
-        maxResetCount,
-        ticksPerStep,
-        maxMenuSelect,
-        maxMenuPosition,
-        maxMenuIn,
-        maxSameAction,
-        worldIllegalMovesMax,
-        menuIllegalMovesMax,
-        tmpEpsilonSteps,
-        epsilon,
-        tmpEpsilon,
-        wrongDialogActionMax,
-    ):
-        self.init(
-            actorId,
-            window,
-            game,
-            maxResetCount,
-            ticksPerStep,
-            maxMenuSelect,
-            maxMenuPosition,
-            maxMenuIn,
-            maxSameAction,
-            worldIllegalMovesMax,
-            menuIllegalMovesMax,
-            tmpEpsilonSteps,
-            epsilon,
-            tmpEpsilon,
-            wrongDialogActionMax,
-        )
+    def pyboy_init(self):
+        if self.window:
+            self.pyboy = PyBoy(f"roms/{self.game}/rom.gb", sound_emulated=False)
+        else:
+            self.pyboy = PyBoy(
+                f"roms/{self.game}/rom.gb", sound_emulated=False, window="null"
+            )
+
+    @property
+    def historyInputs(self):
+        if self._historyInputs is None:
+            D = len(self.data())
+            self._historyInputs = np.zeros((self.modelLen, D), dtype=np.float32)
+        return self._historyInputs
+
+    @historyInputs.setter
+    def historyInputs(self, value):
+        v = np.asarray(value, dtype=np.float32)
+
+        if (self._historyInputs is None) or (
+            self._historyInputs.shape[1] != v.shape[0]
+        ):
+            self._historyInputs = np.zeros(
+                (self.modelLen, v.shape[0]), dtype=np.float32
+            )
+            self._historyInputs[-1] = v
+            return
+
+        self._historyInputs[:-1] = self._historyInputs[1:]
+        self._historyInputs[-1] = v
+
+    def start(self, dataQ: Queue, conn):
+        self.pyboy_init()
+
+        self.reset()
 
         inputs = self.inputs()
 
@@ -180,8 +196,9 @@ class Emulator:
             self.pyboy = PyBoy(f"roms/{self.game}/rom.gb", sound_emulated=False)
             self.reset()
 
-    def auto(self, game, ticksPerStep):
-        self.init(0, True, game, 0, ticksPerStep, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    def auto(self):
+        self.pyboy_init()
+
         self.reset(True)
 
         obs = self.inputs()
@@ -190,57 +207,34 @@ class Emulator:
             if keyboard.is_pressed("q"):
                 break
 
-            with torch.inference_mode():
-                q = self.modelPokemon(obs)
-                a = int(torch.argmax(q).item())
-
-            self.pyboy.button_press(self.buttons[a])
-
-            for __ in range(self.ticksPerStep):
-                self.pyboy.tick()
-
-            self.pyboy.button_release(self.buttons[a])
+            self.doAction(obs)
 
             obs = self.inputs()
 
         self.pyboy.stop(False)
 
-    def evaluate_greedy(
-        self,
-        episodes,
-        actorId,
-        window,
-        game,
-        maxResetCount,
-        ticksPerStep,
-        maxMenuSelect,
-        maxMenuPosition,
-        maxMenuIn,
-        maxSameAction,
-        worldIllegalMovesMax,
-        menuIllegalMovesMax,
-        tmpEpsilonSteps,
-        epsilon,
-        tmpEpsilon,
-        wrongDialogActionMax,
-    ):
-        self.init(
-            actorId,
-            window,
-            game,
-            maxResetCount,
-            ticksPerStep,
-            maxMenuSelect,
-            maxMenuPosition,
-            maxMenuIn,
-            maxSameAction,
-            worldIllegalMovesMax,
-            menuIllegalMovesMax,
-            tmpEpsilonSteps,
-            epsilon,
-            tmpEpsilon,
-            wrongDialogActionMax,
-        )
+    def doAction(self, obs):
+        for i in range(len(self.ALL_BUTTONS)):
+            self.pyboy.button_release(self.ALL_BUTTONS[i])
+
+        with torch.inference_mode():
+            q = self.modelPokemon(obs)
+            q = q.squeeze(0)
+
+        idx = int(torch.argmax(q).item())
+        action = idx // len(self.ticks)
+        tick = idx % len(self.ticks)
+
+        for button in self.buttons[action]:
+            self.pyboy.button(button, self.ticks[tick])
+
+        self.pyboy.tick(self.ticks[tick])
+
+        return action
+
+    def evaluate_greedy(self, episodes):
+        self.pyboy_init()
+
         total = 0.0
 
         for _ in range(episodes):
@@ -249,16 +243,11 @@ class Emulator:
             ep_ret = 0.0
 
             while True:
-                with torch.inference_mode():
-                    q = self.modelPokemon(obs)
-                    a = int(torch.argmax(q).item())
-
-                self.pyboy.button_press(self.buttons[a])
                 before = self.pyboy.memory[0x0000:0x10000]
-                for __ in range(self.ticksPerStep):
-                    self.pyboy.tick()
-                r = self.reward(before, a)
-                self.pyboy.button_release(self.buttons[a])
+
+                action = self.doAction(obs)
+
+                r = self.reward(before, action)
 
                 ep_ret += float(r)
 
@@ -269,7 +258,7 @@ class Emulator:
                 obs = self.inputs()
 
                 sys.stdout.write(
-                    f"\rAvg: {((total / episodes) * 100):.2f}% ep_ret: {ep_ret:.2f} button: {self.buttons[a]} episode: {_}"
+                    f"\rAvg: {((total / episodes) * 100):.2f}% ep_ret: {ep_ret:.2f} button: {self.buttons[action]} episode: {_}"
                 )
                 sys.stdout.flush()
 
@@ -280,15 +269,9 @@ class Emulator:
         return total / episodes
 
     def train(self, inputs, dataQ: Queue):
-        action = self.action(inputs)
-
-        self.pyboy.button_press(self.buttons[action])
-
         primary_memo_before = self.pyboy.memory[0x0000:0x10000]
 
-        self.pyboy.tick(count=self.ticksPerStep)
-
-        self.pyboy.button_release(self.buttons[action])
+        action = self.action(inputs)
 
         reward = self.reward(primary_memo_before, action)
 
@@ -967,9 +950,8 @@ class Emulator:
         return reward
 
     def action(self, inputs):
-        with torch.inference_mode():
-            output = self.modelPokemon(inputs)
-            greedy_action = int(torch.argmax(output).item())
+        greedy_action = self.doAction(inputs)
+
         if random.random() < self.currentEpsilon():
             return random.randint(0, 7)
 
@@ -988,13 +970,10 @@ class Emulator:
             with open(f"roms/{self.game}/start.state", "rb") as load_file:
                 self.pyboy.load_state(load_file)
         self.resetCount = 0
-        self.historyInputs = np.zeros((16, 1562), dtype=np.float32)
         self.visitedPositions = {}
         self.menuSelectCount = 0
         self.menuPositionCount = 0
         self.menuInCount = 0
-        for i in range(8):
-            self.pyboy.button_release(self.buttons[i])
         self.sameActionCount = 0
         self.lastAction = -1
         self.menuReward = -0.5
@@ -1004,7 +983,7 @@ class Emulator:
         self.visitedDialog = {}
         self.wrongDialogActionCount = 0
 
-    def inputs(self):
+    def data(self):
         data = self.dialogData()
 
         data += self.spriteData()
@@ -1035,8 +1014,10 @@ class Emulator:
 
         data += self.opponentTrainersPokemonData()
 
-        self.historyInputs = np.roll(self.historyInputs, -1, axis=0)
-        self.historyInputs[-1] = data
+        return data
+
+    def inputs(self):
+        self.historyInputs = self.data()
 
         arr = np.asarray(
             self.log_transform(

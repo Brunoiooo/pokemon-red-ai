@@ -33,46 +33,11 @@ class Core:
     ):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.game = game
-
-        ckpt_path = None
-        if os.path.exists(f"roms/{self.game}/latest.pth"):
-            ckpt_path = f"roms/{self.game}/latest.pth"
-        elif os.path.exists(f"roms/{self.game}/best.pth"):
-            ckpt_path = f"roms/{self.game}/best.pth"
-
-        self.modelPokemon = ModelPokemon().to(self.device)
-
-        if ckpt_path is not None:
-            state = torch.load(ckpt_path, map_location=self.device)
-            self.modelPokemon.load_state_dict(
-                state["model_state"]
-                if isinstance(state, dict) and "model_state" in state
-                else state
-            )
-        self.modelPokemon.train()
-
-        self.targetPokemon = ModelPokemon().to(self.device)
-        self.targetPokemon.load_state_dict(self.modelPokemon.state_dict())
-        self.targetPokemon.eval()
-
-        self.tau = 0.005
-        self.criterion = torch.nn.SmoothL1Loss()
-        self.optimizer = optim.AdamW(
-            self.modelPokemon.parameters(), lr=lr, weight_decay=weight_decay
-        )
-        self.batch_size = 512
-        self.buffer = deque(maxlen=50000)
-        self.optimize_every = 4
-        self.updates_per_opt = 2
-        self.grad_accum_steps = 1
-        self.replay_start = 5000
-
-        self.gamma = 0.99
+        self.maxResetCount = maxResetCount
         self.epsilon = epsilon
         self.epsilonBurn = epsilonBurn
         self.epsilonEnd = epsilonEnd
         self.epsilonDecayCount = epsilonDecayCount
-        self.maxResetCount = maxResetCount
         self.ticksPerStep = ticksPerStep
         self.maxMenuSelect = maxMenuSelect
         self.maxMenuPosition = maxMenuPosition
@@ -89,11 +54,73 @@ class Core:
         self.sync_interval = sync_interval
         self.wrongDialogActionMax = wrongDialogActionMax
 
+        ckpt_path = None
+        if os.path.exists(f"roms/{self.game}/latest.pth"):
+            ckpt_path = f"roms/{self.game}/latest.pth"
+        elif os.path.exists(f"roms/{self.game}/best.pth"):
+            ckpt_path = f"roms/{self.game}/best.pth"
+
+        emulator = Emulator(
+            0,
+            "null",
+            self.game,
+            self.maxResetCount,
+            self.ticksPerStep,
+            self.maxMenuSelect,
+            self.maxMenuPosition,
+            self.maxMenuIn,
+            self.maxSameAction,
+            self.worldIllegalMovesMax,
+            self.menuIllegalMovesMax,
+            self.tmpEpsilonSteps,
+            self.epsilon,
+            self.tmpEpsilon,
+            self.wrongDialogActionMax,
+        )
+        emulator.pyboy_init()
+        self.modelPokemon = ModelPokemon(
+            len(emulator.data()) * emulator.modelLen,
+            len(emulator.buttons) * len(emulator.ticks),
+        ).to(self.device)
+
+        if ckpt_path is not None:
+            state = torch.load(ckpt_path, map_location=self.device)
+            self.modelPokemon.load_state_dict(
+                state["model_state"]
+                if isinstance(state, dict) and "model_state" in state
+                else state
+            )
+        self.modelPokemon.train()
+
+        self.targetPokemon = ModelPokemon(
+            len(emulator.data()) * emulator.modelLen,
+            len(emulator.buttons) * len(emulator.ticks),
+        ).to(self.device)
+        self.targetPokemon.load_state_dict(self.modelPokemon.state_dict())
+        self.targetPokemon.eval()
+
+        emulator.pyboy.stop(False)
+        emulator.pyboy = None
+
+        self.tau = 0.005
+        self.criterion = torch.nn.SmoothL1Loss()
+        self.optimizer = optim.AdamW(
+            self.modelPokemon.parameters(), lr=lr, weight_decay=weight_decay
+        )
+        self.batch_size = 512
+        self.buffer = deque(maxlen=50000)
+        self.optimize_every = 4
+        self.updates_per_opt = 2
+        self.grad_accum_steps = 1
+        self.replay_start = 5000
+
+        self.gamma = 0.99
+
     def start(self):
         self.dataQ = mp.Queue(maxsize=10000)
 
         n_cores = os.cpu_count() or 1
-        n_workers = max(1, n_cores - 1)
+        n_workers = 1
 
         self.conns = {}
         self.procs = {}
@@ -102,27 +129,28 @@ class Core:
 
         for actorId in range(n_workers):
             parent_conn, child_conn = mp.Pipe(duplex=True)
-            emulator = Emulator()
+            emulator = Emulator(
+                actorId,
+                window,
+                self.game,
+                self.maxResetCount,
+                self.ticksPerStep,
+                self.maxMenuSelect,
+                self.maxMenuPosition,
+                self.maxMenuIn,
+                self.maxSameAction,
+                self.worldIllegalMovesMax,
+                self.menuIllegalMovesMax,
+                self.tmpEpsilonSteps,
+                self.epsilon,
+                self.tmpEpsilon,
+                self.wrongDialogActionMax,
+            )
             p = mp.Process(
                 target=emulator.start,
                 args=(
                     self.dataQ,
                     child_conn,
-                    actorId,
-                    window,
-                    self.game,
-                    self.maxResetCount,
-                    self.ticksPerStep,
-                    self.maxMenuSelect,
-                    self.maxMenuPosition,
-                    self.maxMenuIn,
-                    self.maxSameAction,
-                    self.worldIllegalMovesMax,
-                    self.menuIllegalMovesMax,
-                    self.tmpEpsilonSteps,
-                    self.epsilon,
-                    self.tmpEpsilon,
-                    self.wrongDialogActionMax,
                 ),
                 daemon=True,
             )
@@ -144,7 +172,23 @@ class Core:
                 window = True
                 print("e")
             elif keyboard.is_pressed("r"):
-                emulator = Emulator()
+                emulator = Emulator(
+                    0,
+                    window,
+                    self.game,
+                    self.maxResetCount,
+                    self.ticksPerStep,
+                    self.maxMenuSelect,
+                    self.maxMenuPosition,
+                    self.maxMenuIn,
+                    self.maxSameAction,
+                    self.worldIllegalMovesMax,
+                    self.menuIllegalMovesMax,
+                    self.tmpEpsilonSteps,
+                    self.epsilon,
+                    self.tmpEpsilon,
+                    self.wrongDialogActionMax,
+                )
                 emulator.auto(self.game, self.ticksPerStep)
                 print("r")
 
@@ -171,9 +215,7 @@ class Core:
 
             if self.count >= self.next_ckpt:
                 self.save_latest()
-                emulator = Emulator()
-                avg_ret = emulator.evaluate_greedy(
-                    50,
+                emulator = Emulator(
                     0,
                     window,
                     self.game,
@@ -190,6 +232,7 @@ class Core:
                     self.tmpEpsilon,
                     self.wrongDialogActionMax,
                 )
+                avg_ret = emulator.evaluate_greedy(50)
                 if avg_ret > self.best_eval_return + 0.5:
                     self.save_best(avg_ret)
                 for wid, conn in self.conns.items():
