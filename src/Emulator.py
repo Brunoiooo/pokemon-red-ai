@@ -6,7 +6,6 @@ import numpy as np
 from multiprocessing import Queue
 from queue import Full
 import torch
-
 from ModelPokemon import ModelPokemon
 
 
@@ -49,7 +48,14 @@ class Emulator:
             ["up", "b"],
             ["down", "b"],
         ]
-        self.ticks = [1, 2, 4, 8, 16, 32, 64, 128]
+        self.ticks = [
+            1,
+            2,
+            4,
+            8,
+            16,
+            32,
+        ]
         self.ticksPerStep = ticksPerStep
         self.maxMenuSelect = maxMenuSelect
         self.maxMenuPosition = maxMenuPosition
@@ -200,6 +206,8 @@ class Emulator:
         self.pyboy_init()
 
         self.reset(True)
+
+        self.pyboy.set_emulation_speed(1.0)
 
         obs = self.inputs()
 
