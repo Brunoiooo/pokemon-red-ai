@@ -189,7 +189,7 @@ class Core:
                     self.tmpEpsilon,
                     self.wrongDialogActionMax,
                 )
-                emulator.auto(self.game, self.ticksPerStep)
+                emulator.auto()
                 print("r")
 
             try:

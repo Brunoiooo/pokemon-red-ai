@@ -207,13 +207,13 @@ class Emulator:
             if keyboard.is_pressed("q"):
                 break
 
-            self.doAction(obs)
+            self.doAction(obs, False)
 
             obs = self.inputs()
 
         self.pyboy.stop(False)
 
-    def doAction(self, obs):
+    def doAction(self, obs, isEpsilon):
         for i in range(len(self.ALL_BUTTONS)):
             self.pyboy.button_release(self.ALL_BUTTONS[i])
 
@@ -224,6 +224,10 @@ class Emulator:
         idx = int(torch.argmax(q).item())
         action = idx // len(self.ticks)
         tick = idx % len(self.ticks)
+
+        if isEpsilon and random.random() < self.currentEpsilon():
+            action = random.randint(0, len(self.buttons) - 1)
+            tick = random.randint(0, len(self.ticks) - 1)
 
         for button in self.buttons[action]:
             self.pyboy.button(button, self.ticks[tick])
@@ -245,7 +249,7 @@ class Emulator:
             while True:
                 before = self.pyboy.memory[0x0000:0x10000]
 
-                action = self.doAction(obs)
+                action = self.doAction(obs, False)
 
                 r = self.reward(before, action)
 
@@ -271,7 +275,7 @@ class Emulator:
     def train(self, inputs, dataQ: Queue):
         primary_memo_before = self.pyboy.memory[0x0000:0x10000]
 
-        action = self.action(inputs)
+        action = self.doAction(inputs, True)
 
         reward = self.reward(primary_memo_before, action)
 
@@ -948,14 +952,6 @@ class Emulator:
             reward += 1
 
         return reward
-
-    def action(self, inputs):
-        greedy_action = self.doAction(inputs)
-
-        if random.random() < self.currentEpsilon():
-            return random.randint(0, 7)
-
-        return greedy_action
 
     def reset(self, stateStart=False):
         if (
