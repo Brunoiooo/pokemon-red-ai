@@ -49,7 +49,7 @@ class Emulator:
             ["up", "b"],
             ["down", "b"],
         ]
-        self.ticks = [1, 2, 4, 8, 16, 32]
+        self.ticks = [1, 2, 4, 8, 16, 32, 64, 128]
         self.ticksPerStep = ticksPerStep
         self.maxMenuSelect = maxMenuSelect
         self.maxMenuPosition = maxMenuPosition
