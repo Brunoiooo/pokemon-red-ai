@@ -745,11 +745,11 @@ class Emulator:
 
         reward += self.rewardDialog()
         reward += self.rewardPosition()
-        reward += self.panishWorldIllegalMoves(primary_memo_before, reward)
-        reward += self.panishMenuIllegalMoves(primary_memo_before, reward)
+        reward += self.panishWorldIllegalMoves(primary_memo_before)
+        reward += self.panishMenuIllegalMoves(primary_memo_before)
         reward += self.panishSwitchMenu(reward)
-        reward += self.panishMenuSelect(primary_memo_before, reward)
-        reward += self.panishMenuPosition(primary_memo_before, reward)
+        reward += self.panishMenuSelect(primary_memo_before)
+        reward += self.panishMenuPosition(primary_memo_before)
         reward += self.panishMenuIn(reward)
         reward += self.panishSameAction(action, reward)
         reward += self.panishWrongDialogAction(action)
@@ -830,8 +830,8 @@ class Emulator:
 
         return -0.4 if self.maxMenuIn < self.menuInCount else 0
 
-    def panishMenuPosition(self, primary_memo_before, reward):
-        if not self.isMenu() or 0 < reward:
+    def panishMenuPosition(self, primary_memo_before):
+        if not self.isMenu():
             self.menuPositionCount = 0
             return 0
 
@@ -851,8 +851,8 @@ class Emulator:
             else False
         )
 
-    def panishMenuSelect(self, primary_memo_before, reward):
-        if not self.isMenu() or 0 < reward:
+    def panishMenuSelect(self, primary_memo_before):
+        if not self.isMenu():
             self.menuSelectCount = 0
             return 0
 
@@ -901,12 +901,8 @@ class Emulator:
             else False
         )
 
-    def panishMenuIllegalMoves(self, primary_memo_before, reward):
-        if (
-            not self.isMenu()
-            or 0 < reward
-            or not self.isSameMenuPosition(primary_memo_before)
-        ):
+    def panishMenuIllegalMoves(self, primary_memo_before):
+        if not self.isMenu() or not self.isSameMenuPosition(primary_memo_before):
             self.menuIllegalMovesCount = 0
             return 0
 
@@ -929,12 +925,8 @@ class Emulator:
             else False
         )
 
-    def panishWorldIllegalMoves(self, primary_memo_before, reward):
-        if (
-            not self.isWorld()
-            or 0 < reward
-            or not self.isSameWorldPosition(primary_memo_before)
-        ):
+    def panishWorldIllegalMoves(self, primary_memo_before):
+        if not self.isWorld() or not self.isSameWorldPosition(primary_memo_before):
             self.worldIllegalMovesCount = 0
             return 0
 
