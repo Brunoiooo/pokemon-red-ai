@@ -744,6 +744,7 @@ class Emulator:
         )  # Status
 
         reward += self.rewardDialog()
+        reward += self.rewardPosition()
         reward += self.panishWorldIllegalMoves(primary_memo_before, reward)
         reward += self.panishMenuIllegalMoves(primary_memo_before, reward)
         reward += self.panishSwitchMenu(reward)
