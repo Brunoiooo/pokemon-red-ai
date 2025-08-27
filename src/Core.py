@@ -62,7 +62,7 @@ class Core:
 
         emulator = Emulator(
             0,
-            "null",
+            False,
             self.game,
             self.maxResetCount,
             self.ticksPerStep,
