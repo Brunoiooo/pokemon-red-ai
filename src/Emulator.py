@@ -49,9 +49,6 @@ class Emulator:
             ["down", "b"],
         ]
         self.ticks = [
-            1,
-            2,
-            4,
             8,
             16,
             32,
