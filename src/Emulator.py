@@ -1068,17 +1068,21 @@ class Emulator:
             + [self.pyboy.memory[i] for i in range(0xD24C, 0xD273)]
         )
 
-        return data if self.isBattle() or self.isMenu() else [0] * len(data)
+        return (
+            data
+            if self.isBattle() or self.isMenu() or self.isWorld()
+            else [0] * len(data)
+        )
 
     def pokedexData(self):
         data = [self.pyboy.memory[i] for i in range(0xD2F7, 0xD31D)]
 
-        return data if self.isBattle() else [0] * len(data)
+        return data
 
     def itemsData(self):
         data = [self.pyboy.memory[i] for i in range(0xD31D, 0xD347)]
 
-        return data if self.isMenu() else [0] * len(data)
+        return data if self.isMenu() or self.isBattle() else [0] * len(data)
 
     def moneyData(self):
         b0 = self.pyboy.memory[0xD347]
