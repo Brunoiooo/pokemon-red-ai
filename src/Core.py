@@ -79,8 +79,8 @@ class Core:
         )
         emulator.pyboy_init()
         self.modelPokemon = ModelPokemon(
-            len(emulator.data()) * emulator.modelLen,
-            len(emulator.buttons) * len(emulator.ticks),
+            len(emulator.data()),
+            len(emulator.buttons),
         ).to(self.device)
 
         if ckpt_path is not None:
@@ -93,8 +93,8 @@ class Core:
         self.modelPokemon.train()
 
         self.targetPokemon = ModelPokemon(
-            len(emulator.data()) * emulator.modelLen,
-            len(emulator.buttons) * len(emulator.ticks),
+            len(emulator.data()),
+            len(emulator.buttons),
         ).to(self.device)
         self.targetPokemon.load_state_dict(self.modelPokemon.state_dict())
         self.targetPokemon.eval()
