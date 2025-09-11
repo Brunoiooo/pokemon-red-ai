@@ -8,7 +8,6 @@ class ModelPokemon(nn.Module):
             nn.Linear(inputs, 512),
             nn.LayerNorm(512),
             nn.GELU(),
-            nn.Dropout(0.1),
             nn.Linear(512, 512),
             nn.LayerNorm(512),
             nn.GELU(),
