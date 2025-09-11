@@ -18,7 +18,7 @@ class Core:
         tmpEpsilon=0.2,
         tmpEpsilonSteps=100000,
         maxResetCount=100,
-        ticksPerStep=20,
+        ticksPerStep=32,
         maxMenuSelect=5,
         maxMenuPosition=10,
         maxMenuIn=15,

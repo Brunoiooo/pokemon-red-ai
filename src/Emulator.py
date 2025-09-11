@@ -48,11 +48,6 @@ class Emulator:
             ["up", "b"],
             ["down", "b"],
         ]
-        self.ticks = [
-            8,
-            16,
-            32,
-        ]
         self.ticksPerStep = ticksPerStep
         self.maxMenuSelect = maxMenuSelect
         self.maxMenuPosition = maxMenuPosition
@@ -71,8 +66,6 @@ class Emulator:
         self.tmpEpsilon = tmpEpsilon
         self.count = 0
         self.wrongDialogActionMax = wrongDialogActionMax
-        self._historyInputs = None
-        self.modelLen = 16
 
         ckpt_path = None
         if os.path.exists(f"roms/{self.game}/latest.pth"):
@@ -80,9 +73,7 @@ class Emulator:
         elif os.path.exists(f"roms/{self.game}/best.pth"):
             ckpt_path = f"roms/{self.game}/best.pth"
 
-        self.modelPokemon = ModelPokemon(
-            len(self.data()) * self.modelLen, len(self.buttons) * len(self.ticks)
-        ).to("cpu")
+        self.modelPokemon = ModelPokemon(len(self.data()), len(self.buttons)).to("cpu")
 
         self.pyboy.stop(False)
         self.pyboy = None
@@ -109,29 +100,6 @@ class Emulator:
             self.pyboy = PyBoy(
                 f"roms/{self.game}/rom.gb", sound_emulated=False, window="null"
             )
-
-    @property
-    def historyInputs(self):
-        if self._historyInputs is None:
-            D = len(self.data())
-            self._historyInputs = np.zeros((self.modelLen, D), dtype=np.float32)
-        return self._historyInputs
-
-    @historyInputs.setter
-    def historyInputs(self, value):
-        v = np.asarray(value, dtype=np.float32)
-
-        if (self._historyInputs is None) or (
-            self._historyInputs.shape[1] != v.shape[0]
-        ):
-            self._historyInputs = np.zeros(
-                (self.modelLen, v.shape[0]), dtype=np.float32
-            )
-            self._historyInputs[-1] = v
-            return
-
-        self._historyInputs[:-1] = self._historyInputs[1:]
-        self._historyInputs[-1] = v
 
     def start(self, dataQ: Queue, conn):
         self.pyboy_init()
@@ -226,18 +194,15 @@ class Emulator:
             q = self.modelPokemon(obs)
             q = q.squeeze(0)
 
-        idx = int(torch.argmax(q).item())
-        action = idx // len(self.ticks)
-        tick = idx % len(self.ticks)
+        action = int(torch.argmax(q).item())
 
         if isEpsilon and random.random() < self.currentEpsilon():
             action = random.randint(0, len(self.buttons) - 1)
-            tick = random.randint(0, len(self.ticks) - 1)
 
         for button in self.buttons[action]:
-            self.pyboy.button(button, self.ticks[tick])
+            self.pyboy.button_press(button)
 
-        self.pyboy.tick(self.ticks[tick])
+        self.pyboy.tick(self.ticksPerStep)
 
         return action
 
@@ -1011,12 +976,8 @@ class Emulator:
         return data
 
     def inputs(self):
-        self.historyInputs = self.data()
-
         arr = np.asarray(
-            self.log_transform(
-                [item for sublist in self.historyInputs for item in sublist]
-            ),
+            self.log_transform(self.data()),
             dtype=np.float32,
         )
 
