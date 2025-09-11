@@ -108,7 +108,7 @@ class Core:
             self.modelPokemon.parameters(), lr=lr, weight_decay=weight_decay
         )
         self.batch_size = 512
-        self.buffer = deque(maxlen=50000)
+        self.buffer = deque(maxlen=100000)
         self.optimize_every = 4
         self.updates_per_opt = 2
         self.grad_accum_steps = 1
