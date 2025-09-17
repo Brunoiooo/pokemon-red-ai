@@ -3,7 +3,7 @@ import torch
 import os
 from multiprocessing import set_start_method
 
-sys.path.append('src') 
+sys.path.append("src")
 
 from Core import Core
 
@@ -22,6 +22,7 @@ def main():
     core = Core("PokemonRed")
 
     core.start()
+
 
 if __name__ == "__main__":
     main()

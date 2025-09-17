@@ -7,6 +7,7 @@ from multiprocessing import Queue
 from queue import Full
 import torch
 from ModelPokemon import ModelPokemon
+from threading import Event
 
 
 class Emulator:
@@ -101,6 +102,54 @@ class Emulator:
                 f"roms/{self.game}/rom.gb", sound_emulated=False, window="null"
             )
 
+    def manual(self):
+        self.pyboy_init()
+
+        self.reset(True)
+
+        while True:
+            primary_memo_before = self.pyboy.memory[0x0000:0x10000]
+
+            event = keyboard.read_event()
+
+            if event.event_type == "down":
+                if event.name == "a":
+                    action = 1
+                elif event.name == "b":
+                    action = 2
+                elif event.name == "enter":
+                    action = 3
+                elif event.name == "shift":
+                    action = 4
+                elif event.name == "left":
+                    action = 5
+                elif event.name == "right":
+                    action = 6
+                elif event.name == "up":
+                    action = 7
+                elif event.name == "down":
+                    action = 8
+                elif event.name == "q":
+                    break
+                else:
+                    action = 0
+            else:
+                continue
+
+            released = Event()
+
+            keyboard.on_release_key(event.name, lambda e: released.set())
+
+            released.wait()
+
+            self.tick(action)
+
+            print(
+                f"{event.name} {action} {self.reward(primary_memo_before, action):.2} {self.done}"
+            )
+
+        self.pyboy.stop(False)
+
     def start(self, dataQ: Queue, conn):
         self.pyboy_init()
 
@@ -187,9 +236,6 @@ class Emulator:
         self.pyboy.stop(False)
 
     def doAction(self, obs, isEpsilon):
-        for i in range(len(self.ALL_BUTTONS)):
-            self.pyboy.button_release(self.ALL_BUTTONS[i])
-
         with torch.inference_mode():
             q = self.modelPokemon(obs)
             q = q.squeeze(0)
@@ -199,10 +245,7 @@ class Emulator:
         if isEpsilon and random.random() < self.currentEpsilon():
             action = random.randint(0, len(self.buttons) - 1)
 
-        for button in self.buttons[action]:
-            self.pyboy.button_press(button)
-
-        self.pyboy.tick(self.ticksPerStep)
+        self.tick(action)
 
         return action
 
@@ -707,20 +750,25 @@ class Emulator:
 
         reward += self.rewardDialog()
         reward += self.rewardPosition()
-        reward += self.panishWorldIllegalMoves(primary_memo_before)
+        reward += self.panishWorldIllegalMoves(primary_memo_before, reward)
         reward += self.panishMenuIllegalMoves(primary_memo_before)
         reward += self.panishSwitchMenu(reward)
         reward += self.panishMenuSelect(primary_memo_before)
         reward += self.panishMenuPosition(primary_memo_before)
         reward += self.panishMenuIn(reward)
         reward += self.panishSameAction(action, reward)
-        reward += self.panishWrongDialogAction(action)
+        reward += self.panishWrongDialogAction(primary_memo_before, action)
         self.countingReward(reward)
 
         return reward
 
-    def panishWrongDialogAction(self, action):
-        if not self.isDialog() or action == 0 or action == 1:
+    def panishWrongDialogAction(self, primary_memo_before, action):
+        if (
+            not self.isDialog()
+            or action == 0
+            or action == 1
+            or not self.isSameMenuSelected(primary_memo_before)
+        ):
             self.wrongDialogActionCount = 0
             return 0
 
@@ -746,7 +794,7 @@ class Emulator:
             return self.visitedDialog[map][dialogId]
 
         if self.visitedDialog[map][dialogId] > -0.2:
-            self.visitedDialog[map][dialogId] += -0.05
+            self.visitedDialog[map][dialogId] += -0.02
 
         return self.visitedDialog[map][dialogId]
 
@@ -887,8 +935,12 @@ class Emulator:
             else False
         )
 
-    def panishWorldIllegalMoves(self, primary_memo_before):
-        if not self.isWorld() or not self.isSameWorldPosition(primary_memo_before):
+    def panishWorldIllegalMoves(self, primary_memo_before, reward):
+        if (
+            not self.isWorld()
+            or not self.isSameWorldPosition(primary_memo_before)
+            or 0 < reward
+        ):
             self.worldIllegalMovesCount = 0
             return 0
 
@@ -1176,3 +1228,14 @@ class Emulator:
         self.resetCount = 0 if reward > 0 else self.resetCount + 1
         if self.resetCount > self.maxResetCount:
             self.done = True
+
+    def tick(self, action):
+        for button in self.buttons[action]:
+            self.pyboy.button_press(button)
+
+        self.pyboy.tick(self.ticksPerStep / 2)
+
+        for i in range(len(self.ALL_BUTTONS)):
+            self.pyboy.button_release(self.ALL_BUTTONS[i])
+
+        self.pyboy.tick(self.ticksPerStep / 2)
