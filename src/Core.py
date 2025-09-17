@@ -174,7 +174,7 @@ class Core:
             elif keyboard.is_pressed("r"):
                 emulator = Emulator(
                     0,
-                    window,
+                    True,
                     self.game,
                     self.maxResetCount,
                     self.ticksPerStep,
