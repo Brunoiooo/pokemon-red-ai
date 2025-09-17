@@ -790,11 +790,11 @@ class Emulator:
             self.visitedDialog[map] = {}
 
         if dialogId not in self.visitedDialog[map]:
-            self.visitedDialog[map][dialogId] = 0.5
+            self.visitedDialog[map][dialogId] = 0.2
             return self.visitedDialog[map][dialogId]
 
         if self.visitedDialog[map][dialogId] > -0.2:
-            self.visitedDialog[map][dialogId] += -0.02
+            self.visitedDialog[map][dialogId] += -0.008
 
         return self.visitedDialog[map][dialogId]
 
