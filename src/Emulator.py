@@ -318,7 +318,7 @@ class Emulator:
             if self.need_game_state_ckpt:
                 self.saveGameState()
                 self.need_game_state_ckpt = False
-            self.reset("checkpoint")
+            self.reset()
             return self.inputs()
 
         return next_state
