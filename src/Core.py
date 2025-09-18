@@ -110,7 +110,7 @@ class Core:
         self.batch_size = 512
         self.buffer = deque(maxlen=100000)
         self.optimize_every = 4
-        self.updates_per_opt = 2
+        self.updates_per_opt = 3
         self.grad_accum_steps = 1
         self.replay_start = 5000
 
