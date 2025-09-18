@@ -875,7 +875,12 @@ class Emulator:
         return -0.2 if self.maxMenuSelect < self.menuSelectCount else 0
 
     def panishSwitchMenu(self):
-        if self.isMenu():
+        lastMenu = self.lastMenu
+        self.lastMenu = self.isMenu()
+
+        if lastMenu != self.isMenu():
+            return -0.2
+        elif self.isMenu():
             return -0.1
         return 0
 
@@ -988,6 +993,7 @@ class Emulator:
         self.done = False
         self.visitedDialog = {}
         self.wrongDialogActionCount = 0
+        self.lastMenu = self.isMenu()
 
     def data(self):
         data = self.dialogData()
