@@ -245,7 +245,10 @@ class Emulator:
         if isEpsilon and random.random() < self.currentEpsilon():
             action = random.randint(0, len(self.buttons) - 1)
 
+        action = self.mask_action(action)
+
         self.tick(action)
+        return action
 
         return action
 
@@ -764,6 +767,24 @@ class Emulator:
 
         return reward
 
+    def mask_action(self, action: int) -> int:
+        # jeśli mamy cooldown po zmianie menu – nie pozwalaj na kolejne przełączenie
+        if self.menuCooldown > 0:
+            # „start” jest u Ciebie pod action==3 (["start"])
+            if action == 3:  # start
+                # zamień na „nic” lub bezpieczną akcję
+                return 0  # [] -> no-op (naciskasz nic)
+        # gdy jesteśmy w menu, preferuj nawigację lub wyjście 'b'
+        if self.isMenu():
+            # dopuść tylko: a(1), b(2), up(7), down(8), left(5), right(6)
+            allowed = {0, 1, 2, 5, 6, 7, 8}
+            if action not in allowed:
+                return 2  # 'b' żeby cofać menu zamiast robić dziwne rzeczy
+        # gdy jesteśmy w świecie, ogranicz spam „start”
+        if self.isWorld() and self.menuCooldown > 0 and action == 3:
+            return 0
+        return action
+
     def getPosition(self):
         return f"{self.pyboy.memory[0xD361]}x{self.pyboy.memory[0xD362]}x{self.pyboy.memory[0xD35E]}"
 
@@ -888,14 +909,26 @@ class Emulator:
         return -0.2 if self.maxMenuSelect < self.menuSelectCount else 0
 
     def panishSwitchMenu(self):
-        lastMenu = self.lastMenu
-        self.lastMenu = self.isMenu()
+        wasMenu = self.lastMenu
+        isMenu = self.isMenu()
+        self.lastMenu = isMenu
 
-        if lastMenu != self.isMenu():
-            return -0.2
-        elif self.isMenu():
-            return -0.1
-        return 0
+        # rosnąca kara za siedzenie w menu – żeby uciekał
+        in_menu_penalty = -0.2 if isMenu else 0.0  # było -0.1
+
+        if wasMenu != isMenu:
+            self.menuToggleStreak += 1
+            self.menuCooldown = self.MENU_COOLDOWN_STEPS
+            # rosnąca kara za przełączanie (np. -0.5, -1.0, -1.5, …)
+            return in_menu_penalty + (-0.5 * self.menuToggleStreak)
+        else:
+            # jeśli nie przełączono – streak maleje powoli
+            if self.menuToggleStreak > 0:
+                self.menuToggleStreak -= 1
+            # cooldown „tyka”
+            if self.menuCooldown > 0:
+                self.menuCooldown -= 1
+            return in_menu_penalty
 
     def rewardPosition(self):
         if not self.isWorld():
@@ -1000,6 +1033,10 @@ class Emulator:
         self.lastMenu = self.isMenu()
         self.lastPosition0 = self.getPosition()
         self.lastPosition1 = self.getPosition()
+        X_seconds = 0.8  # docelowy czas blokady
+        self.MENU_COOLDOWN_STEPS = math.ceil(X_seconds * 60 / self.ticksPerStep)
+        self.menuCooldown = 0
+        self.menuToggleStreak = 0
 
     def data(self):
         data = self.dialogData()
