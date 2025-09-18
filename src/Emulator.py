@@ -108,7 +108,7 @@ class Emulator:
         self.reset(True)
 
         while True:
-            primary_memo_before = self.pyboy.memory[0x0000:0x10000]
+            primary_memo_before = bytes(self.pyboy.memory[0x0000:0x10000])
 
             event = keyboard.read_event()
 
@@ -286,7 +286,7 @@ class Emulator:
         return total / episodes
 
     def train(self, inputs, dataQ: Queue):
-        primary_memo_before = self.pyboy.memory[0x0000:0x10000]
+        primary_memo_before = bytes(self.pyboy.memory[0x0000:0x10000])
 
         action = self.doAction(inputs, True)
 
@@ -758,27 +758,40 @@ class Emulator:
         reward += self.panishMenuIn(reward)
         reward += self.panishSameAction(action, reward)
         reward += self.panishWrongDialogAction(primary_memo_before, action)
+        reward += self.panishBacktrack()
         self.countingReward(reward)
         reward -= 0.01
 
         return reward
 
-    def panishWrongDialogAction(self, primary_memo_before, action):
-        if (
-            not self.isDialog()
-            or action == 0
-            or action == 1
-            or not self.isSameMenuSelected(primary_memo_before)
-        ):
-            self.wrongDialogActionCount = 0
+    def getPosition(self):
+        return f"{self.pyboy.memory[0xD361]}x{self.pyboy.memory[0xD362]}x{self.pyboy.memory[0xD35E]}"
+
+    def panishBacktrack(self):
+        if not self.isWorld():
             return 0
 
-        self.wrongDialogActionCount += 1
+        if self.lastPosition0 is self.getPosition():
+            reward = -0.2
+        else:
+            reward = 0
 
+        self.lastPosition0 = self.lastPosition1
+        self.lastPosition1 = self.getPosition()
+
+        return reward
+
+    def panishWrongDialogAction(self, primary_memo_before, action):
+        if not self.isDialog() or action in (0, 1, 2):
+            self.wrongDialogActionCount = 0
+            return 0
+        if not self.isSameMenuSelected(primary_memo_before):
+            self.wrongDialogActionCount = 0
+            return 0
+        self.wrongDialogActionCount += 1
         if self.wrongDialogActionMax < self.wrongDialogActionCount:
             self.done = True
-
-        return -3
+        return -1.0
 
     def rewardDialog(self):
         if not self.isDialog():
@@ -886,23 +899,14 @@ class Emulator:
 
     def rewardPosition(self):
         if not self.isWorld():
-            return 0
+            return 0.0
 
-        map = self.pyboy.memory[0xD35E]
-        position = f"{self.pyboy.memory[0xD361]}x{self.pyboy.memory[0xD362]}"
+        position = self.getPosition()
 
-        if map not in self.visitedPositions:
-            self.visitedPositions[map] = {}
-            return 2
-
-        if position not in self.visitedPositions[map]:
-            self.visitedPositions[map][position] = 0.2
-            return self.visitedPositions[map][position]
-
-        if self.visitedPositions[map][position] > -0.2:
-            self.visitedPositions[map][position] += -0.05
-
-        return self.visitedPositions[map][position]
+        if position not in self.visitedPositions:
+            self.visitedPositions.add(position)
+            return 0.2
+        return 0.0
 
     def isSameMenuPosition(self, primary_memo_before):
         return (
@@ -982,7 +986,7 @@ class Emulator:
             with open(f"roms/{self.game}/start.state", "rb") as load_file:
                 self.pyboy.load_state(load_file)
         self.resetCount = 0
-        self.visitedPositions = {}
+        self.visitedPositions = set()
         self.menuSelectCount = 0
         self.menuPositionCount = 0
         self.menuInCount = 0
@@ -994,6 +998,8 @@ class Emulator:
         self.visitedDialog = {}
         self.wrongDialogActionCount = 0
         self.lastMenu = self.isMenu()
+        self.lastPosition0 = self.getPosition()
+        self.lastPosition1 = self.getPosition()
 
     def data(self):
         data = self.dialogData()
