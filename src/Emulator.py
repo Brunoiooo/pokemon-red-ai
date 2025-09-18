@@ -771,7 +771,7 @@ class Emulator:
         if not self.isWorld():
             return 0
 
-        if self.lastPosition0 is self.getPosition():
+        if self.lastPosition0 == self.getPosition():
             reward = -0.2
         else:
             reward = 0
