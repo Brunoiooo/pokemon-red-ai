@@ -759,6 +759,7 @@ class Emulator:
         reward += self.panishSameAction(action, reward)
         reward += self.panishWrongDialogAction(primary_memo_before, action)
         self.countingReward(reward)
+        reward -= 0.01
 
         return reward
 
@@ -873,13 +874,10 @@ class Emulator:
 
         return -0.2 if self.maxMenuSelect < self.menuSelectCount else 0
 
-    def panishSwitchMenu(self, reward):
-        if self.isMenu() and reward <= 0:
-            if -0.2 < self.menuReward:
-                self.menuReward += -0.05
-            return self.menuReward
-        else:
-            return 0
+    def panishSwitchMenu(self):
+        if self.isMenu():
+            return -0.1
+        return 0
 
     def rewardPosition(self):
         if not self.isWorld():
@@ -890,12 +888,10 @@ class Emulator:
 
         if map not in self.visitedPositions:
             self.visitedPositions[map] = {}
-            self.menuReward += 0.2
             return 2
 
         if position not in self.visitedPositions[map]:
             self.visitedPositions[map][position] = 0.2
-            self.menuReward += 0.05
             return self.visitedPositions[map][position]
 
         if self.visitedPositions[map][position] > -0.2:
@@ -987,7 +983,6 @@ class Emulator:
         self.menuInCount = 0
         self.sameActionCount = 0
         self.lastAction = -1
-        self.menuReward = -0.5
         self.worldIllegalMovesCount = 0
         self.menuIllegalMovesCount = 0
         self.done = False
@@ -1225,7 +1220,10 @@ class Emulator:
         return [1 if (byte & (1 << i)) else 0 for i in range(start_bit, end_bit + 1)]
 
     def countingReward(self, reward):
-        self.resetCount = 0 if reward > 0 else self.resetCount + 1
+        if reward > 0.2:
+            self.resetCount = 0
+        else:
+            self.resetCount += 1
         if self.resetCount > self.maxResetCount:
             self.done = True
 
