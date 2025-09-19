@@ -55,10 +55,10 @@ class Core:
         self.wrongDialogActionMax = wrongDialogActionMax
 
         ckpt_path = None
-        if os.path.exists(f"roms/{self.game}/latest.pth"):
-            ckpt_path = f"roms/{self.game}/latest.pth"
-        elif os.path.exists(f"roms/{self.game}/best.pth"):
+        if os.path.exists(f"roms/{self.game}/best.pth"):
             ckpt_path = f"roms/{self.game}/best.pth"
+        elif os.path.exists(f"roms/{self.game}/latest.pth"):
+            ckpt_path = f"roms/{self.game}/latest.pth"
 
         emulator = Emulator(
             0,
@@ -86,9 +86,12 @@ class Core:
         if ckpt_path is not None:
             state = torch.load(ckpt_path, map_location=self.device)
             self.modelPokemon.load_state_dict(
-                state["model_state"]
-                if isinstance(state, dict) and "model_state" in state
-                else state
+                (
+                    state["model_state"]
+                    if isinstance(state, dict) and "model_state" in state
+                    else state
+                ),
+                strict=True,
             )
         self.modelPokemon.train()
 
@@ -217,7 +220,7 @@ class Core:
                 self.save_latest()
                 emulator = Emulator(
                     0,
-                    window,
+                    True,
                     self.game,
                     self.maxResetCount,
                     self.ticksPerStep,
@@ -232,7 +235,7 @@ class Core:
                     self.tmpEpsilon,
                     self.wrongDialogActionMax,
                 )
-                avg_ret = emulator.evaluate_greedy(50)
+                avg_ret = emulator.evaluate_greedy(15)
                 if avg_ret > self.best_eval_return + 0.5:
                     self.save_best(avg_ret)
                 for wid, conn in self.conns.items():
