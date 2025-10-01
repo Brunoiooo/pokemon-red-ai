@@ -51,7 +51,7 @@ class Core:
         self.ckpt_every = ckpt_every
         self.next_ckpt = self.ckpt_every
         self.best_eval_return = -float("inf")
-        self.best_done_count = -float("inf")
+        self.best_done_count = 0
         self.count = 0
         self.sync_interval = sync_interval
         self.wrongDialogActionMax = wrongDialogActionMax
