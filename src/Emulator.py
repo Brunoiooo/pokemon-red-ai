@@ -278,7 +278,8 @@ class Emulator:
 
                 if self.done:
                     self.done = False
-                    break
+                    if r <= 0:
+                        break
 
                 obs = self.inputs()
 
