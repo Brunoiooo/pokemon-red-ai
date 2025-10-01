@@ -1099,7 +1099,6 @@ class Emulator:
             self.visitedDialog = {}
 
         self.resetCount = 0
-        self.visitedPositions: dict[int, set[tuple[int, int]]] = {}
         self.menuSelectCount = 0
         self.menuPositionCount = 0
         self.menuInCount = 0
@@ -1108,7 +1107,6 @@ class Emulator:
         self.worldIllegalMovesCount = 0
         self.menuIllegalMovesCount = 0
         self.done = False
-        self.visitedDialog = {}
         self.wrongDialogActionCount = 0
         self.lastMenu = self.isMenu()
         self.lastPosition0 = self.getPosition()
