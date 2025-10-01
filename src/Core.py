@@ -271,8 +271,6 @@ class Core:
         rewards = torch.tensor(rewards, device=self.device, dtype=torch.float32)
         dones = torch.tensor(dones, device=self.device, dtype=torch.bool)
 
-        rewards = rewards.clamp_(-1.0, 1.0)
-
         micro = self.batch_size // self.grad_accum_steps
         assert self.batch_size % self.grad_accum_steps == 0
 
