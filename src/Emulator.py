@@ -1,7 +1,7 @@
 import time
 import keyboard
 from pyboy import PyBoy
-import os, struct, torch, random, sys, io, math
+import os, struct, torch, random, sys, io, math, json
 import numpy as np
 from multiprocessing import Queue
 from queue import Full
@@ -334,10 +334,19 @@ class Emulator:
 
     def saveGameState(self):
         os.makedirs(f"roms/{self.game}/{self.actorId}", exist_ok=True)
-        with open(
-            f"roms/{self.game}/{self.actorId}/checkpoint.state", "wb"
-        ) as save_file:
-            self.pyboy.save_state(save_file)
+        with open(f"roms/{self.game}/{self.actorId}/checkpoint.state", "wb") as f:
+            self.pyboy.save_state(f)
+
+        # ---- META ----
+        meta_path = f"roms/{self.game}/{self.actorId}/meta.json"
+        meta = {
+            "visitedPositions": {
+                str(map_id): list(sorted(list(positions)))
+                for map_id, positions in self.visitedPositions.items()
+            }
+        }
+        with open(meta_path, "w", encoding="utf-8") as mf:
+            json.dump(meta, mf, ensure_ascii=False)
 
     def reward(self, primary_memo_before, action):
         reward = 0
@@ -960,19 +969,19 @@ class Emulator:
         if not self.isWorld():
             return 0.0
 
-        position = f"{self.pyboy.memory[0xD361]}x{self.pyboy.memory[0xD362]}"
-        map = self.pyboy.memory[0xD35E]
+        map_id = int(self.pyboy.memory[0xD35E])
+        pos = (int(self.pyboy.memory[0xD361]), int(self.pyboy.memory[0xD362]))
 
-        if self.visitedPositions.get(map) is None:
-            self.visitedPositions[map] = [position]
-            self.updateDoneGraph(f"rewardPosition")
-            return 10
-
-        if position in self.visitedPositions.get(map):
+        s = self.visitedPositions.setdefault(map_id, set())
+        if pos in s:
             return -0.2
 
-        self.visitedPositions[self.pyboy.memory[0xD35E]].append(position)
+        if len(s) == 0:
+            s.add(pos)
+            self.updateDoneGraph("rewardPosition")
+            return 10.0
 
+        s.add(pos)
         return 0.2
 
     def isSameMenuPosition(self, primary_memo_before):
@@ -1052,8 +1061,21 @@ class Emulator:
         else:
             with open(f"roms/{self.game}/start.state", "rb") as load_file:
                 self.pyboy.load_state(load_file)
-        self.resetCount = 0
+
+        meta_path = f"roms/{self.game}/{self.actorId}/meta.json"
         self.visitedPositions = {}
+        try:
+            with open(meta_path, "r", encoding="utf-8") as mf:
+                data = json.load(mf)
+                vp = data.get("visitedPositions", {})
+                self.visitedPositions = {
+                    int(k): set(tuple(xy) for xy in v) for k, v in vp.items()
+                }
+        except FileNotFoundError:
+            self.visitedPositions = {}
+
+        self.resetCount = 0
+        self.visitedPositions: dict[int, set[tuple[int, int]]] = {}
         self.menuSelectCount = 0
         self.menuPositionCount = 0
         self.menuInCount = 0
