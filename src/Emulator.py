@@ -777,7 +777,6 @@ class Emulator:
 
         reward += self.rewardDialog()
         reward += self.rewardPosition()
-        reward += self.rewardMap(primary_memo_before)
         reward += self.panishWorldIllegalMoves(primary_memo_before, reward)
         reward += self.panishMenuIllegalMoves(primary_memo_before)
         reward += self.panishSwitchMenu()
@@ -961,25 +960,20 @@ class Emulator:
         if not self.isWorld():
             return 0.0
 
-        position = self.getPosition()
+        position = f"{self.pyboy.memory[0xD361]}x{self.pyboy.memory[0xD362]}"
+        map = self.pyboy.memory[0xD35E]
 
-        if position not in self.visitedPositions:
-            self.visitedPositions.add(position)
-            return 0.2
-        return 0.0
+        if self.visitedPositions.get(map) is None:
+            self.visitedPositions[map] = [position]
+            self.updateDoneGraph(f"rewardPosition")
+            return 10
 
-    def rewardMap(self, primary_memo_before):
-        if (
-            not self.isWorld()
-            or self.pyboy.memory[0xD35E] == primary_memo_before[0xD35E]
-        ):
-            return 0.0
+        if position in self.visitedPositions.get(map):
+            return -0.2
 
-        self.updateDoneGraph(
-            f"rewardMap-{primary_memo_before[0xD35E]}->{self.pyboy.memory[0xD35E]}"
-        )
+        self.visitedPositions[self.pyboy.memory[0xD35E]].append(position)
 
-        return 10
+        return 0.2
 
     def isSameMenuPosition(self, primary_memo_before):
         return (
@@ -1059,7 +1053,7 @@ class Emulator:
             with open(f"roms/{self.game}/start.state", "rb") as load_file:
                 self.pyboy.load_state(load_file)
         self.resetCount = 0
-        self.visitedPositions = set()
+        self.visitedPositions = {}
         self.menuSelectCount = 0
         self.menuPositionCount = 0
         self.menuInCount = 0
