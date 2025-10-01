@@ -254,7 +254,6 @@ class Emulator:
         action = self.mask_action(action)
 
         self.tick(action)
-        return action
 
         return action
 
