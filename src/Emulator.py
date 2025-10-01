@@ -28,6 +28,7 @@ class Emulator:
         epsilon,
         tmpEpsilon,
         wrongDialogActionMax,
+        isBest=True,
     ):
         self.ALL_BUTTONS = ["a", "b", "start", "select", "left", "right", "up", "down"]
         self.game = game
@@ -69,7 +70,7 @@ class Emulator:
         self.wrongDialogActionMax = wrongDialogActionMax
 
         ckpt_path = None
-        if os.path.exists(f"roms/{self.game}/best.pth"):
+        if os.path.exists(f"roms/{self.game}/best.pth") and isBest:
             ckpt_path = f"roms/{self.game}/best.pth"
         elif os.path.exists(f"roms/{self.game}/latest.pth"):
             ckpt_path = f"roms/{self.game}/latest.pth"

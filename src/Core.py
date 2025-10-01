@@ -234,6 +234,7 @@ class Core:
                     self.epsilon,
                     self.tmpEpsilon,
                     self.wrongDialogActionMax,
+                    False,
                 )
                 avg_ret = emulator.evaluate_greedy(15)
                 if avg_ret > self.best_eval_return + 0.5:
