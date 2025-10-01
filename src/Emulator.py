@@ -288,7 +288,7 @@ class Emulator:
                 obs = self.inputs()
 
                 sys.stdout.write(
-                    f"\rEpisodes: {(total / episodes):.2f} Avg: {((total / episodes) * 100):.2f}% ep_ret: {ep_ret:.2f} button: {self.buttons[action]} episode: {_}"
+                    f"\rEpisodes: {(totalDoneRewardCount / episodes):.2f} Avg: {((total / episodes) * 100):.2f}% ep_ret: {ep_ret:.2f} button: {self.buttons[action]} episode: {_}"
                 )
                 sys.stdout.flush()
 
