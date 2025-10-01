@@ -237,13 +237,16 @@ class Core:
                     self.wrongDialogActionMax,
                     False,
                 )
-                avg_ret = emulator.evaluate_greedy(15)
+                (avg_ret, best_done_count) = emulator.evaluate_greedy(15)
                 self.plot_done_graph(emulator.doneGraph)
 
                 if avg_ret > self.best_eval_return + 0.5:
                     self.save_best(avg_ret)
-                for wid, conn in self.conns.items():
-                    conn.send({"type": "need_game_state_ckpt", "value": True})
+
+                if best_done_count > self.best_done_count:
+                    for wid, conn in self.conns.items():
+                        conn.send({"type": "need_game_state_ckpt", "value": True})
+
                 self.next_ckpt += self.ckpt_every
 
             if self.count % 10 == 0:

@@ -261,11 +261,13 @@ class Emulator:
         self.pyboy_init()
 
         total = 0.0
+        totalDoneRewardCount = 0
 
         for _ in range(episodes):
             self.reset(True)
             obs = self.inputs()
             ep_ret = 0.0
+            doneRewardCount = 0
 
             while True:
                 before = self.pyboy.memory[0x0000:0x10000]
@@ -280,19 +282,22 @@ class Emulator:
                     self.done = False
                     if r <= 0:
                         break
+                    else:
+                        doneRewardCount += 1
 
                 obs = self.inputs()
 
                 sys.stdout.write(
-                    f"\rAvg: {((total / episodes) * 100):.2f}% ep_ret: {ep_ret:.2f} button: {self.buttons[action]} episode: {_}"
+                    f"\rEpisodes: {(total / episodes):.2f} Avg: {((total / episodes) * 100):.2f}% ep_ret: {ep_ret:.2f} button: {self.buttons[action]} episode: {_}"
                 )
                 sys.stdout.flush()
 
             total += ep_ret
+            totalDoneRewardCount += doneRewardCount
 
         self.pyboy.stop(False)
 
-        return total / episodes
+        return (total / episodes, totalDoneRewardCount / episodes)
 
     def train(self, inputs, dataQ: Queue):
         primary_memo_before = bytes(self.pyboy.memory[0x0000:0x10000])
@@ -324,9 +329,10 @@ class Emulator:
                 pass
 
         if self.done:
-            if self.need_game_state_ckpt:
+            if reward > 0 and self.need_game_state_ckpt:
                 self.saveGameState()
                 self.need_game_state_ckpt = False
+
             self.reset()
             return self.inputs()
 
@@ -343,7 +349,13 @@ class Emulator:
             "visitedPositions": {
                 str(map_id): list(sorted(list(positions)))
                 for map_id, positions in self.visitedPositions.items()
-            }
+            },
+            "visitedDialog": {
+                str(map_id): {
+                    str(dialog_id): reward for dialog_id, reward in dialogs.items()
+                }
+                for map_id, dialogs in self.visitedDialog.items()
+            },
         }
         with open(meta_path, "w", encoding="utf-8") as mf:
             json.dump(meta, mf, ensure_ascii=False)
@@ -976,7 +988,7 @@ class Emulator:
         if pos in s:
             return -0.2
 
-        if len(s) == 0:
+        if len(s) == 0 and len(self.visitedPositions) >= 2:
             s.add(pos)
             self.updateDoneGraph("rewardPosition")
             return 10.0
@@ -1062,17 +1074,29 @@ class Emulator:
             with open(f"roms/{self.game}/start.state", "rb") as load_file:
                 self.pyboy.load_state(load_file)
 
-        meta_path = f"roms/{self.game}/{self.actorId}/meta.json"
-        self.visitedPositions = {}
         try:
-            with open(meta_path, "r", encoding="utf-8") as mf:
-                data = json.load(mf)
-                vp = data.get("visitedPositions", {})
-                self.visitedPositions = {
-                    int(k): set(tuple(xy) for xy in v) for k, v in vp.items()
+            with open(
+                f"roms/{self.game}/{self.actorId}/meta.json", "r", encoding="utf-8"
+            ) as f:
+                data = json.load(f)
+
+            vp = data.get("visitedPositions", {})
+            self.visitedPositions = {
+                int(map_id): set(tuple(xy) for xy in positions)
+                for map_id, positions in vp.items()
+            }
+
+            vd = data.get("visitedDialog", {})
+            self.visitedDialog = {
+                int(map_id): {
+                    int(dialog_id): float(reward)
+                    for dialog_id, reward in dialogs.items()
                 }
+                for map_id, dialogs in vd.items()
+            }
         except FileNotFoundError:
             self.visitedPositions = {}
+            self.visitedDialog = {}
 
         self.resetCount = 0
         self.visitedPositions: dict[int, set[tuple[int, int]]] = {}
