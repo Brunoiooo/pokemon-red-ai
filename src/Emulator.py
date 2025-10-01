@@ -98,6 +98,8 @@ class Emulator:
         np.random.seed(seed % (2**32 - 1))
         torch.set_num_threads(1)
 
+        self.doneGraph = {}
+
     def pyboy_init(self):
         if self.window:
             self.pyboy = PyBoy(f"roms/{self.game}/rom.gb", sound_emulated=False)
@@ -537,126 +539,144 @@ class Emulator:
             primary_memo_before[0xD5AB] != self.pyboy.memory[0xD5AB]
             and self.pyboy.memory[0xD5AB]
         ):
-            reward += 1
+            reward += 30
+            self.updateDoneGraph("Starters Back")
 
         # Have Town map?
         if (
             primary_memo_before[0xD5F3] != self.pyboy.memory[0xD5F3]
             and self.pyboy.memory[0xD5F3]
         ):
-            reward += 1
+            reward += 30
+            self.updateDoneGraph("Have Town map?")
 
         # Have Oak's Parcel?
         if (
             primary_memo_before[0xD60D] != self.pyboy.memory[0xD60D]
             and self.pyboy.memory[0xD60D]
         ):
-            reward += 1
+            reward += 30
+            self.updateDoneGraph("Have Oak's Parcel?")
 
         # Fossilized Pokémon?
         if (
             primary_memo_before[0xD710] != self.pyboy.memory[0xD710]
             and self.pyboy.memory[0xD710]
         ):
-            reward += 1
+            reward += 30
+            self.updateDoneGraph("Fossilized Pokémon?")
 
         # Did you get Lapras Yet?
         if (
             primary_memo_before[0xD72E] != self.pyboy.memory[0xD72E]
             and self.pyboy.memory[0xD72E]
         ):
-            reward += 1
+            reward += 30
+            self.updateDoneGraph("Did you get Lapras Yet?")
 
         # Fought Giovanni Yet?
         if (
             primary_memo_before[0xD751] != self.pyboy.memory[0xD751]
             and self.pyboy.memory[0xD751]
         ):
-            reward += 1
+            reward += 30
+            self.updateDoneGraph("Fought Giovanni Yet?")
 
         # Fought Brock Yet?
         if (
             primary_memo_before[0xD755] != self.pyboy.memory[0xD755]
             and self.pyboy.memory[0xD755]
         ):
-            reward += 1
+            reward += 30
+            self.updateDoneGraph("Fought Brock Yet?")
 
         # Fought Misty Yet?
         if (
             primary_memo_before[0xD75E] != self.pyboy.memory[0xD75E]
             and self.pyboy.memory[0xD75E]
         ):
-            reward += 1
+            reward += 30
+            self.updateDoneGraph("Fought Misty Yet?")
 
         # Fought Lt. Surge Yet?
         if (
             primary_memo_before[0xD773] != self.pyboy.memory[0xD773]
             and self.pyboy.memory[0xD773]
         ):
-            reward += 1
+            reward += 30
+            self.updateDoneGraph("Fought Lt. Surge Yet?")
 
         # Fought Erika Yet?
         if (
             primary_memo_before[0xD77C] != self.pyboy.memory[0xD77C]
             and self.pyboy.memory[0xD77C]
         ):
-            reward += 1
+            reward += 30
+            self.updateDoneGraph("Fought Erika Yet?")
 
         # Fought Articuno Yet?
         if (
             primary_memo_before[0xD782] != self.pyboy.memory[0xD782]
             and self.pyboy.memory[0xD782]
         ):
-            reward += 1
+            reward += 30
+            self.updateDoneGraph("Fought Articuno Yet?")
 
         # Fought Koga Yet?
         if (
             primary_memo_before[0xD792] != self.pyboy.memory[0xD792]
             and self.pyboy.memory[0xD792]
         ):
-            reward += 1
+            reward += 30
+            self.updateDoneGraph("Fought Koga Yet?")
 
         # Fought Blaine Yet?
         if (
             primary_memo_before[0xD79A] != self.pyboy.memory[0xD79A]
             and self.pyboy.memory[0xD79A]
         ):
-            reward += 1
+            reward += 30
+            self.updateDoneGraph("Fought Blaine Yet?")
 
         # Fought Sabrina Yet?
         if (
             primary_memo_before[0xD7B3] != self.pyboy.memory[0xD7B3]
             and self.pyboy.memory[0xD7B3]
         ):
-            reward += 1
+            reward += 30
+            self.updateDoneGraph("Fought Sabrina Yet?")
 
         # Fought Zapdos Yet?
         if (
             primary_memo_before[0xD7D4] != self.pyboy.memory[0xD7D4]
             and self.pyboy.memory[0xD7D4]
         ):
-            reward += 1
+            reward += 30
+            self.updateDoneGraph("Fought Zapdos Yet?")
 
         # Fought Snorlax Yet (Vermilion)
         if (
             primary_memo_before[0xD7D8] != self.pyboy.memory[0xD7D8]
             and self.pyboy.memory[0xD7D8]
         ):
-            reward += 1
+            reward += 30
+            self.updateDoneGraph("Fought Snorlax Yet (Vermilion)")
 
         # Fought Snorlax Yet? (Celadon)
         if (
             primary_memo_before[0xD7E0] != self.pyboy.memory[0xD7E0]
             and self.pyboy.memory[0xD7E0]
         ):
-            reward += 1
+            reward += 30
+            self.updateDoneGraph("Fought Snorlax Yet? (Celadon)")
 
         # Fought Moltres Yet?
         if (
             primary_memo_before[0xD7EE] != self.pyboy.memory[0xD7EE]
             and self.pyboy.memory[0xD7EE]
         ):
-            reward += 1
+            reward += 30
+            self.updateDoneGraph("Fought Moltres Yet")
 
         # Opponent Trainer’s Pokémon
         # Pokémon 1
@@ -757,6 +777,7 @@ class Emulator:
 
         reward += self.rewardDialog()
         reward += self.rewardPosition()
+        reward += self.rewardMap(primary_memo_before)
         reward += self.panishWorldIllegalMoves(primary_memo_before, reward)
         reward += self.panishMenuIllegalMoves(primary_memo_before)
         reward += self.panishSwitchMenu()
@@ -815,7 +836,7 @@ class Emulator:
             return 0
         self.wrongDialogActionCount += 1
         if self.wrongDialogActionMax < self.wrongDialogActionCount:
-            self.done = True
+            self.updateDoneGraph(f"panishWrongDialogAction-{action}")
         return -1.0
 
     def rewardDialog(self):
@@ -842,7 +863,8 @@ class Emulator:
 
         for i in range(8):
             if after & (1 << i) and before & (1 << i) != after & (1 << i):
-                reward += 10
+                reward += 20
+                self.updateDoneGraph(f"rewardPokedex-{i}")
 
         return reward
 
@@ -851,7 +873,8 @@ class Emulator:
 
         for i in range(8):
             if after & (1 << i) and before & (1 << i) != after & (1 << i):
-                reward += 1
+                reward += 40
+                self.updateDoneGraph(f"rewardBadges-{i}")
 
         return reward
 
@@ -945,6 +968,19 @@ class Emulator:
             return 0.2
         return 0.0
 
+    def rewardMap(self, primary_memo_before):
+        if (
+            not self.isWorld()
+            or self.pyboy.memory[0xD35E] == primary_memo_before[0xD35E]
+        ):
+            return 0.0
+
+        self.updateDoneGraph(
+            f"rewardMap-{primary_memo_before[0xD35E]}->{self.pyboy.memory[0xD35E]}"
+        )
+
+        return 10
+
     def isSameMenuPosition(self, primary_memo_before):
         return (
             True
@@ -961,7 +997,7 @@ class Emulator:
         self.menuIllegalMovesCount += 1
 
         if self.menuIllegalMovesMax < self.menuIllegalMovesCount:
-            self.done = True
+            self.updateDoneGraph("panishMenuIllegalMoves")
 
         if 1 < self.menuIllegalMovesCount:
             return -3
@@ -989,7 +1025,7 @@ class Emulator:
         self.worldIllegalMovesCount += 1
 
         if self.worldIllegalMovesMax < self.worldIllegalMovesCount:
-            self.done = True
+            self.updateDoneGraph("panishWorldIllegalMoves")
 
         if 1 < self.worldIllegalMovesCount:
             return -3
@@ -1278,7 +1314,7 @@ class Emulator:
         else:
             self.resetCount += 1
         if self.resetCount > self.maxResetCount:
-            self.done = True
+            self.updateDoneGraph("countingReward")
 
     def tick(self, action):
         for button in self.buttons[action]:
@@ -1290,3 +1326,7 @@ class Emulator:
             self.pyboy.button_release(self.ALL_BUTTONS[i])
 
         self.pyboy.tick(self.ticksPerStep / 2)
+
+    def updateDoneGraph(self, key):
+        self.doneGraph[key] = self.doneGraph.get(key, 0) + 1
+        self.done = True

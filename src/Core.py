@@ -5,6 +5,7 @@ from ModelPokemon import ModelPokemon
 import os, io, keyboard, random, sys
 from collections import deque
 import multiprocessing as mp
+import matplotlib.pyplot as plt
 
 
 class Core:
@@ -237,6 +238,8 @@ class Core:
                     False,
                 )
                 avg_ret = emulator.evaluate_greedy(15)
+                self.plot_done_graph(emulator.doneGraph)
+
                 if avg_ret > self.best_eval_return + 0.5:
                     self.save_best(avg_ret)
                 for wid, conn in self.conns.items():
@@ -328,3 +331,19 @@ class Core:
             },
             f"roms/{self.game}/best.pth",
         )
+
+    def plot_done_graph(self, doneGraph):
+        if not doneGraph:
+            print("Brak danych w doneGraph")
+            return
+
+        keys = list(doneGraph.keys())
+        values = list(doneGraph.values())
+
+        plt.figure(figsize=(12, 6))
+        plt.bar(keys, values)
+        plt.xticks(rotation=90)
+        plt.ylabel("Ilość wystąpień")
+        plt.title("DoneGraph - zakończenia epizodów")
+        plt.tight_layout()
+        plt.show()
