@@ -1,7 +1,7 @@
 import time
 import keyboard
 from pyboy import PyBoy
-import os, struct, torch, random, sys, io, math, json
+import os, struct, torch, random, sys, io, math, json, hashlib
 import numpy as np
 from multiprocessing import Queue
 from queue import Full
@@ -59,7 +59,6 @@ class Emulator:
         self.worldIllegalMovesMax = worldIllegalMovesMax
         self.menuIllegalMovesMax = menuIllegalMovesMax
         self.actorId = actorId
-        self.need_game_state_ckpt = False
         self.epsilon = epsilon
         self.tmpEpsilonOn = False
         self.tmpEpsilonStepsCount = 0
@@ -200,9 +199,7 @@ class Emulator:
     def getMsg(self, msg):
         type = msg["type"]
 
-        if type == "need_game_state_ckpt":
-            self.need_game_state_ckpt = msg["value"]
-        elif type == "epsilon":
+        if type == "epsilon":
             self.epsilon = msg["value"]
         elif type == "load_state_dict":
             blob = msg["value"]
@@ -261,13 +258,11 @@ class Emulator:
         self.pyboy_init()
 
         total = 0.0
-        totalDoneRewardCount = 0
 
         for _ in range(episodes):
             self.reset(True)
             obs = self.inputs()
             ep_ret = 0.0
-            doneRewardCount = 0
 
             while True:
                 before = self.pyboy.memory[0x0000:0x10000]
@@ -282,22 +277,19 @@ class Emulator:
                     self.done = False
                     if r <= 0:
                         break
-                    else:
-                        doneRewardCount += 1
 
                 obs = self.inputs()
 
                 sys.stdout.write(
-                    f"\rEpisodes: {(totalDoneRewardCount / episodes):.2f} Avg: {((total / episodes) * 100):.2f}% ep_ret: {ep_ret:.2f} button: {self.buttons[action]} episode: {_}"
+                    f"\rAvg: {((total / episodes) * 100):.2f}% ep_ret: {ep_ret:.2f} button: {self.buttons[action]} episode: {_}"
                 )
                 sys.stdout.flush()
 
             total += ep_ret
-            totalDoneRewardCount += doneRewardCount
 
         self.pyboy.stop(False)
 
-        return (total / episodes, totalDoneRewardCount / episodes)
+        return total / episodes
 
     def train(self, inputs, dataQ: Queue):
         primary_memo_before = bytes(self.pyboy.memory[0x0000:0x10000])
@@ -329,9 +321,8 @@ class Emulator:
                 pass
 
         if self.done:
-            if reward > 0 and self.need_game_state_ckpt:
+            if reward > 0:
                 self.saveGameState()
-                self.need_game_state_ckpt = False
 
             self.reset()
             return self.inputs()
@@ -339,12 +330,16 @@ class Emulator:
         return next_state
 
     def saveGameState(self):
-        os.makedirs(f"roms/{self.game}/{self.actorId}", exist_ok=True)
-        with open(f"roms/{self.game}/{self.actorId}/checkpoint.state", "wb") as f:
+        hashPath = self.getHashPath()
+
+        if os.path.isdir(hashPath):
+            return
+
+        os.makedirs(hashPath, exist_ok=True)
+        with open(f"{hashPath}/checkpoint.state", "wb") as f:
             self.pyboy.save_state(f)
 
-        # ---- META ----
-        meta_path = f"roms/{self.game}/{self.actorId}/meta.json"
+        meta_path = f"{hashPath}/meta.json"
         meta = {
             "visitedPositions": {
                 str(map_id): list(sorted(list(positions)))
@@ -359,6 +354,40 @@ class Emulator:
         }
         with open(meta_path, "w", encoding="utf-8") as mf:
             json.dump(meta, mf, ensure_ascii=False)
+
+    def getHashPath(self):
+        return f"roms/{self.game}/saves/{self.getHash()}"
+
+    def getHash(self):
+        return hashlib.sha256(
+            bytes(
+                [
+                    self.pyboy.memory[0xD5AB],
+                    self.pyboy.memory[0xD5F3],
+                    self.pyboy.memory[0xD60D],
+                    self.pyboy.memory[0xD710],
+                    self.pyboy.memory[0xD72E],
+                    self.pyboy.memory[0xD751],
+                    self.pyboy.memory[0xD755],
+                    self.pyboy.memory[0xD75E],
+                    self.pyboy.memory[0xD773],
+                    self.pyboy.memory[0xD77C],
+                    self.pyboy.memory[0xD782],
+                    self.pyboy.memory[0xD792],
+                    self.pyboy.memory[0xD79A],
+                    self.pyboy.memory[0xD7B3],
+                    self.pyboy.memory[0xD7D4],
+                    self.pyboy.memory[0xD7D8],
+                    self.pyboy.memory[0xD7E0],
+                    self.pyboy.memory[0xD7EE],
+                    *[self.pyboy.memory[i] for i in range(0xD2F7, 0xD31C)],
+                    self.pyboy.memory[0xD356],
+                    self.pyboy.memory[0xD35E],
+                    self.pyboy.memory[0xD361],
+                    self.pyboy.memory[0xD362],
+                ]
+            )
+        ).hexdigest()
 
     def reward(self, primary_memo_before, action):
         reward = 0
@@ -988,7 +1017,7 @@ class Emulator:
         if pos in s:
             return -0.2
 
-        if len(s) == 0 and len(self.visitedPositions) >= 2:
+        if len(s) == 0 and len(self.visitedPositions) > 1:
             s.add(pos)
             self.updateDoneGraph("rewardPosition")
             return 10.0
@@ -1062,22 +1091,17 @@ class Emulator:
         return reward
 
     def reset(self, stateStart=False):
-        if (
-            os.path.exists(f"roms/{self.game}/{self.actorId}/checkpoint.state")
-            and not stateStart
-        ):
-            with open(
-                f"roms/{self.game}/{self.actorId}/checkpoint.state", "rb"
-            ) as load_file:
-                self.pyboy.load_state(load_file)
-        else:
-            with open(f"roms/{self.game}/start.state", "rb") as load_file:
-                self.pyboy.load_state(load_file)
+        base = f"roms/{self.game}/saves"
+        dir = "start"
+
+        if not stateStart:
+            dir = random.choice(os.listdir(base))
+
+        with open(f"{base}/{dir}/checkpoint.state", "rb") as load_file:
+            self.pyboy.load_state(load_file)
 
         try:
-            with open(
-                f"roms/{self.game}/{self.actorId}/meta.json", "r", encoding="utf-8"
-            ) as f:
+            with open(f"{base}/{dir}/meta.json", "r", encoding="utf-8") as f:
                 data = json.load(f)
 
             vp = data.get("visitedPositions", {})

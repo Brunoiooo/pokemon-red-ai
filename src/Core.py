@@ -51,7 +51,6 @@ class Core:
         self.ckpt_every = ckpt_every
         self.next_ckpt = self.ckpt_every
         self.best_eval_return = -float("inf")
-        self.best_done_count = 0
         self.count = 0
         self.sync_interval = sync_interval
         self.wrongDialogActionMax = wrongDialogActionMax
@@ -238,15 +237,11 @@ class Core:
                     self.wrongDialogActionMax,
                     False,
                 )
-                (avg_ret, best_done_count) = emulator.evaluate_greedy(15)
-                self.plot_done_graph(emulator.doneGraph)
+                avg_ret = emulator.evaluate_greedy(15)
+                # self.plot_done_graph(emulator.doneGraph)
 
                 if avg_ret > self.best_eval_return + 0.5:
                     self.save_best(avg_ret)
-
-                if best_done_count > self.best_done_count:
-                    for wid, conn in self.conns.items():
-                        conn.send({"type": "need_game_state_ckpt", "value": True})
 
                 self.next_ckpt += self.ckpt_every
 
