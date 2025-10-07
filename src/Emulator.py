@@ -1212,11 +1212,13 @@ class Emulator:
         self.buffer.clear()
 
     def data(self):
-        data = self.dialogData()
+        data = []
 
-        data = self.mapData()
+        data += self.dialogData()
 
-        data = self.modeFlags()
+        data += self.mapData()
+
+        data += self.modeFlags()
 
         data += self.spriteData()
 
