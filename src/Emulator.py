@@ -1127,8 +1127,13 @@ class Emulator:
         if not stateStart:
             dir = random.choice(os.listdir(base))
 
-        with open(f"{base}/{dir}/checkpoint.state", "rb") as load_file:
-            self.pyboy.load_state(load_file)
+        try:
+            with open(f"{base}/{dir}/checkpoint.state", "rb") as load_file:
+                self.pyboy.load_state(load_file)
+        except Exception:
+            dir = "start"
+            with open(f"{base}/{dir}/checkpoint.state", "rb") as load_file:
+                self.pyboy.load_state(load_file)
 
         try:
             with open(f"{base}/{dir}/meta.json", "r", encoding="utf-8") as f:
