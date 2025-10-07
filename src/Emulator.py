@@ -71,7 +71,6 @@ class Emulator:
         self.count = 0
         self.wrongDialogActionMax = wrongDialogActionMax
         self.visitedPositions = {}
-        self.visitedDialog = {}
         self.visitedDialogCount = {}
 
         ckpt_path = None
@@ -367,12 +366,6 @@ class Emulator:
             "visitedPositions": {
                 str(map_id): list(sorted(list(positions)))
                 for map_id, positions in self.visitedPositions.items()
-            },
-            "visitedDialog": {
-                str(map_id): {
-                    str(dialog_id): reward for dialog_id, reward in dialogs.items()
-                }
-                for map_id, dialogs in self.visitedDialog.items()
             },
             "visitedDialogCount": {
                 str(map_id): {
@@ -925,13 +918,12 @@ class Emulator:
         if not self.isDialog():
             return 0
 
-        s = self.visitedDialog.setdefault(self.mapId(self.pyboy.memory), set())
-        if self.dialogId(self.pyboy.memory) in s:
-            return -0.2
-
-        s.add(self.dialogId(self.pyboy.memory))
-
-        return 0.2
+        return (
+            -0.2
+            if self.dialogId()
+            in self.visitedDialogCount.get(self.mapId(self.pyboy.memory), {})
+            else 0.2
+        )
 
     def dialogCount(self):
         if not self.isDialog():
@@ -1165,15 +1157,6 @@ class Emulator:
                 for map_id, positions in vp.items()
             }
 
-            vd = data.get("visitedDialog", {})
-            self.visitedDialog = {
-                int(map_id): {
-                    int(dialog_id): float(reward)
-                    for dialog_id, reward in dialogs.items()
-                }
-                for map_id, dialogs in vd.items()
-            }
-
             vdc = data.get("visitedDialogCount", {})
             self.visitedDialogCount = {
                 int(map_id): {
@@ -1183,7 +1166,6 @@ class Emulator:
             }
         except FileNotFoundError:
             self.visitedPositions = {}
-            self.visitedDialog = {}
             self.visitedDialogCount = {}
 
         self.resetCount = 0
