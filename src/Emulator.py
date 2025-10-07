@@ -1,3 +1,4 @@
+from collections import deque
 import time
 import keyboard
 from pyboy import PyBoy
@@ -29,6 +30,8 @@ class Emulator:
         tmpEpsilon,
         wrongDialogActionMax,
         isBest=True,
+        td_error_steps=5,
+        gamma=0.99,
     ):
         self.ALL_BUTTONS = ["a", "b", "start", "select", "left", "right", "up", "down"]
         self.game = game
@@ -98,6 +101,9 @@ class Emulator:
         torch.set_num_threads(1)
 
         self.doneGraph = {}
+
+        self.gamma = gamma
+        self.buffer = deque(maxlen=td_error_steps)
 
     def pyboy_init(self):
         if self.window:
@@ -305,15 +311,32 @@ class Emulator:
         self.averages = np.roll(self.averages, -1, axis=0)
         self.averages[-1] = reward
 
-        if self.done or abs(reward) > 0.0 or self.count % 3 == 0:
+        self.buffer.append(
+            (
+                inputs.detach().to("cpu"),
+                action,
+                float(reward),
+                next_state.detach().to("cpu"),
+            )
+        )
+
+        if self.done or len(self.buffer) >= self.buffer.maxlen:
             try:
+                R, disc = 0.0, 1.0
+                s_0, a_0 = self.buffer[0][0], self.buffer[0][1]
+
+                for s, a, r in list(self.buffer):
+                    R += disc * r
+                    disc *= self.gamma
+
                 dataQ.put_nowait(
                     (
-                        inputs.detach().to("cpu"),
-                        action,
-                        float(reward),
-                        next_state.detach().to("cpu"),
+                        s_0,
+                        a_0,
+                        float(R),
+                        self.buffer[len(self.buffer) - 1][3],
                         bool(self.done),
+                        len(self.buffer),
                     )
                 )
             except Full:
@@ -1138,6 +1161,7 @@ class Emulator:
         self.MENU_COOLDOWN_STEPS = math.ceil(0.8 * 60 / self.ticksPerStep)
         self.menuCooldown = 0
         self.menuToggleStreak = 0
+        self.buffer.clear()
 
     def data(self):
         data = self.dialogData()

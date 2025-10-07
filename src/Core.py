@@ -264,14 +264,17 @@ class Core:
         return self.epsilonEnd + (self.epsilon - self.epsilonEnd) * max(frac, 0.0)
 
     def optimize_batch(self):
+        # batch: (s, a, Rn, sN, done_any, n_used)
         batch = random.sample(self.buffer, self.batch_size)
-        states_cpu, actions, rewards, next_states_cpu, dones = zip(*batch)
+        states_cpu, actions, Rn_list, next_states_cpu, dones, n_used_list = zip(*batch)
 
+        # na device
         states = torch.stack(states_cpu).to(self.device, non_blocking=True)
         next_states = torch.stack(next_states_cpu).to(self.device, non_blocking=True)
         actions = torch.tensor(actions, device=self.device, dtype=torch.long)
-        rewards = torch.tensor(rewards, device=self.device, dtype=torch.float32)
+        Rn = torch.tensor(Rn_list, device=self.device, dtype=torch.float32)
         dones = torch.tensor(dones, device=self.device, dtype=torch.bool)
+        n_used = torch.tensor(n_used_list, device=self.device, dtype=torch.float32)
 
         micro = self.batch_size // self.grad_accum_steps
         assert self.batch_size % self.grad_accum_steps == 0
@@ -281,25 +284,34 @@ class Core:
         for i in range(self.grad_accum_steps):
             sl = slice(i * micro, (i + 1) * micro)
             s, ns = states[sl], next_states[sl]
-            a, r, d = actions[sl], rewards[sl], dones[sl]
+            a, rN, d, n = actions[sl], Rn[sl], dones[sl], n_used[sl]
 
+            # Q(s,a)
             q_all = self.modelPokemon(s)
             q_sa = q_all.gather(1, a.view(-1, 1)).squeeze(1)
 
             with torch.no_grad():
+                # Double-DQN bootstrap na końcu okna (s_{t+n})
                 next_q_online = self.modelPokemon(ns)
                 next_a = torch.argmax(next_q_online, dim=1)
+
                 next_q_target = (
                     self.targetPokemon(ns).gather(1, next_a.view(-1, 1)).squeeze(1)
                 )
-                target = torch.where(d, r, r + self.gamma * next_q_target)
+
+                # gamma ** n_used (wektorowo)
+                gamma_pow_n = torch.pow(
+                    torch.tensor(self.gamma, device=self.device, dtype=torch.float32), n
+                )
+
+                # jeśli done_any==True -> brak bootstrapu
+                target = torch.where(d, rN, rN + gamma_pow_n * next_q_target)
 
             loss = self.criterion(q_sa, target) / self.grad_accum_steps
             loss.backward()
 
         torch.nn.utils.clip_grad_norm_(self.modelPokemon.parameters(), 10.0)
         self.optimizer.step()
-
         self.soft_update_target()
 
     def soft_update_target(self):
