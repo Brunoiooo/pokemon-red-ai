@@ -886,6 +886,10 @@ class Emulator:
         # gdy jesteśmy w świecie, ogranicz spam „start”
         if self.isWorld() and self.menuCooldown > 0 and action == 3:
             return 0
+
+        if self.isWorld() and self.dialogCooldown > 0 and action == 1:
+            return 0
+
         return action
 
     def getPosition(self):
@@ -919,7 +923,10 @@ class Emulator:
 
     def rewardDialog(self):
         if not self.isDialog():
+            self.dialogCooldown -= 0.5
             return 0
+
+        self.dialogCooldown = 1
 
         map = self.pyboy.memory[0xD35E]
         dialogId = self.pyboy.memory[0xCF13]
@@ -1166,6 +1173,7 @@ class Emulator:
         self.lastPosition1 = self.getPosition()
         self.MENU_COOLDOWN_STEPS = math.ceil(0.8 * 60 / self.ticksPerStep)
         self.menuCooldown = 0
+        self.dialogCooldown = 0
         self.menuToggleStreak = 0
         self.buffer.clear()
 
