@@ -920,7 +920,7 @@ class Emulator:
 
         return (
             -0.2
-            if self.dialogId()
+            if self.dialogId(self.pyboy.memory)
             in self.visitedDialogCount.get(self.mapId(self.pyboy.memory), {})
             else 0.2
         )
