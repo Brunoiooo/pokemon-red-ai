@@ -1135,8 +1135,7 @@ class Emulator:
         self.lastMenu = self.isMenu()
         self.lastPosition0 = self.getPosition()
         self.lastPosition1 = self.getPosition()
-        X_seconds = 0.8  # docelowy czas blokady
-        self.MENU_COOLDOWN_STEPS = math.ceil(X_seconds * 60 / self.ticksPerStep)
+        self.MENU_COOLDOWN_STEPS = math.ceil(0.8 * 60 / self.ticksPerStep)
         self.menuCooldown = 0
         self.menuToggleStreak = 0
 
