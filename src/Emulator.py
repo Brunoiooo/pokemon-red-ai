@@ -115,48 +115,38 @@ class Emulator:
 
     def manual(self):
         self.pyboy_init()
-
         self.reset(True)
+        self.pyboy.set_emulation_speed(1.0)
 
         while True:
-            primary_memo_before = bytes(self.pyboy.memory[0x0000:0x10000])
-
-            event = keyboard.read_event()
-
-            if event.event_type == "down":
-                if event.name == "a":
-                    action = 1
-                elif event.name == "b":
-                    action = 2
-                elif event.name == "enter":
-                    action = 3
-                elif event.name == "shift":
-                    action = 4
-                elif event.name == "left":
-                    action = 5
-                elif event.name == "right":
-                    action = 6
-                elif event.name == "up":
-                    action = 7
-                elif event.name == "down":
-                    action = 8
-                elif event.name == "q":
-                    break
-                else:
-                    action = 0
-            else:
+            event = keyboard.read_event(suppress=False)  # blokujące
+            if event.event_type != "down":
                 continue
+            if event.name == "q":
+                break
 
-            released = Event()
+            action = {
+                "a": 1,
+                "b": 2,
+                "enter": 3,
+                "shift": 4,
+                "left": 5,
+                "right": 6,
+                "up": 7,
+                "down": 8,
+            }.get(event.name, 0)
 
-            keyboard.on_release_key(event.name, lambda e: released.set())
+            # TRZYMAJ akację dopóki klawisz trzymany – ALE tykaj pyboy w pętli
+            while keyboard.is_pressed(event.name):
+                primary_memo_before = bytes(self.pyboy.memory[0x0000:0x10000])
+                self.tick(action)  # render + logika w czasie rzeczywistym
+                # time.sleep(0.0)
 
-            released.wait()
-
-            self.tick(action)
+            # po puszczeniu można zrobić jeszcze jeden tick z action=0, jeśli chcesz
+            # self.tick(0)
 
             print(
-                f"{event.name} {action} {self.reward(primary_memo_before, action):.2} {self.done}"
+                f"{event.name} {action} {self.reward(primary_memo_before, action):.2} {self.done} {self.dialogData()}"
             )
 
         self.pyboy.stop(False)
