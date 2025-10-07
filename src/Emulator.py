@@ -1278,12 +1278,6 @@ class Emulator:
     def mapData(self):
         data = [
             (
-                0
-                if self.dialogId(self.pyboy.memory)
-                in self.visitedDialog.get(self.mapId(self.pyboy.memory), {})
-                else 1
-            ),
-            (
                 1
                 if (
                     int(self.positionX(self.pyboy.memory)),
