@@ -322,23 +322,29 @@ class Emulator:
 
         if self.done or len(self.buffer) >= self.buffer.maxlen:
             try:
-                R, disc = 0.0, 1.0
-                s_0, a_0 = self.buffer[0][0], self.buffer[0][1]
+                while True:
+                    R, disc = 0.0, 1.0
+                    s_0, a_0 = self.buffer[0][0], self.buffer[0][1]
 
-                for s, a, r in list(self.buffer):
-                    R += disc * r
-                    disc *= self.gamma
+                    for s, a, r, _ in list(self.buffer):
+                        R += disc * r
+                        disc *= self.gamma
 
-                dataQ.put_nowait(
-                    (
-                        s_0,
-                        a_0,
-                        float(R),
-                        self.buffer[len(self.buffer) - 1][3],
-                        bool(self.done),
-                        len(self.buffer),
+                    dataQ.put_nowait(
+                        (
+                            s_0,
+                            a_0,
+                            float(R),
+                            self.buffer[len(self.buffer) - 1][3],
+                            bool(self.done),
+                            len(self.buffer),
+                        )
                     )
-                )
+
+                    if self.done and len(self.buffer) >= 2:
+                        self.buffer.popleft()
+                    else:
+                        break
             except Full:
                 time.sleep(0.001)
                 pass

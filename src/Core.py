@@ -12,7 +12,7 @@ class Core:
     def __init__(
         self,
         game="PokemonRed",
-        epsilon=1,
+        epsilon=0.2,
         epsilonBurn=100000,
         epsilonEnd=0.05,
         epsilonDecayCount=2000000,
@@ -26,7 +26,7 @@ class Core:
         maxSameAction=20,
         worldIllegalMovesMax=5,
         menuIllegalMovesMax=20,
-        ckpt_every=100000,
+        ckpt_every=10000,
         lr=0.0001,
         weight_decay=0.0001,
         sync_interval=2000,
