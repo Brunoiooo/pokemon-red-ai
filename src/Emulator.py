@@ -1276,18 +1276,11 @@ class Emulator:
         return data if self.isDialog() else [0] * len(data)
 
     def mapData(self):
-        pos = (
-            int(self.positionX(self.pyboy.memory)),
-            int(self.positionY(self.pyboy.memory)),
-        )
-
         data = [
             (
                 0
-                if self.visitedDialog.get(self.mapId(self.pyboy.memory), {}).get(
-                    self.dialogId(self.pyboy.memory), False
-                )
-                is False
+                if self.dialogId(self.pyboy.memory)
+                in self.visitedDialog.get(self.mapId(self.pyboy.memory), {})
                 else 1
             ),
             (
