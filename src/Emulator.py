@@ -70,6 +70,9 @@ class Emulator:
         self.tmpEpsilon = tmpEpsilon
         self.count = 0
         self.wrongDialogActionMax = wrongDialogActionMax
+        self.visitedPositions = {}
+        self.visitedDialog = {}
+        self.visitedDialogCount = {}
 
         ckpt_path = None
         if os.path.exists(f"roms/{self.game}/best.pth") and isBest:
@@ -297,6 +300,7 @@ class Emulator:
         next_state = self.inputs()
 
         self.count += 1
+        self.dialogCount()
 
         self.averages = np.roll(self.averages, -1, axis=0)
         self.averages[-1] = reward
@@ -370,6 +374,12 @@ class Emulator:
                 }
                 for map_id, dialogs in self.visitedDialog.items()
             },
+            "visitedDialogCount": {
+                str(map_id): {
+                    str(dialog_id): int(count) for dialog_id, count in dialogs.items()
+                }
+                for map_id, dialogs in self.visitedDialogCount.items()
+            },
         }
         with open(meta_path, "w", encoding="utf-8") as mf:
             json.dump(meta, mf, ensure_ascii=False)
@@ -401,9 +411,9 @@ class Emulator:
                     self.pyboy.memory[0xD7EE],
                     *[self.pyboy.memory[i] for i in range(0xD2F7, 0xD31C)],
                     self.pyboy.memory[0xD356],
-                    self.pyboy.memory[0xD35E],
-                    self.pyboy.memory[0xD361],
-                    self.pyboy.memory[0xD362],
+                    self.mapId(self.pyboy.memory),
+                    self.positionX(self.pyboy.memory),
+                    self.positionY(self.pyboy.memory),
                 ]
             )
         ).hexdigest()
@@ -880,7 +890,7 @@ class Emulator:
         return action
 
     def getPosition(self):
-        return f"{self.pyboy.memory[0xD361]}x{self.pyboy.memory[0xD362]}x{self.pyboy.memory[0xD35E]}"
+        return f"{self.positionX(self.pyboy.memory)}x{self.positionY(self.pyboy.memory)}x{self.mapId(self.pyboy.memory)}"
 
     def panishBacktrack(self):
         if not self.isWorld():
@@ -908,12 +918,15 @@ class Emulator:
             self.updateDoneGraph(f"panishWrongDialogAction-{action}")
         return -1.0
 
+    def mapId(self, memory):
+        return memory[0xD35E]
+
     def rewardDialog(self):
         if not self.isDialog():
             return 0
 
-        map = self.pyboy.memory[0xD35E]
-        dialogId = self.pyboy.memory[0xCF13]
+        map = self.mapId(self.pyboy.memory)
+        dialogId = self.dialogId(self.pyboy.memory)
 
         if map not in self.visitedDialog:
             self.visitedDialog[map] = {}
@@ -926,6 +939,21 @@ class Emulator:
             self.visitedDialog[map][dialogId] += -0.008
 
         return self.visitedDialog[map][dialogId]
+
+    def dialogCount(self):
+        if not self.isDialog():
+            return 0
+
+        map = self.mapId(self.pyboy.memory)
+        dialogId = self.dialogId(self.pyboy.memory)
+
+        if map not in self.visitedDialogCount:
+            self.visitedDialogCount[map] = {}
+
+        if dialogId not in self.visitedDialogCount[map]:
+            self.visitedDialogCount[map][dialogId] = 0
+
+        self.visitedDialogCount[map][dialogId] += 1
 
     def rewardPokedex(self, before, after):
         reward = 0
@@ -1026,12 +1054,21 @@ class Emulator:
                 self.menuCooldown -= 1
             return in_menu_penalty
 
+    def positionX(self, memory):
+        return memory[0xD361]
+
+    def positionY(self, memory):
+        return memory[0xD362]
+
     def rewardPosition(self):
         if not self.isWorld():
             return 0.0
 
-        map_id = int(self.pyboy.memory[0xD35E])
-        pos = (int(self.pyboy.memory[0xD361]), int(self.pyboy.memory[0xD362]))
+        map_id = int(self.mapId(self.pyboy.memory))
+        pos = (
+            int(self.positionX(self.pyboy.memory)),
+            int(self.positionY(self.pyboy.memory)),
+        )
 
         s = self.visitedPositions.setdefault(map_id, set())
         if pos in s:
@@ -1071,9 +1108,9 @@ class Emulator:
     def isSameWorldPosition(self, primary_memo_before):
         return (
             True
-            if primary_memo_before[0xD35E] == self.pyboy.memory[0xD35E]
-            and primary_memo_before[0xD361] == self.pyboy.memory[0xD361]
-            and primary_memo_before[0xD362] == self.pyboy.memory[0xD362]
+            if self.mapId(primary_memo_before) == self.mapId(self.pyboy.memory)
+            and self.positionX(primary_memo_before) == self.positionX(self.pyboy.memory)
+            and self.positionY(primary_memo_before) == self.positionY(self.pyboy.memory)
             else False
         )
 
@@ -1143,9 +1180,18 @@ class Emulator:
                 }
                 for map_id, dialogs in vd.items()
             }
+
+            vdc = data.get("visitedDialogCount", {})
+            self.visitedDialogCount = {
+                int(map_id): {
+                    int(dialog_id): int(count) for dialog_id, count in dialogs.items()
+                }
+                for map_id, dialogs in vdc.items()
+            }
         except FileNotFoundError:
             self.visitedPositions = {}
             self.visitedDialog = {}
+            self.visitedDialogCount = {}
 
         self.resetCount = 0
         self.menuSelectCount = 0
@@ -1167,6 +1213,10 @@ class Emulator:
 
     def data(self):
         data = self.dialogData()
+
+        data = self.mapData()
+
+        data = self.modeFlags()
 
         data += self.spriteData()
 
@@ -1198,6 +1248,17 @@ class Emulator:
 
         return data
 
+    def modeFlags(self):
+        return [
+            int(self.isWorld()),
+            int(self.isMenu()),
+            int(self.isDialog()),
+            int(self.isBattle()),
+        ]
+
+    def dialogId(self, memory):
+        return memory[0xCF13]
+
     def inputs(self):
         arr = np.asarray(
             self.log_transform(self.data()),
@@ -1209,23 +1270,63 @@ class Emulator:
         return torch.from_numpy(arr).to("cpu")
 
     def dialogData(self):
-        return [
-            self.pyboy.memory[0xCF13],
-            self.pyboy.memory[0xCFC4],
-            self.pyboy.memory[0xFF8C],
+        data = [
+            self.dialogId(self.pyboy.memory),
+            1 if self.isBlocked() else 0,
+            self.visitedDialogCount.get(self.mapId(self.pyboy.memory), {}).get(
+                self.dialogId(self.pyboy.memory), 0
+            ),
         ]
+
+        return data if self.isDialog() else [0] * len(data)
+
+    def mapData(self):
+        pos = (
+            int(self.positionX(self.pyboy.memory)),
+            int(self.positionY(self.pyboy.memory)),
+        )
+
+        data = [
+            (
+                0
+                if self.visitedDialog.get(self.mapId(self.pyboy.memory), {}).get(
+                    self.dialogId(self.pyboy.memory), False
+                )
+                is False
+                else 1
+            ),
+            (
+                1
+                if (
+                    int(self.positionX(self.pyboy.memory)),
+                    int(self.positionY(self.pyboy.memory)),
+                )
+                in self.visitedPositions.get(self.mapId(self.pyboy.memory), {})
+                else 0
+            ),
+        ]
+
+        return data if self.isWorld() else [0] * len(data)
 
     def isBattle(self):
         return True if self.pyboy.memory[0xD057] else False
 
     def isMenu(self):
-        return True if self.isBlocked() and self.pyboy.memory[0xCF13] == 0 else False
+        return (
+            True
+            if self.isBlocked() and self.dialogId(self.pyboy.memory) == 0
+            else False
+        )
 
     def isBlocked(self):
         return True if self.pyboy.memory[0xCFC4] else False
 
     def isDialog(self):
-        return True if self.isBlocked() and self.pyboy.memory[0xCF13] != 0 else False
+        return (
+            True
+            if self.isBlocked() and self.dialogId(self.pyboy.memory) != 0
+            else False
+        )
 
     def isWorld(self):
         return (
