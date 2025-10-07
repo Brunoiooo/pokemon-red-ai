@@ -925,20 +925,13 @@ class Emulator:
         if not self.isDialog():
             return 0
 
-        map = self.mapId(self.pyboy.memory)
-        dialogId = self.dialogId(self.pyboy.memory)
+        s = self.visitedDialog.setdefault(self.mapId(self.pyboy.memory), set())
+        if self.dialogId(self.pyboy.memory) in s:
+            return -0.2
 
-        if map not in self.visitedDialog:
-            self.visitedDialog[map] = {}
+        s.add(self.dialogId(self.pyboy.memory))
 
-        if dialogId not in self.visitedDialog[map]:
-            self.visitedDialog[map][dialogId] = 0.2
-            return self.visitedDialog[map][dialogId]
-
-        if self.visitedDialog[map][dialogId] > -0.2:
-            self.visitedDialog[map][dialogId] += -0.02
-
-        return self.visitedDialog[map][dialogId]
+        return 0.2
 
     def dialogCount(self):
         if not self.isDialog():
