@@ -264,13 +264,11 @@ class Core:
         return self.epsilonEnd + (self.epsilon - self.epsilonEnd) * max(frac, 0.0)
 
     def optimize_batch(self):
-        # batch: (s, a, Rn, sN, done_any, n_used)
         batch = random.sample(self.buffer, self.batch_size)
         states_cpu, actions, Rn_list, next_states_cpu, dones, n_used_list = zip(*batch)
 
-        # na device
-        states = torch.stack(states_cpu).to(self.device, non_blocking=True)
-        next_states = torch.stack(next_states_cpu).to(self.device, non_blocking=True)
+        states = self.collate_states(states_cpu, self.device)
+        next_states = self.collate_states(next_states_cpu, self.device)
         actions = torch.tensor(actions, device=self.device, dtype=torch.long)
         Rn = torch.tensor(Rn_list, device=self.device, dtype=torch.float32)
         dones = torch.tensor(dones, device=self.device, dtype=torch.bool)
@@ -283,7 +281,10 @@ class Core:
 
         for i in range(self.grad_accum_steps):
             sl = slice(i * micro, (i + 1) * micro)
-            s, ns = states[sl], next_states[sl]
+
+            s = {k: v[sl] for k, v in states.items()}
+            ns = {k: v[sl] for k, v in next_states.items()}
+
             a, rN, d, n = actions[sl], Rn[sl], dones[sl], n_used[sl]
 
             # Q(s,a)
@@ -358,3 +359,14 @@ class Core:
         plt.title("DoneGraph - zakończenia epizodów")
         plt.tight_layout()
         plt.show()
+
+    def collate_states(self, list_of_dicts, device):
+        batch = {}
+        keys = list(list_of_dicts[0].keys())
+        for k in keys:
+            vals = [d[k] for d in list_of_dicts]
+            if k == "continuous":
+                batch[k] = torch.cat(vals, dim=0).to(device, non_blocking=True).float()
+            else:
+                batch[k] = torch.cat(vals, dim=0).to(device, non_blocking=True).long()
+        return batch

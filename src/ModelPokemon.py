@@ -24,16 +24,39 @@ class ModelPokemon(nn.Module):
             nn.Linear(256, outputs),
         )
 
+    def _as_long_batch(self, t, device):
+        t = t.to(device)
+        if t.dtype != torch.long:
+            t = t.long()
+        if t.dim() == 0:
+            t = t.unsqueeze(0)
+        return t
+
+    def _as_float_batch(self, t, device):
+        t = t.to(device)
+        if t.dim() == 1:
+            t = t.unsqueeze(0)
+        return t.float()
+
     def forward(self, x):
+        device = next(self.parameters()).device
+        map_id = self._as_long_batch(x["map_id"], device)
+        dialog_id = self._as_long_batch(x["dialog_id"], device)
+        pos_x = self._as_long_batch(x["pos_x"], device)
+        pos_y = self._as_long_batch(x["pos_y"], device)
+        mode = self._as_long_batch(x["mode"], device)
+        cont = self._as_float_batch(x["continuous"], device)
+
         emb = torch.cat(
             [
-                self.map_emb(x["map_id"]),
-                self.dialog_emb(x["dialog_id"]),
-                self.pos_emb_x(x["pos_x"]),
-                self.pos_emb_y(x["pos_y"]),
-                self.mode_emb(x["mode"]),
-                x["continuous"],
+                self.map_emb(map_id),
+                self.dialog_emb(dialog_id),
+                self.pos_emb_x(pos_x),  # <- poprawiona nazwa
+                self.pos_emb_y(pos_y),  # <- poprawiona nazwa
+                self.mode_emb(mode),
             ],
             dim=-1,
         )
-        return self.fc(emb)
+
+        z = torch.cat([cont, emb], dim=-1)
+        return self.fc(z)

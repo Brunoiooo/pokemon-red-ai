@@ -321,10 +321,10 @@ class Emulator:
 
         self.buffer.append(
             (
-                inputs.detach().to("cpu"),
+                self.detach_to_cpu(inputs),
                 action,
                 float(reward),
-                next_state.detach().to("cpu"),
+                self.detach_to_cpu(next_state),
             )
         )
 
@@ -340,10 +340,10 @@ class Emulator:
 
                     dataQ.put_nowait(
                         (
-                            s_0,
+                            self.detach_to_cpu(s_0),
                             a_0,
                             float(R),
-                            self.buffer[len(self.buffer) - 1][3],
+                            self.detach_to_cpu(self.buffer[len(self.buffer) - 1][3]),
                             bool(self.done),
                             len(self.buffer),
                         )
@@ -1232,14 +1232,18 @@ class Emulator:
         return memory[0xCF13]
 
     def inputs(self):
-        map_id = self.mapId(self.pyboy.memory)
-        dialog_id = self.dialogId(self.pyboy.memory)
-        pos_x = self.positionX(self.pyboy.memory)
-        pos_y = self.positionY(self.pyboy.memory)
-        mode = np.argmax(self.modeFlags())
+        arr = np.asarray(self.data(), dtype=np.float32)
+        arr = np.clip(arr, 0, 255) / 255.0
+        continuous = torch.from_numpy(arr).unsqueeze(0).to("cpu")
 
-        continuous_data = np.asarray(self.data(), dtype=np.float32)
-        continuous_data = np.clip(continuous_data, 0, 255) / 255.0
+        map_id = torch.tensor([int(self.mapId(self.pyboy.memory))], dtype=torch.long)
+        dialog_id = torch.tensor(
+            [int(self.dialogId(self.pyboy.memory))], dtype=torch.long
+        )
+        pos_x = torch.tensor([int(self.positionX(self.pyboy.memory))], dtype=torch.long)
+        pos_y = torch.tensor([int(self.positionY(self.pyboy.memory))], dtype=torch.long)
+
+        mode = torch.tensor([int(np.argmax(self.modeFlags()))], dtype=torch.long)
 
         return {
             "map_id": map_id,
@@ -1247,7 +1251,7 @@ class Emulator:
             "pos_x": pos_x,
             "pos_y": pos_y,
             "mode": mode,
-            "continuous": torch.from_numpy(continuous_data).to("cpu"),
+            "continuous": continuous,
         }
 
     def dialogData(self):
@@ -1474,3 +1478,12 @@ class Emulator:
     def updateDoneGraph(self, key):
         self.doneGraph[key] = self.doneGraph.get(key, 0) + 1
         self.done = True
+
+    def detach_to_cpu(self, obs_dict):
+        out = {}
+        for k, v in obs_dict.items():
+            if torch.is_tensor(v):
+                out[k] = v.detach().to("cpu")
+            else:
+                out[k] = v
+        return out
