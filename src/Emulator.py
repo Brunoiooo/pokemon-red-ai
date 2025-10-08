@@ -198,9 +198,6 @@ class Emulator:
     def average(self):
         return sum(self.averages) / len(self.averages)
 
-    def log_transform(self, data):
-        return [math.log(x + 1) if x > 3 else float(x) for x in data]
-
     def getMsg(self, msg):
         type = msg["type"]
 
@@ -1193,8 +1190,6 @@ class Emulator:
 
         data += self.mapData()
 
-        data += self.modeFlags()
-
         data += self.spriteData()
 
         data += self.menuData()
@@ -1237,18 +1232,26 @@ class Emulator:
         return memory[0xCF13]
 
     def inputs(self):
-        arr = np.asarray(
-            self.log_transform(self.data()),
-            dtype=np.float32,
-        )
+        map_id = self.mapId(self.pyboy.memory)
+        dialog_id = self.dialogId(self.pyboy.memory)
+        pos_x = self.positionX(self.pyboy.memory)
+        pos_y = self.positionY(self.pyboy.memory)
+        mode = np.argmax(self.modeFlags())
 
-        arr = np.clip(arr, 0, 255) / 255.0
+        continuous_data = np.asarray(self.data(), dtype=np.float32)
+        continuous_data = np.clip(continuous_data, 0, 255) / 255.0
 
-        return torch.from_numpy(arr).to("cpu")
+        return {
+            "map_id": map_id,
+            "dialog_id": dialog_id,
+            "pos_x": pos_x,
+            "pos_y": pos_y,
+            "mode": mode,
+            "continuous": torch.from_numpy(continuous_data).to("cpu"),
+        }
 
     def dialogData(self):
         data = [
-            self.dialogId(self.pyboy.memory),
             self.visitedDialogCount.get(self.mapId(self.pyboy.memory), 0),
         ]
 
@@ -1384,7 +1387,7 @@ class Emulator:
 
     def miscellaneousData(self):
         return self.bitsExtractor(self.pyboy.memory[0xD356]) + [
-            self.pyboy.memory[i] for i in range(0xD35E, 0xD366)
+            self.pyboy.memory[i] for i in range(0xD35F, 0xD361)
         ]
 
     def storedItemsData(self):
