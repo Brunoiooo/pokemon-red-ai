@@ -70,7 +70,7 @@ class Emulator:
         self.tmpEpsilon = tmpEpsilon
         self.count = 0
         self.wrongDialogActionMax = wrongDialogActionMax
-        self.visitedPositions = {}
+        self.visitedPositionsCount = {}
         self.visitedDialogCount = {}
 
         ckpt_path = None
@@ -115,6 +115,11 @@ class Emulator:
                 f"roms/{self.game}/rom.gb", sound_emulated=False, window="null"
             )
 
+    def counts(self):
+        self.dialogCount()
+        self.positionCount()
+        self.count += 1
+
     def manual(self):
         self.pyboy_init()
         self.reset(True)
@@ -144,11 +149,13 @@ class Emulator:
                 self.tick(action)  # render + logika w czasie rzeczywistym
                 # time.sleep(0.0)
 
+            self.counts()
+
             # po puszczeniu można zrobić jeszcze jeden tick z action=0, jeśli chcesz
             # self.tick(0)
 
             print(
-                f"{event.name} {action} {self.reward(primary_memo_before, action):.2} {self.done} {self.dialogData()}"
+                f"{event.name} {action} {self.reward(primary_memo_before, action):.2} {self.done}"
             )
 
         self.pyboy.stop(False)
@@ -232,6 +239,8 @@ class Emulator:
 
             self.doAction(obs, False)
 
+            self.counts()
+
             obs = self.inputs()
 
         self.pyboy.stop(False)
@@ -265,9 +274,18 @@ class Emulator:
             while True:
                 before = self.pyboy.memory[0x0000:0x10000]
 
+                print(
+                    f"{self.dialogData()} {self.mapData()} {self.modeFlags()} {self.visitedDialogCount.get(self.mapId(self.pyboy.memory), 0)}"
+                )
+
                 action = self.doAction(obs, False)
 
                 r = self.reward(before, action)
+
+                print(f"{r:.2f}")
+
+                if self.done:
+                    print("================================")
 
                 ep_ret += float(r)
 
@@ -276,12 +294,13 @@ class Emulator:
                     if r <= 0:
                         break
 
+                self.counts()
+
                 obs = self.inputs()
 
-                sys.stdout.write(
-                    f"\rAvg: {((total / episodes) * 100):.2f}% ep_ret: {ep_ret:.2f} button: {self.buttons[action]} episode: {_}"
-                )
-                sys.stdout.flush()
+                # sys.stdout.write(
+                #     f"\rAvg: {((total / episodes) * 100):.2f}% ep_ret: {ep_ret:.2f} button: {self.buttons[action]} episode: {_}"
+                # )
 
             total += ep_ret
 
@@ -296,10 +315,9 @@ class Emulator:
 
         reward = self.reward(primary_memo_before, action)
 
-        next_state = self.inputs()
+        self.counts()
 
-        self.count += 1
-        self.dialogCount()
+        next_state = self.inputs()
 
         self.averages = np.roll(self.averages, -1, axis=0)
         self.averages[-1] = reward
@@ -363,15 +381,13 @@ class Emulator:
 
         meta_path = f"{hashPath}/meta.json"
         meta = {
-            "visitedPositions": {
-                str(map_id): list(sorted(list(positions)))
-                for map_id, positions in self.visitedPositions.items()
+            "visitedPositionsCount": {
+                str(position): int(count)
+                for position, count in self.visitedPositionsCount.items()
             },
             "visitedDialogCount": {
-                str(map_id): {
-                    str(dialog_id): int(count) for dialog_id, count in dialogs.items()
-                }
-                for map_id, dialogs in self.visitedDialogCount.items()
+                int(map_id): int(count)
+                for map_id, count in self.visitedDialogCount.items()
             },
         }
         with open(meta_path, "w", encoding="utf-8") as mf:
@@ -918,27 +934,31 @@ class Emulator:
         if not self.isDialog():
             return 0
 
-        return (
-            -0.2
-            if self.dialogId(self.pyboy.memory)
-            in self.visitedDialogCount.get(self.mapId(self.pyboy.memory), {})
-            else 0.2
+        return 0.2 - 0.04 * self.visitedDialogCount.get(
+            self.mapId(self.pyboy.memory), 0
         )
 
     def dialogCount(self):
         if not self.isDialog():
-            return 0
+            return
 
         map = self.mapId(self.pyboy.memory)
-        dialogId = self.dialogId(self.pyboy.memory)
 
         if map not in self.visitedDialogCount:
-            self.visitedDialogCount[map] = {}
+            self.visitedDialogCount[map] = 0
 
-        if dialogId not in self.visitedDialogCount[map]:
-            self.visitedDialogCount[map][dialogId] = 0
+        self.visitedDialogCount[map] += 1
 
-        self.visitedDialogCount[map][dialogId] += 1
+    def positionCount(self):
+        if not self.isWorld():
+            return
+
+        position = self.getPosition()
+
+        if position not in self.visitedPositionsCount:
+            self.visitedPositionsCount[position] = 0
+
+        self.visitedPositionsCount[position] += 1
 
     def rewardPokedex(self, before, after):
         reward = 0
@@ -1049,23 +1069,7 @@ class Emulator:
         if not self.isWorld():
             return 0.0
 
-        map_id = int(self.mapId(self.pyboy.memory))
-        pos = (
-            int(self.positionX(self.pyboy.memory)),
-            int(self.positionY(self.pyboy.memory)),
-        )
-
-        s = self.visitedPositions.setdefault(map_id, set())
-        if pos in s:
-            return -0.2
-
-        if len(s) == 0 and len(self.visitedPositions) > 1:
-            s.add(pos)
-            self.updateDoneGraph("rewardPosition")
-            return 10.0
-
-        s.add(pos)
-        return 0.2
+        return 0.2 - 0.04 * self.visitedPositionsCount.get(self.getPosition(), 0)
 
     def isSameMenuPosition(self, primary_memo_before):
         return (
@@ -1151,21 +1155,17 @@ class Emulator:
             with open(f"{base}/{dir}/meta.json", "r", encoding="utf-8") as f:
                 data = json.load(f)
 
-            vp = data.get("visitedPositions", {})
-            self.visitedPositions = {
-                int(map_id): set(tuple(xy) for xy in positions)
-                for map_id, positions in vp.items()
+            vp = data.get("visitedPositionsCount", {})
+            self.visitedPositionsCount = {
+                str(position): int(count) for position, count in vp.items()
             }
 
             vdc = data.get("visitedDialogCount", {})
             self.visitedDialogCount = {
-                int(map_id): {
-                    int(dialog_id): int(count) for dialog_id, count in dialogs.items()
-                }
-                for map_id, dialogs in vdc.items()
+                int(map_id): int(count) for map_id, count in vdc.items()
             }
         except FileNotFoundError:
-            self.visitedPositions = {}
+            self.visitedPositionsCount = {}
             self.visitedDialogCount = {}
 
         self.resetCount = 0
@@ -1249,25 +1249,14 @@ class Emulator:
     def dialogData(self):
         data = [
             self.dialogId(self.pyboy.memory),
-            1 if self.isBlocked() else 0,
-            self.visitedDialogCount.get(self.mapId(self.pyboy.memory), {}).get(
-                self.dialogId(self.pyboy.memory), 0
-            ),
+            self.visitedDialogCount.get(self.mapId(self.pyboy.memory), 0),
         ]
 
         return data if self.isDialog() else [0] * len(data)
 
     def mapData(self):
         data = [
-            (
-                1
-                if (
-                    int(self.positionX(self.pyboy.memory)),
-                    int(self.positionY(self.pyboy.memory)),
-                )
-                in self.visitedPositions.get(self.mapId(self.pyboy.memory), {})
-                else 0
-            ),
+            self.visitedPositionsCount.get(self.getPosition(), 0),
         ]
 
         return data if self.isWorld() else [0] * len(data)
