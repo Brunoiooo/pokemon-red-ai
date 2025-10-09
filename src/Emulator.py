@@ -1072,10 +1072,10 @@ class Emulator:
         return 0.2 - 0.04 * self.visitedPositionsCount.get(self.getPosition(), 0)
 
     def rewardMap(self):
-        if not self.isWorld():
-            return 0.0
-
         mapId = self.mapId(self.pyboy.memory)
+
+        if not self.isWorld() or mapId == 0:
+            return 0.0
 
         if len(self.visitedMaps) <= 0:
             self.visitedMaps.append(mapId)
