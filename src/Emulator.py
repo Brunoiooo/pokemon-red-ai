@@ -71,6 +71,7 @@ class Emulator:
         self.count = 0
         self.wrongDialogActionMax = wrongDialogActionMax
         self.visitedPositionsCount = {}
+        self.visitedMaps = []
         self.visitedDialogCount = {}
 
         ckpt_path = None
@@ -155,7 +156,7 @@ class Emulator:
             # self.tick(0)
 
             print(
-                f"{event.name} {action} {self.reward(primary_memo_before, action):.2} {self.done}"
+                f"{event.name} {action} {self.reward(primary_memo_before, action):.2} {self.terminated} {self.truncated}"
             )
 
         self.pyboy.stop(False)
@@ -271,33 +272,32 @@ class Emulator:
             while True:
                 before = self.pyboy.memory[0x0000:0x10000]
 
-                print(
-                    f"{self.dialogData()} {self.mapData()} {self.modeFlags()} {self.visitedDialogCount.get(self.mapId(self.pyboy.memory), 0)}"
-                )
+                # print(
+                #     f"{self.dialogData()} {self.mapData()} {self.modeFlags()} {self.visitedDialogCount.get(self.mapId(self.pyboy.memory), 0)}"
+                # )
 
                 action = self.doAction(obs, False)
 
                 r = self.reward(before, action)
 
-                print(f"{r:.2f}")
+                # print(f"{r:.2f}")
 
-                if self.done:
-                    print("================================")
+                # if self.done:
+                #     print("================================")
 
                 ep_ret += float(r)
 
-                if self.done:
-                    self.done = False
-                    if r <= 0:
-                        break
+                if self.truncated:
+                    break
 
                 self.counts()
 
                 obs = self.inputs()
 
-                # sys.stdout.write(
-                #     f"\rAvg: {((total / episodes) * 100):.2f}% ep_ret: {ep_ret:.2f} button: {self.buttons[action]} episode: {_}"
-                # )
+                sys.stdout.write(
+                    f"\rAvg: {((total / episodes) * 100):.2f}% ep_ret: {ep_ret:.2f} button: {self.buttons[action]} episode: {_}"
+                )
+                sys.stdout.flush()
 
             total += ep_ret
 
@@ -344,7 +344,8 @@ class Emulator:
                             a_0,
                             float(R),
                             self.detach_to_cpu(self.buffer[len(self.buffer) - 1][3]),
-                            bool(self.done),
+                            bool(self.terminated),
+                            bool(self.truncated),
                             len(self.buffer),
                         )
                     )
@@ -358,7 +359,7 @@ class Emulator:
                 pass
 
         if self.done:
-            if reward > 0:
+            if self.terminated:
                 self.saveGameState()
 
             self.reset()
@@ -382,6 +383,7 @@ class Emulator:
                 str(position): int(count)
                 for position, count in self.visitedPositionsCount.items()
             },
+            "visitedMaps": self.visitedMaps,
             "visitedDialogCount": {
                 int(map_id): int(count)
                 for map_id, count in self.visitedDialogCount.items()
@@ -625,7 +627,7 @@ class Emulator:
             and self.pyboy.memory[0xD5AB]
         ):
             reward += 30
-            self.updateDoneGraph("Starters Back")
+            self.updateDoneGraph("Starters Back", True)
 
         # Have Town map?
         if (
@@ -633,7 +635,7 @@ class Emulator:
             and self.pyboy.memory[0xD5F3]
         ):
             reward += 30
-            self.updateDoneGraph("Have Town map?")
+            self.updateDoneGraph("Have Town map?", True)
 
         # Have Oak's Parcel?
         if (
@@ -641,7 +643,7 @@ class Emulator:
             and self.pyboy.memory[0xD60D]
         ):
             reward += 30
-            self.updateDoneGraph("Have Oak's Parcel?")
+            self.updateDoneGraph("Have Oak's Parcel?", True)
 
         # Fossilized Pokémon?
         if (
@@ -649,7 +651,7 @@ class Emulator:
             and self.pyboy.memory[0xD710]
         ):
             reward += 30
-            self.updateDoneGraph("Fossilized Pokémon?")
+            self.updateDoneGraph("Fossilized Pokémon?", True)
 
         # Did you get Lapras Yet?
         if (
@@ -657,7 +659,7 @@ class Emulator:
             and self.pyboy.memory[0xD72E]
         ):
             reward += 30
-            self.updateDoneGraph("Did you get Lapras Yet?")
+            self.updateDoneGraph("Did you get Lapras Yet?", True)
 
         # Fought Giovanni Yet?
         if (
@@ -665,7 +667,7 @@ class Emulator:
             and self.pyboy.memory[0xD751]
         ):
             reward += 30
-            self.updateDoneGraph("Fought Giovanni Yet?")
+            self.updateDoneGraph("Fought Giovanni Yet?", True)
 
         # Fought Brock Yet?
         if (
@@ -673,7 +675,7 @@ class Emulator:
             and self.pyboy.memory[0xD755]
         ):
             reward += 30
-            self.updateDoneGraph("Fought Brock Yet?")
+            self.updateDoneGraph("Fought Brock Yet?", True)
 
         # Fought Misty Yet?
         if (
@@ -681,7 +683,7 @@ class Emulator:
             and self.pyboy.memory[0xD75E]
         ):
             reward += 30
-            self.updateDoneGraph("Fought Misty Yet?")
+            self.updateDoneGraph("Fought Misty Yet?", True)
 
         # Fought Lt. Surge Yet?
         if (
@@ -689,7 +691,7 @@ class Emulator:
             and self.pyboy.memory[0xD773]
         ):
             reward += 30
-            self.updateDoneGraph("Fought Lt. Surge Yet?")
+            self.updateDoneGraph("Fought Lt. Surge Yet?", True)
 
         # Fought Erika Yet?
         if (
@@ -697,7 +699,7 @@ class Emulator:
             and self.pyboy.memory[0xD77C]
         ):
             reward += 30
-            self.updateDoneGraph("Fought Erika Yet?")
+            self.updateDoneGraph("Fought Erika Yet?", True)
 
         # Fought Articuno Yet?
         if (
@@ -705,7 +707,7 @@ class Emulator:
             and self.pyboy.memory[0xD782]
         ):
             reward += 30
-            self.updateDoneGraph("Fought Articuno Yet?")
+            self.updateDoneGraph("Fought Articuno Yet?", True)
 
         # Fought Koga Yet?
         if (
@@ -713,7 +715,7 @@ class Emulator:
             and self.pyboy.memory[0xD792]
         ):
             reward += 30
-            self.updateDoneGraph("Fought Koga Yet?")
+            self.updateDoneGraph("Fought Koga Yet?", True)
 
         # Fought Blaine Yet?
         if (
@@ -721,7 +723,7 @@ class Emulator:
             and self.pyboy.memory[0xD79A]
         ):
             reward += 30
-            self.updateDoneGraph("Fought Blaine Yet?")
+            self.updateDoneGraph("Fought Blaine Yet?", True)
 
         # Fought Sabrina Yet?
         if (
@@ -729,7 +731,7 @@ class Emulator:
             and self.pyboy.memory[0xD7B3]
         ):
             reward += 30
-            self.updateDoneGraph("Fought Sabrina Yet?")
+            self.updateDoneGraph("Fought Sabrina Yet?", True)
 
         # Fought Zapdos Yet?
         if (
@@ -737,7 +739,7 @@ class Emulator:
             and self.pyboy.memory[0xD7D4]
         ):
             reward += 30
-            self.updateDoneGraph("Fought Zapdos Yet?")
+            self.updateDoneGraph("Fought Zapdos Yet?", True)
 
         # Fought Snorlax Yet (Vermilion)
         if (
@@ -745,7 +747,7 @@ class Emulator:
             and self.pyboy.memory[0xD7D8]
         ):
             reward += 30
-            self.updateDoneGraph("Fought Snorlax Yet (Vermilion)")
+            self.updateDoneGraph("Fought Snorlax Yet (Vermilion)", True)
 
         # Fought Snorlax Yet? (Celadon)
         if (
@@ -753,7 +755,7 @@ class Emulator:
             and self.pyboy.memory[0xD7E0]
         ):
             reward += 30
-            self.updateDoneGraph("Fought Snorlax Yet? (Celadon)")
+            self.updateDoneGraph("Fought Snorlax Yet? (Celadon)", True)
 
         # Fought Moltres Yet?
         if (
@@ -761,7 +763,7 @@ class Emulator:
             and self.pyboy.memory[0xD7EE]
         ):
             reward += 30
-            self.updateDoneGraph("Fought Moltres Yet")
+            self.updateDoneGraph("Fought Moltres Yet", True)
 
         # Opponent Trainer’s Pokémon
         # Pokémon 1
@@ -862,6 +864,7 @@ class Emulator:
 
         reward += self.rewardDialog()
         reward += self.rewardPosition()
+        reward += self.rewardMap()
         reward += self.panishWorldIllegalMoves(primary_memo_before, reward)
         reward += self.panishMenuIllegalMoves(primary_memo_before)
         reward += self.panishSwitchMenu()
@@ -963,7 +966,7 @@ class Emulator:
         for i in range(8):
             if after & (1 << i) and before & (1 << i) != after & (1 << i):
                 reward += 20
-                self.updateDoneGraph(f"rewardPokedex-{i}")
+                self.updateDoneGraph(f"rewardPokedex-{i}", True)
 
         return reward
 
@@ -973,7 +976,7 @@ class Emulator:
         for i in range(8):
             if after & (1 << i) and before & (1 << i) != after & (1 << i):
                 reward += 40
-                self.updateDoneGraph(f"rewardBadges-{i}")
+                self.updateDoneGraph(f"rewardBadges-{i}", True)
 
         return reward
 
@@ -1068,6 +1071,23 @@ class Emulator:
 
         return 0.2 - 0.04 * self.visitedPositionsCount.get(self.getPosition(), 0)
 
+    def rewardMap(self):
+        if not self.isWorld():
+            return 0.0
+
+        mapId = self.mapId(self.pyboy.memory)
+
+        if len(self.visitedMaps) <= 0:
+            self.visitedMaps.append(mapId)
+            return 0.0
+
+        if mapId in self.visitedMaps:
+            return 0.0
+
+        self.visitedMaps.append(mapId)
+        self.updateDoneGraph(f"rewardMap-{mapId}", True)
+        return 10.0
+
     def isSameMenuPosition(self, primary_memo_before):
         return (
             True
@@ -1157,12 +1177,15 @@ class Emulator:
                 str(position): int(count) for position, count in vp.items()
             }
 
+            self.visitedMaps = data.get("visitedMaps", [])
+
             vdc = data.get("visitedDialogCount", {})
             self.visitedDialogCount = {
                 int(map_id): int(count) for map_id, count in vdc.items()
             }
         except FileNotFoundError:
             self.visitedPositionsCount = {}
+            self.visitedMaps = []
             self.visitedDialogCount = {}
 
         self.resetCount = 0
@@ -1173,7 +1196,8 @@ class Emulator:
         self.lastAction = -1
         self.worldIllegalMovesCount = 0
         self.menuIllegalMovesCount = 0
-        self.done = False
+        self.terminated = False
+        self.truncated = False
         self.wrongDialogActionCount = 0
         self.lastMenu = self.isMenu()
         self.lastPosition0 = self.getPosition()
@@ -1475,9 +1499,12 @@ class Emulator:
 
         self.pyboy.tick(self.ticksPerStep / 2)
 
-    def updateDoneGraph(self, key):
+    def updateDoneGraph(self, key: str, terminated: bool = False):
         self.doneGraph[key] = self.doneGraph.get(key, 0) + 1
-        self.done = True
+        if terminated:
+            self.terminated = True
+        else:
+            self.truncated = True
 
     def detach_to_cpu(self, obs_dict):
         out = {}
@@ -1487,3 +1514,7 @@ class Emulator:
             else:
                 out[k] = v
         return out
+
+    @property
+    def done(self):
+        return self.terminated or self.truncated

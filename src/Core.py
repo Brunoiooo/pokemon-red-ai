@@ -119,6 +119,9 @@ class Core:
         self.replay_start = 5000
 
         self.gamma = 0.99
+        self._gamma_tensor = torch.tensor(
+            self.gamma, device=self.device, dtype=torch.float32
+        )
 
     def start(self):
         self.dataQ = mp.Queue(maxsize=10000)
@@ -265,13 +268,24 @@ class Core:
 
     def optimize_batch(self):
         batch = random.sample(self.buffer, self.batch_size)
-        states_cpu, actions, Rn_list, next_states_cpu, dones, n_used_list = zip(*batch)
+        (
+            states_cpu,
+            actions,
+            Rn_list,
+            next_states_cpu,
+            terminateds,
+            truncateds,
+            n_used_list,
+        ) = zip(*batch)
 
         states = self.collate_states(states_cpu, self.device)
         next_states = self.collate_states(next_states_cpu, self.device)
         actions = torch.tensor(actions, device=self.device, dtype=torch.long)
         Rn = torch.tensor(Rn_list, device=self.device, dtype=torch.float32)
-        dones = torch.tensor(dones, device=self.device, dtype=torch.bool)
+        terminateds = torch.tensor(terminateds, device=self.device, dtype=torch.bool)
+        truncateds = torch.tensor(
+            truncateds, device=self.device, dtype=torch.bool
+        )  # obecnie nieużywane w target
         n_used = torch.tensor(n_used_list, device=self.device, dtype=torch.float32)
 
         micro = self.batch_size // self.grad_accum_steps
@@ -285,7 +299,13 @@ class Core:
             s = {k: v[sl] for k, v in states.items()}
             ns = {k: v[sl] for k, v in next_states.items()}
 
-            a, rN, d, n = actions[sl], Rn[sl], dones[sl], n_used[sl]
+            a, rN, te, tr, n = (
+                actions[sl],
+                Rn[sl],
+                terminateds[sl],
+                truncateds[sl],
+                n_used[sl],
+            )
 
             # Q(s,a)
             q_all = self.modelPokemon(s)
@@ -300,13 +320,11 @@ class Core:
                     self.targetPokemon(ns).gather(1, next_a.view(-1, 1)).squeeze(1)
                 )
 
-                # gamma ** n_used (wektorowo)
-                gamma_pow_n = torch.pow(
-                    torch.tensor(self.gamma, device=self.device, dtype=torch.float32), n
-                )
+                # gamma ** n_used (wektorowo) – używamy prealokowanego gamma-tensora
+                gamma_pow_n = torch.pow(self._gamma_tensor, n)
 
-                # jeśli done_any==True -> brak bootstrapu
-                target = torch.where(d, rN, rN + gamma_pow_n * next_q_target)
+                # KLUCZ: tnij bootstrap TYLKO na terminated (te), nie na pełnym tensorze!
+                target = torch.where(te, rN, rN + gamma_pow_n * next_q_target)
 
             loss = self.criterion(q_sa, target) / self.grad_accum_steps
             loss.backward()
