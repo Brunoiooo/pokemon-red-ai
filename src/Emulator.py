@@ -157,8 +157,11 @@ class Emulator:
             # self.tick(0)
 
             print(
-                f"{event.name} {action} {self.reward(primary_memo_before, action):.2} {self.terminated} {self.truncated}"
+                f"{r:.2f} {self.dialogData()} {self.mapData()} {self.modeFlags()} {self.visitedDialogCount.get(self.mapId(self.pyboy.memory), 0)} {self.terminated} {self.truncated}"
             )
+            # print(
+            #     f"{event.name} {action} {self.reward(primary_memo_before, action):.2} {self.terminated} {self.truncated}"
+            # )
 
         self.pyboy.stop(False)
 
