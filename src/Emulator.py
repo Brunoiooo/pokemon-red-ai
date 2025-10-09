@@ -148,7 +148,8 @@ class Emulator:
             while keyboard.is_pressed(event.name):
                 primary_memo_before = bytes(self.pyboy.memory[0x0000:0x10000])
                 self.tick(action)  # render + logika w czasie rzeczywistym
-                # time.sleep(0.0)
+                r = self.reward(primary_memo_before, action)
+                time.sleep(1)
 
             self.counts()
 
