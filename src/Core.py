@@ -125,6 +125,7 @@ class Core:
 
     def start(self):
         self.dataQ = mp.Queue(maxsize=10000)
+        self.stop_event = mp.Event()
 
         n_cores = os.cpu_count() or 1
         n_workers = max(1, n_cores - 1)
