@@ -908,7 +908,10 @@ class Emulator:
         if not self.isWorld():
             return 0
 
-        if self.lastPosition0 == self.getPosition():
+        if (
+            self.lastPosition0 == self.getPosition()
+            and self.lastPosition0 != self.lastPosition1
+        ):
             reward = -0.2
         else:
             reward = 0
@@ -937,7 +940,7 @@ class Emulator:
         if not self.isDialog():
             return 0
 
-        return 0.2 - 0.04 * self.visitedDialogCount.get(
+        return 0.2 - 0.01 * self.visitedDialogCount.get(
             self.mapId(self.pyboy.memory), 0
         )
 
@@ -1072,7 +1075,7 @@ class Emulator:
         if not self.isWorld():
             return 0.0
 
-        return 0.2 - 0.04 * self.visitedPositionsCount.get(self.getPosition(), 0)
+        return 0.2 - 0.01 * self.visitedPositionsCount.get(self.getPosition(), 0)
 
     def rewardMap(self):
         mapId = self.mapId(self.pyboy.memory)
