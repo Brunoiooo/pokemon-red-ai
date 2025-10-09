@@ -198,6 +198,26 @@ class Core:
                 )
                 emulator.auto()
                 print("r")
+            elif keyboard.is_pressed("t"):
+                emulator = Emulator(
+                    0,
+                    True,
+                    self.game,
+                    self.maxResetCount,
+                    self.ticksPerStep,
+                    self.maxMenuSelect,
+                    self.maxMenuPosition,
+                    self.maxMenuIn,
+                    self.maxSameAction,
+                    self.worldIllegalMovesMax,
+                    self.menuIllegalMovesMax,
+                    self.tmpEpsilonSteps,
+                    self.epsilon,
+                    self.tmpEpsilon,
+                    self.wrongDialogActionMax,
+                )
+                emulator.manual()
+                print("t")
 
             try:
                 item = self.dataQ.get()
