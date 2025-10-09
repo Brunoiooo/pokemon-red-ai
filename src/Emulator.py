@@ -871,7 +871,6 @@ class Emulator:
         reward += self.rewardMap()
         reward += self.panishWorldIllegalMoves(primary_memo_before, reward)
         reward += self.panishMenuIllegalMoves(primary_memo_before)
-        reward += self.panishSwitchMenu()
         reward += self.panishMenuSelect(primary_memo_before)
         reward += self.panishMenuPosition(primary_memo_before)
         reward += self.panishMenuIn(reward)
