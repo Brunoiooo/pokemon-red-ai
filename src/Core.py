@@ -155,11 +155,8 @@ class Core:
             )
             p = mp.Process(
                 target=emulator.start,
-                args=(
-                    self.dataQ,
-                    child_conn,
-                ),
-                daemon=True,
+                args=(self.dataQ, child_conn, self.stop_event),
+                daemon=False,
             )
             p.start()
             self.conns[actorId] = parent_conn
@@ -167,6 +164,7 @@ class Core:
 
         while True:
             if keyboard.is_pressed("q"):
+                self.stop_event.set()
                 break
             elif keyboard.is_pressed("w"):
                 for wid, conn in self.conns.items():
@@ -273,6 +271,12 @@ class Core:
                     f"\rEpsilon: {self.currentEpsilon():.2f} | Count: {self.count} | Progress: {(self.count / self.epsilonDecayCount * 100):.2f}% dataQ: {self.dataQ.qsize()}"
                 )
                 sys.stdout.flush()
+
+        for p in self.procs.values():
+            try:
+                p.join(timeout=3.0)
+            except Exception:
+                pass
 
         for p in self.procs.values():
             if p.is_alive():

@@ -165,7 +165,7 @@ class Emulator:
 
         self.pyboy.stop(False)
 
-    def start(self, dataQ: Queue, conn):
+    def start(self, dataQ: Queue, conn, stop_event: Event = None):
         self.pyboy_init()
 
         self.reset()
@@ -175,6 +175,8 @@ class Emulator:
         while True:
             if conn.poll(0.1):
                 self.getMsg(conn.recv())
+            elif stop_event is not None and stop_event.is_set():
+                break
             else:
                 inputs = self.train(inputs, dataQ)
 
@@ -196,6 +198,8 @@ class Emulator:
                     and self.tmpEpsilonCooldown <= 0
                 ):
                     self.tmpEpsilonOn = True
+
+        self.pyboy.stop(False)
 
     def currentEpsilon(self):
         return self.tmpEpsilon if self.tmpEpsilonOn else self.epsilon
