@@ -154,12 +154,18 @@ class Emulator:
             # po puszczeniu można zrobić jeszcze jeden tick z action=0, jeśli chcesz
             # self.tick(0)
 
-            print(
-                f"{r:.2f} {self.dialogData()} {self.mapData()} {self.modeFlags()} {self.visitedDialogCount.get(self.mapId(self.pyboy.memory), 0)} {self.terminated} {self.truncated}"
-            )
-            # print(
-            #     f"{event.name} {action} {self.reward(primary_memo_before, action):.2} {self.terminated} {self.truncated}"
-            # )
+            if self.isWorld():
+                print(
+                    f"{r:.2f} isWorld mapData: {self.mapData()} position: {self.getPosition()} visitedPositionsCount: {self.visitedPositionsCount.get(self.getPosition(), 0)}"
+                )
+            elif self.isDialog:
+                print(
+                    f"{r:.2f} isDialog {self.dialogData()} mapId: {self.mapId(self.pyboy.memory)} visitedDialogCount: {self.visitedDialogCount.get(self.mapId(self.pyboy.memory), 0)}"
+                )
+            elif self.isBattle():
+                print(f"{r:.2f} isBattle")
+            elif self.isBlocked():
+                print(f"{r:.2f} isBlocked")
 
         self.pyboy.stop(False)
 
