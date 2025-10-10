@@ -945,9 +945,8 @@ class Emulator:
             self.mapId(self.pyboy.memory), 0
         )
 
-        if reward < 0:
+        if reward < -0.2:
             self.updateDoneGraph("rewardDialog")
-            return -1
 
         return reward
 
@@ -1084,9 +1083,8 @@ class Emulator:
 
         reward = 0.2 - 0.01 * self.visitedPositionsCount.get(self.getPosition(), 0)
 
-        if reward < 0:
+        if reward < -0.2:
             self.updateDoneGraph("rewardPosition")
-            return -1
 
         return reward
 
