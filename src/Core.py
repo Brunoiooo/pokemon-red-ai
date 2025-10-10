@@ -25,7 +25,7 @@ class Core:
         maxSameAction=20,
         worldIllegalMovesMax=5,
         menuIllegalMovesMax=20,
-        ckpt_every=10000,
+        ckpt_every=25000,
         lr=0.0001,
         weight_decay=0.0001,
         sync_interval=2000,
@@ -121,7 +121,7 @@ class Core:
         )
 
     def start(self):
-        self.dataQ = mp.Queue(maxsize=10000)
+        self.dataQ = mp.Queue(maxsize=1000)
         self.stop_event = mp.Event()
 
         n_cores = os.cpu_count() or 1
