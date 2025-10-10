@@ -941,9 +941,15 @@ class Emulator:
         if not self.isDialog():
             return 0
 
-        return 0.2 - 0.01 * self.visitedDialogCount.get(
+        reward = 0.2 - 0.01 * self.visitedDialogCount.get(
             self.mapId(self.pyboy.memory), 0
         )
+
+        if reward < 0:
+            self.updateDoneGraph("rewardDialog")
+            return -1
+
+        return reward
 
     def dialogCount(self):
         if not self.isDialog():
@@ -1076,7 +1082,13 @@ class Emulator:
         if not self.isWorld():
             return 0.0
 
-        return 0.2 - 0.01 * self.visitedPositionsCount.get(self.getPosition(), 0)
+        reward = 0.2 - 0.01 * self.visitedPositionsCount.get(self.getPosition(), 0)
+
+        if reward < 0:
+            self.updateDoneGraph("rewardPosition")
+            return -1
+
+        return reward
 
     def rewardMap(self):
         mapId = self.mapId(self.pyboy.memory)
