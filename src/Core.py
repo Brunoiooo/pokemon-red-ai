@@ -18,7 +18,6 @@ class Core:
         epsilonDecayCount=2000000,
         tmpEpsilon=0.2,
         tmpEpsilonSteps=100000,
-        maxResetCount=100,
         ticksPerStep=32,
         maxMenuSelect=5,
         maxMenuPosition=10,
@@ -34,7 +33,6 @@ class Core:
     ):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.game = game
-        self.maxResetCount = maxResetCount
         self.epsilon = epsilon
         self.epsilonBurn = epsilonBurn
         self.epsilonEnd = epsilonEnd
@@ -65,7 +63,6 @@ class Core:
             0,
             False,
             self.game,
-            self.maxResetCount,
             self.ticksPerStep,
             self.maxMenuSelect,
             self.maxMenuPosition,
@@ -112,7 +109,7 @@ class Core:
             self.modelPokemon.parameters(), lr=lr, weight_decay=weight_decay
         )
         self.batch_size = 512
-        self.buffer = deque(maxlen=100000)
+        self.buffer = deque(maxlen=50000)
         self.optimize_every = 4
         self.updates_per_opt = 3
         self.grad_accum_steps = 1
@@ -141,7 +138,6 @@ class Core:
                 actorId,
                 window,
                 self.game,
-                self.maxResetCount,
                 self.ticksPerStep,
                 self.maxMenuSelect,
                 self.maxMenuPosition,
@@ -182,7 +178,6 @@ class Core:
                     0,
                     True,
                     self.game,
-                    self.maxResetCount,
                     self.ticksPerStep,
                     self.maxMenuSelect,
                     self.maxMenuPosition,
@@ -202,7 +197,6 @@ class Core:
                     0,
                     True,
                     self.game,
-                    self.maxResetCount,
                     self.ticksPerStep,
                     self.maxMenuSelect,
                     self.maxMenuPosition,
@@ -245,7 +239,6 @@ class Core:
                     0,
                     True,
                     self.game,
-                    self.maxResetCount,
                     self.ticksPerStep,
                     self.maxMenuSelect,
                     self.maxMenuPosition,

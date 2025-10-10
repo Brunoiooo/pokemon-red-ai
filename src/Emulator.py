@@ -17,7 +17,6 @@ class Emulator:
         actorId,
         window,
         game,
-        maxResetCount,
         ticksPerStep,
         maxMenuSelect,
         maxMenuPosition,
@@ -37,7 +36,6 @@ class Emulator:
         self.game = game
         self.window = window
         self.pyboy_init()
-        self.maxResetCount = maxResetCount
         self.buttons = [
             [],
             ["a"],
@@ -881,7 +879,6 @@ class Emulator:
         reward += self.panishSameAction(action, reward)
         reward += self.panishWrongDialogAction(primary_memo_before, action)
         reward += self.panishBacktrack()
-        self.countingReward(reward)
         reward -= 0.01
 
         return reward
@@ -1198,7 +1195,6 @@ class Emulator:
             self.visitedMaps = []
             self.visitedDialogCount = {}
 
-        self.resetCount = 0
         self.menuSelectCount = 0
         self.menuPositionCount = 0
         self.menuInCount = 0
@@ -1489,14 +1485,6 @@ class Emulator:
             raise ValueError("Invalid bit range")
 
         return [1 if (byte & (1 << i)) else 0 for i in range(start_bit, end_bit + 1)]
-
-    def countingReward(self, reward):
-        if reward > 0.2:
-            self.resetCount = 0
-        else:
-            self.resetCount += 1
-        if self.resetCount > self.maxResetCount:
-            self.updateDoneGraph("countingReward")
 
     def tick(self, action):
         for button in self.buttons[action]:
