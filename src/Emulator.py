@@ -156,11 +156,11 @@ class Emulator:
 
             if self.isWorld():
                 print(
-                    f"{r:.2f} isWorld mapData: {self.mapData()} position: {self.getPosition()} visitedPositionsCount: {self.visitedPositionsCount.get(self.getPosition(), 0)}"
+                    f"{r:.2f} isWorld mapData: {self.mapData()} position: {self.getPosition()}"
                 )
             elif self.isDialog:
                 print(
-                    f"{r:.2f} isDialog {self.dialogData()} mapId: {self.mapId(self.pyboy.memory)} visitedDialogCount: {self.visitedDialogCount.get(self.mapId(self.pyboy.memory), 0)}"
+                    f"{r:.2f} isDialog {self.dialogData()} mapId: {self.mapId(self.pyboy.memory)}"
                 )
             elif self.isBattle():
                 print(f"{r:.2f} isBattle")
@@ -945,7 +945,7 @@ class Emulator:
 
     def rewardDialog(self):
         if not self.isDialog():
-            return 0
+            return 0.0
 
         reward = 0.2 - 0.001 * self.visitedDialogCount.get(
             self.mapId(self.pyboy.memory), 0
