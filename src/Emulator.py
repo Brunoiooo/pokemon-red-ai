@@ -947,7 +947,7 @@ class Emulator:
         if not self.isDialog():
             return 0
 
-        reward = 0.2 - 0.01 * self.visitedDialogCount.get(
+        reward = 0.2 - 0.001 * self.visitedDialogCount.get(
             self.mapId(self.pyboy.memory), 0
         )
 
