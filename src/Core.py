@@ -408,7 +408,7 @@ class Core:
                 t = torch.from_numpy(np.concatenate(vals, axis=0)).float()
                 batch[k] = t.to(device, non_blocking=True)
             else:
-                t = torch.tensor(vals, dtype=torch.long).view(-1, 1)
+                t = torch.tensor(vals, dtype=torch.long)
                 batch[k] = t.to(device, non_blocking=True)
 
         return batch
