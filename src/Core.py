@@ -6,6 +6,7 @@ import os, io, keyboard, random, sys
 from collections import deque
 import multiprocessing as mp
 import matplotlib.pyplot as plt
+import numpy as np
 
 
 class Core:
@@ -215,8 +216,10 @@ class Core:
             try:
                 item = self.dataQ.get()
                 self.count += 1
-            except Exception:
+            except Exception as e:
+                print(e)
                 break
+
             self.buffer.append(item)
 
             if len(self.buffer) >= self.replay_start and (
@@ -402,7 +405,10 @@ class Core:
         for k in keys:
             vals = [d[k] for d in list_of_dicts]
             if k == "continuous":
-                batch[k] = torch.cat(vals, dim=0).to(device, non_blocking=True).float()
+                t = torch.from_numpy(np.concatenate(vals, axis=0)).float()
+                batch[k] = t.to(device, non_blocking=True)
             else:
-                batch[k] = torch.cat(vals, dim=0).to(device, non_blocking=True).long()
+                t = torch.tensor(vals, dtype=torch.long).view(-1, 1)
+                batch[k] = t.to(device, non_blocking=True)
+
         return batch

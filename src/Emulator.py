@@ -1524,7 +1524,10 @@ class Emulator:
         out = {}
         for k, v in obs_dict.items():
             if torch.is_tensor(v):
-                out[k] = v.detach().to("cpu")
+                if k == "continuous":
+                    out[k] = v.detach().cpu().numpy().copy()
+                else:
+                    out[k] = int(v.item())
             else:
                 out[k] = v
         return out
