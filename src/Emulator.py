@@ -1278,26 +1278,57 @@ class Emulator:
         return memory[0xCF13]
 
     def inputs(self):
-        arr = np.asarray(self.data(), dtype=np.float32)
-        arr = np.clip(arr, 0, 255) / 255.0
-        continuous = torch.from_numpy(arr).unsqueeze(0).to("cpu")
+        mode = self.modeFlags()
+        mode = torch.tensor([mode], dtype=torch.long)
 
-        map_id = torch.tensor([int(self.mapId(self.pyboy.memory))], dtype=torch.long)
-        dialog_id = torch.tensor(
-            [int(self.dialogId(self.pyboy.memory))], dtype=torch.long
-        )
-        pos_x = torch.tensor([int(self.positionX(self.pyboy.memory))], dtype=torch.long)
-        pos_y = torch.tensor([int(self.positionY(self.pyboy.memory))], dtype=torch.long)
+        continuous = torch.tensor(self.data(), dtype=torch.float32)
 
-        mode = torch.tensor([int(np.argmax(self.modeFlags()))], dtype=torch.long)
+        if self.isWorld():
+            map_id = torch.tensor([self.mapId(self.pyboy.memory)], dtype=torch.long)
+            pos_x = torch.tensor([self.positionX(self.pyboy.memory)], dtype=torch.long)
+            pos_y = torch.tensor([self.positionY(self.pyboy.memory)], dtype=torch.long)
+        else:
+            map_id = torch.tensor([0], dtype=torch.long)
+            pos_x = torch.tensor([0], dtype=torch.long)
+            pos_y = torch.tensor([0], dtype=torch.long)
+
+        if self.isDialog():
+            dialog_id = torch.tensor(
+                [self.dialogId(self.pyboy.memory)], dtype=torch.long
+            )
+        else:
+            dialog_id = torch.tensor([0], dtype=torch.long)
+
+        if self.isBattle():
+            battle_type = torch.tensor([self.pyboy.memory[0xD057]], dtype=torch.long)
+            pokemon_status = torch.tensor([self.pyboy.memory[0xD018]], dtype=torch.long)
+            move_type = torch.tensor([self.pyboy.memory[0xCFD5]], dtype=torch.long)
+            pokemon_type = torch.tensor([self.pyboy.memory[0xD019]], dtype=torch.long)
+            battle_state = (
+                self.pyboy.memory[0xD062]
+                | (self.pyboy.memory[0xD063] << 8)
+                | (self.pyboy.memory[0xD064] << 16)
+            )
+            battle_state = torch.tensor([battle_state], dtype=torch.long)
+        else:
+            battle_type = torch.tensor([0], dtype=torch.long)
+            pokemon_status = torch.tensor([0], dtype=torch.long)
+            move_type = torch.tensor([0], dtype=torch.long)
+            pokemon_type = torch.tensor([0], dtype=torch.long)
+            battle_state = torch.tensor([0], dtype=torch.long)
 
         return {
-            "map_id": map_id,
-            "dialog_id": dialog_id,
-            "pos_x": pos_x,
-            "pos_y": pos_y,
             "mode": mode,
             "continuous": continuous,
+            "map_id": map_id,
+            "pos_x": pos_x,
+            "pos_y": pos_y,
+            "dialog_id": dialog_id,
+            "battle_type": battle_type,
+            "pokemon_status": pokemon_status,
+            "move_type": move_type,
+            "pokemon_type": pokemon_type,
+            "battle_state": battle_state,
         }
 
     def dialogData(self):
