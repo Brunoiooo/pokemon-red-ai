@@ -121,11 +121,11 @@ class Emulator:
 
     def manual(self):
         self.pyboy_init()
-        self.reset(True)
+        self.reset(path="start_manual")
         self.pyboy.set_emulation_speed(1.0)
 
         while True:
-            event = keyboard.read_event(suppress=False)  # blokujące
+            event = keyboard.read_event(suppress=False)
             if event.event_type != "down":
                 continue
             if event.name == "q":
@@ -140,19 +140,24 @@ class Emulator:
                 "right": 6,
                 "up": 7,
                 "down": 8,
+                "t": 9,
             }.get(event.name, 0)
 
-            # TRZYMAJ akację dopóki klawisz trzymany – ALE tykaj pyboy w pętli
+            if action == 9:
+                action = 0
+                os.makedirs(f"roms/{self.game}/saves/start_manual", exist_ok=True)
+                with open(
+                    f"roms/{self.game}/saves/start_manual/checkpoint.state", "wb"
+                ) as f:
+                    self.pyboy.save_state(f)
+
             while keyboard.is_pressed(event.name):
                 primary_memo_before = bytes(self.pyboy.memory[0x0000:0x10000])
-                self.tick(action)  # render + logika w czasie rzeczywistym
+                self.tick(action)
                 r = self.reward(primary_memo_before, action)
                 time.sleep(1)
 
             self.counts()
-
-            # po puszczeniu można zrobić jeszcze jeden tick z action=0, jeśli chcesz
-            # self.tick(0)
 
             if self.isWorld():
                 print(
