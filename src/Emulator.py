@@ -1389,24 +1389,88 @@ class Emulator:
         return data if self.isMenu() else [0] * len(data)
 
     def battleData(self):
-        data = (
-            [self.pyboy.memory[0xCCD5]]
-            + [self.pyboy.memory[i] for i in range(0xCCD7, 0xCCD9)]
-            + [self.pyboy.memory[i] for i in range(0xCCDB, 0xCCDE)]
-            + [self.pyboy.memory[i] for i in range(0xCCE8, 0xCCEA)]
-            + [self.pyboy.memory[i] for i in range(0xCCED, 0xCCF0)]
-            + [self.pyboy.memory[0xCCF6]]
-            + [self.pyboy.memory[i] for i in range(0xCD05, 0xCD07)]
-            + [self.pyboy.memory[i] for i in range(0xCD1A, 0xCD20)]
-            + [self.pyboy.memory[i] for i in range(0xCD2D, 0xCD34)]
-            + [self.pyboy.memory[i] for i in range(0xCFCC, 0xCFE8)]
-            + self.bitsExtractor(self.pyboy.memory[0xCFE9], 3, 6)
-            + [self.pyboy.memory[i] for i in range(0xCFEA, 0xD031)]
-            + [self.pyboy.memory[0xD057], self.pyboy.memory[0xD05A]]
-            + [self.pyboy.memory[i] for i in range(0xD05C, 0xD060)]
-            + self.bitsExtractor(self.pyboy.memory[0xD062])
-            + self.bitsExtractor(self.pyboy.memory[0xD063])
-            + self.bitsExtractor(self.pyboy.memory[0xD064], 0, 3)
+        data = [
+            self.pyboy.memory[0xCCD5],
+            self.playersSubstituteHp(self.pyboy.memory),
+            self.enemySubstituteHp(self.pyboy.memory),
+            self.moveMenuType(self.pyboy.memory),
+            self.playerSelectedMove(self.pyboy.memory),
+            self.enemySelectedMove(self.pyboy.memory),
+            self.yourMoveUsed(self.pyboy.memory),
+            self.yourMoveType(self.pyboy.memory),
+            self.yourMoveEffect(self.pyboy.memory),
+            self.enemyMoveId(self.pyboy.memory),
+            self.enemyMoveEffect(self.pyboy.memory),
+            self.enemyMovePower(self.pyboy.memory),
+            self.enemyMoveType(self.pyboy.memory),
+            self.enemyMoveAccuracy(self.pyboy.memory),
+            self.enemyMoveMaxPP(self.pyboy.memory),
+            self.playerMoveId(self.pyboy.memory),
+            self.playerMovePower(self.pyboy.memory),
+            self.playerMoveAccuracy(self.pyboy.memory),
+            self.playerMoveMaxPP(self.pyboy.memory),
+            self.enemyPokemonInternalId1(self.pyboy.memory),
+            self.playerPokemonInterna2Id(self.pyboy.memory),
+            self.enemyPokemonInternalId2(self.pyboy.memory),
+            self.enemyHp(self.pyboy.memory),
+            self.enemyLevel1(self.pyboy.memory),
+        ] + self.enemyStatus(self.pyboy.memory)
+        (
+            +[
+                self.enemyType1(self.pyboy.memory),
+                self.enemyType2(self.pyboy.memory),
+                self.enemyMove1(self.pyboy.memory),
+                self.enemyMove2(self.pyboy.memory),
+                self.enemyMove3(self.pyboy.memory),
+                self.enemyMove4(self.pyboy.memory),
+                self.enemyAttackAndDefenseIVs(self.pyboy.memory),
+                self.enemyAttackAndSpecialIVs(self.pyboy.memory),
+                self.enemyLevel2(self.pyboy.memory),
+                self.enemyMaxHp(self.pyboy.memory),
+                self.enemyAttack(self.pyboy.memory),
+                self.enemyDefense(self.pyboy.memory),
+                self.enemySpeed(self.pyboy.memory),
+                self.enemySpecial(self.pyboy.memory),
+                self.enemyPPFirstSlot(self.pyboy.memory),
+                self.enemyPPSecondSlot(self.pyboy.memory),
+                self.enemyPPThirdSlot(self.pyboy.memory),
+                self.enemyPPFourthSlot(self.pyboy.memory),
+            ]
+            + self.enemyBaseStats(self.pyboy.memory)
+            + [
+                self.enemyCatchRate(self.pyboy.memory),
+                self.enemyBaseExperience(self.pyboy.memory),
+                self.pokemonNumber1(self.pyboy.memory),
+                self.pokemonCurrentHP1(self.pyboy.memory),
+            ]
+            + self.pokemonStatus1(self.pyboy.memory)
+            + [
+                self.pokemonType11(self.pyboy.memory),
+                self.pokemonType21(self.pyboy.memory),
+                self.pokemonMoveFirstSlot1(self.pyboy.memory),
+                self.pokemonMoveSecondSlot1(self.pyboy.memory),
+                self.pokemonMoveThirdSlot1(self.pyboy.memory),
+                self.pokemonMoveFourthSlot1(self.pyboy.memory),
+                self.pokemonAttackAndDefenseIVs1(self.pyboy.memory),
+                self.pokemonSpeedAndSpecialIVs1(self.pyboy.memory),
+                self.pokemonLevel1(self.pyboy.memory),
+                self.pokemonMaxHP1(self.pyboy.memory),
+                self.pokemonAttack1(self.pyboy.memory),
+                self.pokemonDefense1(self.pyboy.memory),
+                self.pokemonSpeed1(self.pyboy.memory),
+                self.pokemonSpecial1(self.pyboy.memory),
+                self.pokemonPPFirstSlot1(self.pyboy.memory),
+                self.pokemonPPSecondSlot1(self.pyboy.memory),
+                self.pokemonPPThirdSlot1(self.pyboy.memory),
+                self.pokemonPPFourthSlot1(self.pyboy.memory),
+                self.typeOfBattle(self.pyboy.memory),
+                self.battleType(self.pyboy.memory),
+                self.isGymLeaderBattleMusicPlaying(self.pyboy.memory),
+                self.criticalHitFlag(self.pyboy.memory),
+                self.oneHitKOFlag(self.pyboy.memory),
+                self.hookedPokemonFlag(self.pyboy.memory),
+            ]
+            + self.battleStatusPlayer(self.pyboy.memory)
         )
 
         return data if self.isBattle() else [0] * len(data)
@@ -1570,3 +1634,236 @@ class Emulator:
     @property
     def done(self):
         return self.terminated or self.truncated
+    def playersSubstituteHp(self, memory):
+        return memory[0xCCD7]
+
+    def rewardPlayersSubstituteHp(self, before, after):
+        return (
+            self.playersSubstituteHp(after) - self.playersSubstituteHp(before)
+        ) / 255
+
+    def enemySubstituteHp(self, memory):
+        return memory[0xCCD8]
+
+    def rewardEnemySubstituteHp(self, before, after):
+        return (self.enemySubstituteHp(before) - self.enemySubstituteHp(after)) / 255
+
+    def moveMenuType(self, memory):
+        return memory[0xCCDB]
+
+    def playerSelectedMove(self, memory):
+        return memory[0xCCDC]
+
+    def enemySelectedMove(self, memory):
+        return memory[0xCCDD]
+
+    def yourMoveUsed(self, memory):
+        return memory[0xCCDC]
+
+    def yourMoveType(self, memory):
+        return memory[0xCFD5]
+
+    def yourMoveEffect(self, memory):
+        return memory[0xCFD3]
+
+    def enemyMoveId(self, memory):
+        return memory[0xCFCC]
+
+    def enemyMoveEffect(self, memory):
+        return memory[0xCFCD]
+
+    def enemyMovePower(self, memory):
+        return memory[0xCFCE]
+
+    def enemyMoveType(self, memory):
+        return memory[0xCFCF]
+
+    def enemyMoveAccuracy(self, memory):
+        return memory[0xCFD0]
+
+    def enemyMoveMaxPP(self, memory):
+        return memory[0xCFD1]
+
+    def playerMoveId(self, memory):
+        return memory[0xCFD2]
+
+    def playerMovePower(self, memory):
+        return memory[0xCFD4]
+
+    def playerMoveAccuracy(self, memory):
+        return memory[0xCFD6]
+
+    def playerMoveMaxPP(self, memory):
+        return memory[0xCFD7]
+
+    def enemyPokemonInternalId1(self, memory):
+        return memory[0xCFD8]
+
+    def playerPokemonInterna2Id(self, memory):
+        return memory[0xCFD9]
+
+    def enemyPokemonInternalId2(self, memory):
+        return memory[0xCFE5]
+
+    def enemyHp(self, memory):
+        return memory[0xCFE6] << 8 | memory[0xCFE7]
+
+    def rewardEnemyHp(self, before, after):
+        return (self.enemyHp(before) - self.enemyHp(after)) / 65535
+
+    def enemyLevel1(self, memory):
+        return memory[0xCFE8]
+
+    def enemyStatus(self, memory):
+        return self.bitsExtractor(memory[0xCFE9], end_bit=6)
+
+    def enemyType1(self, memory):
+        return memory[0xCFEA]
+
+    def enemyType2(self, memory):
+        return memory[0xCFEB]
+
+    def enemyMove1(self, memory):
+        return memory[0xCFED]
+
+    def enemyMove2(self, memory):
+        return memory[0xCFEE]
+
+    def enemyMove3(self, memory):
+        return memory[0xCFEF]
+
+    def enemyMove4(self, memory):
+        return memory[0xCFF0]
+
+    def enemyAttackAndDefenseIVs(self, memory):
+        return memory[0xCFF1]
+
+    def enemyAttackAndSpecialIVs(self, memory):
+        return memory[0xCFF2]
+
+    def enemyLevel2(self, memory):
+        return memory[0xCFF3]
+
+    def enemyMaxHp(self, memory):
+        return memory[0xCFF4] | (memory[0xCFF5] << 8)
+
+    def enemyAttack(self, memory):
+        return memory[0xCFF6] | (memory[0xCFF7] << 8)
+
+    def enemyDefense(self, memory):
+        return memory[0xCFF8] | (memory[0xCFF9] << 8)
+
+    def enemySpeed(self, memory):
+        return memory[0xCFFA] | (memory[0xCFFB] << 8)
+
+    def enemySpecial(self, memory):
+        return memory[0xCFFC] | (memory[0xCFFD] << 8)
+
+    def enemyPPFirstSlot(self, memory):
+        return memory[0xCFFE]
+
+    def enemyPPSecondSlot(self, memory):
+        return memory[0xCFFF]
+
+    def enemyPPThirdSlot(self, memory):
+        return memory[0xD000]
+
+    def enemyPPFourthSlot(self, memory):
+        return memory[0xD001]
+
+    def enemyBaseStats(self, memory):
+        return [memory[0xD002 + i] for i in range(5)]
+
+    def enemyCatchRate(self, memory):
+        return memory[0xD007]
+
+    def enemyBaseExperience(self, memory):
+        return memory[0xD008]
+
+    def pokemonNumber1(self, memory):
+        return memory[0xD014]
+
+    def pokemonCurrentHP1(self, memory):
+        return memory[0xD015] | (memory[0xD016] << 8)
+
+    def pokemonStatus1(self, memory):
+        return self.bitsExtractor(memory[0xD018], end_bit=6)
+
+    def pokemonType11(self, memory):
+        return memory[0xD019]
+
+    def pokemonType21(self, memory):
+        return memory[0xD01A]
+
+    def pokemonMoveFirstSlot1(self, memory):
+        return memory[0xD01C]
+
+    def pokemonMoveSecondSlot1(self, memory):
+        return memory[0xD01D]
+
+    def pokemonMoveThirdSlot1(self, memory):
+        return memory[0xD01E]
+
+    def pokemonMoveFourthSlot1(self, memory):
+        return memory[0xD01F]
+
+    def pokemonAttackAndDefenseIVs1(self, memory):
+        return memory[0xD020]
+
+    def pokemonSpeedAndSpecialIVs1(self, memory):
+        return memory[0xD021]
+
+    def pokemonLevel1(self, memory):
+        return memory[0xD022]
+
+    def pokemonMaxHp1(self, memory):
+        return memory[0xD023] | (memory[0xD024] << 8)
+
+    def pokemonAttack1(self, memory):
+        return memory[0xD025] | (memory[0xD026] << 8)
+
+    def pokemonDefense1(self, memory):
+        return memory[0xD027] | (memory[0xD028] << 8)
+
+    def pokemonSpeed1(self, memory):
+        return memory[0xD029] | (memory[0xD02A] << 8)
+
+    def pokemonSpecial1(self, memory):
+        return memory[0xD02B] | (memory[0xD02C] << 8)
+
+    def pokemonPPFirstSlot1(self, memory):
+        return memory[0xD02D]
+
+    def pokemonPPSecondSlot1(self, memory):
+        return memory[0xD02E]
+
+    def pokemonPPThirdSlot1(self, memory):
+        return memory[0xD02F]
+
+    def pokemonPPFourthSlot1(self, memory):
+        return memory[0xD030]
+
+    def typeOfBattle(self, memory):
+        return memory[0xD057]
+
+    def battleType(self, memory):
+        return memory[0xD05A]
+
+    def isGymLeaderBattleMusicPlaying(self, memory):
+        return memory[0xD05C] & 1
+
+    def criticalHitFlag(self, memory):
+        return memory[0xD05E] & 1
+
+    def oneHitKOFlag(self, memory):
+        return memory[0xD05E] & 2
+
+    def hookedPokemonFlag(self, memory):
+        return memory[0xD05F] & 1
+
+    def battleStatusPlayer(self, memory):
+        return (
+            self.bitsExtractor(memory[0xD062])
+            + self.bitsExtractor(memory[0xD063])
+            + self.bitsExtractor(memory[0xD064], 0, 3)
+        )
