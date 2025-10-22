@@ -1363,7 +1363,9 @@ class Emulator:
     def isDialog(self):
         return (
             True
-            if self.isBlocked() and self.dialogId(self.pyboy.memory) != 0
+            if self.isBlocked()
+            and self.dialogId(self.pyboy.memory) != 0
+            and not self.isBattle()
             else False
         )
 
