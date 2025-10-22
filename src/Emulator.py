@@ -895,20 +895,17 @@ class Emulator:
         return reward
 
     def mask_action(self, action: int) -> int:
-        # jeśli mamy cooldown po zmianie menu – nie pozwalaj na kolejne przełączenie
         if self.menuCooldown > 0:
-            # „start” jest u Ciebie pod action==3 (["start"])
-            if action == 3:  # start
-                # zamień na „nic” lub bezpieczną akcję
-                return 0  # [] -> no-op (naciskasz nic)
-        # gdy jesteśmy w menu, preferuj nawigację lub wyjście 'b'
+            if action == 3:
+                return 0
         if self.isMenu():
-            # dopuść tylko: a(1), b(2), up(7), down(8), left(5), right(6)
             allowed = {0, 1, 2, 5, 6, 7, 8}
             if action not in allowed:
-                return 2  # 'b' żeby cofać menu zamiast robić dziwne rzeczy
-        # gdy jesteśmy w świecie, ogranicz spam „start”
+                return 2
         if self.isWorld() and self.menuCooldown > 0 and action == 3:
+            return 0
+
+        if self.isBlocked():
             return 0
 
         return action
