@@ -13,7 +13,7 @@ def main():
     torch.backends.cudnn.benchmark = True
     torch.set_float32_matmul_precision("high")
 
-    set_start_method("spawn", force=True)
+    set_start_method("fork", force=True)
 
     os.environ.setdefault("OMP_NUM_THREADS", str(os.cpu_count()))
     os.environ.setdefault("MKL_NUM_THREADS", str(os.cpu_count()))
