@@ -405,7 +405,7 @@ class Core:
         for k in keys:
             vals = [d[k] for d in list_of_dicts]
             if k == "continuous":
-                t = torch.from_numpy(np.concatenate(vals, axis=0)).float()
+                t = torch.from_numpy(np.stack(vals, axis=0)).float()
                 batch[k] = t.to(device, non_blocking=True)
             else:
                 t = torch.tensor(vals, dtype=torch.long)
