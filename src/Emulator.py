@@ -619,7 +619,12 @@ class Emulator:
         if not self.isBattle():
             return 0.0
 
-        return 0.2 - 0.01 * self._battleCount
+        reward = 0.2 - 0.01 * self._battleCount
+
+        if reward < -0.2:
+            self.updateDoneGraph("rewardBattle")
+
+        return reward
 
     def mask_action(self, action: int) -> int:
         if self.menuCooldown > 0:
@@ -676,11 +681,11 @@ class Emulator:
         if not self.isDialog():
             return 0.0
 
-        reward = 0.2 - 0.001 * self.visitedDialogCount.get(
+        reward = 0.2 - 0.01 * self.visitedDialogCount.get(
             self.mapId(self.pyboy.memory), 0
         )
 
-        if reward < -1:
+        if reward < -0.2:
             self.updateDoneGraph("rewardDialog")
 
         return reward
@@ -849,7 +854,7 @@ class Emulator:
 
         reward = 0.2 - 0.01 * self.visitedPositionsCount.get(self.getPosition(), 0)
 
-        if reward < -1:
+        if reward < -0.2:
             self.updateDoneGraph("rewardPosition")
 
         return reward
