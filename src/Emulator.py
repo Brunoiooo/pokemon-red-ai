@@ -114,9 +114,10 @@ class Emulator:
                 f"roms/{self.game}/rom.gb", sound_emulated=False, window="null"
             )
 
-    def counts(self):
+    def counts(self, before, after):
         self.dialogCount()
         self.positionCount()
+        self.battleCount(before, after)
         self.count += 1
 
     def manual(self):
@@ -157,8 +158,9 @@ class Emulator:
                 r = self.reward(primary_memo_before, action)
                 time.sleep(1)
 
-            self.counts()
+            self.counts(primary_memo_before, self.pyboy.memory)
 
+            print(self.modeFlags())
             if self.isWorld():
                 print(
                     f"{r:.2f} isWorld mapData: {self.mapData()} position: {self.getPosition()}"
@@ -168,7 +170,7 @@ class Emulator:
                     f"{r:.2f} isDialog {self.dialogData()} mapId: {self.mapId(self.pyboy.memory)}"
                 )
             elif self.isBattle():
-                print(f"{r:.2f} isBattle")
+                print(f"{r:.2f} isBattle mapData: {self.battleData()}")
             elif self.isBlocked():
                 print(f"{r:.2f} isBlocked")
 
@@ -254,7 +256,7 @@ class Emulator:
 
             self.doAction(obs, False)
 
-            self.counts()
+            self.counts(obs, self.pyboy.memory)
 
             obs = self.inputs()
 
@@ -307,7 +309,7 @@ class Emulator:
                 if self.truncated:
                     break
 
-                self.counts()
+                self.counts(before, self.pyboy.memory)
 
                 obs = self.inputs()
 
@@ -329,7 +331,7 @@ class Emulator:
 
         reward = self.reward(primary_memo_before, action)
 
-        self.counts()
+        self.counts(primary_memo_before, self.pyboy.memory)
 
         next_state = self.inputs()
 
@@ -416,26 +418,31 @@ class Emulator:
         return hashlib.sha256(
             bytes(
                 [
-                    self.pyboy.memory[0xD5AB],
-                    self.pyboy.memory[0xD5F3],
-                    self.pyboy.memory[0xD60D],
-                    self.pyboy.memory[0xD710],
-                    self.pyboy.memory[0xD72E],
-                    self.pyboy.memory[0xD751],
-                    self.pyboy.memory[0xD755],
-                    self.pyboy.memory[0xD75E],
-                    self.pyboy.memory[0xD773],
-                    self.pyboy.memory[0xD77C],
-                    self.pyboy.memory[0xD782],
-                    self.pyboy.memory[0xD792],
-                    self.pyboy.memory[0xD79A],
-                    self.pyboy.memory[0xD7B3],
-                    self.pyboy.memory[0xD7D4],
-                    self.pyboy.memory[0xD7D8],
-                    self.pyboy.memory[0xD7E0],
-                    self.pyboy.memory[0xD7EE],
-                    *[self.pyboy.memory[i] for i in range(0xD2F7, 0xD31C)],
-                    self.pyboy.memory[0xD356],
+                    self.startersBack(self.pyboy.memory),
+                    self.haveTownMap(self.pyboy.memory),
+                    self.haveOaksParcel(self.pyboy.memory),
+                    *self.flyAnywhere(self.pyboy.memory),
+                    self.fossilizedPokemon(self.pyboy.memory),
+                    self.positionInAir(self.pyboy.memory),
+                    self.didYouGetLaprasYet(self.pyboy.memory),
+                    self.debugNewGame(self.pyboy.memory),
+                    self.foughtGiovanniYet(self.pyboy.memory),
+                    self.foughtBrockYet(self.pyboy.memory),
+                    self.foughtMistyYet(self.pyboy.memory),
+                    self.foughtLtSurgeYet(self.pyboy.memory),
+                    self.foughtErikaYet(self.pyboy.memory),
+                    self.foughtArticunoYet(self.pyboy.memory),
+                    self.foughtKogaYet(self.pyboy.memory),
+                    self.foughtBlaineYet(self.pyboy.memory),
+                    self.foughtSabrinaYet(self.pyboy.memory),
+                    self.foughtZapdosYet(self.pyboy.memory),
+                    self.foughtSnorlaxYetVermilion(self.pyboy.memory),
+                    self.foughtSnorlaxYetCeladon(self.pyboy.memory),
+                    self.foughtMoltresYet(self.pyboy.memory),
+                    self.isSSAnneHere(self.pyboy.memory),
+                    *self.pokedexOwn(self.pyboy.memory),
+                    *self.pokedexSeen(self.pyboy.memory),
+                    *self.badges(self.pyboy.memory),
                     self.mapId(self.pyboy.memory),
                     self.positionX(self.pyboy.memory),
                     self.positionY(self.pyboy.memory),
@@ -446,440 +453,154 @@ class Emulator:
     def reward(self, primary_memo_before, action):
         reward = 0
 
-        # Player's Substitute HP
-        if primary_memo_before[0xCCD7] < self.pyboy.memory[0xCCD7]:
-            reward += 1
-        elif primary_memo_before[0xCCD7] > self.pyboy.memory[0xCCD7]:
-            reward -= 1
+        if self.isBattle():
+            reward += self.rewardPlayersSubstituteHp(
+                primary_memo_before, self.pyboy.memory
+            )
+            reward += self.rewardEnemySubstituteHp(
+                primary_memo_before, self.pyboy.memory
+            )
+            reward += self.rewardEnemyHp(primary_memo_before, self.pyboy.memory)
+            reward += self.rewardEnemyStatus(primary_memo_before, self.pyboy.memory)
+            reward += self.rewardPokemonCurrentHP1(
+                primary_memo_before, self.pyboy.memory
+            )
+            reward += self.rewardPokemonStatus1(primary_memo_before, self.pyboy.memory)
+            reward += self.rewardCriticalHitFlag(primary_memo_before, self.pyboy.memory)
+            reward += self.rewardOneHitKOFlag(primary_memo_before, self.pyboy.memory)
 
-        # Enemy Substitute HP
-        if primary_memo_before[0xCCD8] > self.pyboy.memory[0xCCD8]:
-            reward += 1
-        elif primary_memo_before[0xCCD8] < self.pyboy.memory[0xCCD8]:
-            reward -= 1
+        reward += self.rewardPokedexOwn(primary_memo_before, self.pyboy.memory)
+        reward += self.rewardPokedexSeen(primary_memo_before, self.pyboy.memory)
+        reward += self.rewardBadges(primary_memo_before, self.pyboy.memory)
 
-        # Player move that the enemy disabled
-        if primary_memo_before[0xCCEE] != self.pyboy.memory[0xCCEE]:
-            reward += 1 if self.pyboy.memory[0xCCEE] == 0 else -1
-
-        # Enemy move that the player disabled
-        if (
-            primary_memo_before[0xCCEF] != self.pyboy.memory[0xCCEF]
-            and self.pyboy.memory[0xCCEF] != 0
-        ):
-            reward += 1
-
-        # Enemy's HP
-        if (
-            primary_memo_before[0xCFE7] << 8 | primary_memo_before[0xCFE6]
-            > self.pyboy.memory[0xCFE7] << 8 | self.pyboy.memory[0xCFE6]
-        ):
-            reward += 1
-
-        # Enemy's Status
-        reward += self.rewardStatus(
-            primary_memo_before[0xCFE8], self.pyboy.memory[0xCFE8]
+        reward += self.rewardEventFlag(
+            self.startersBack(primary_memo_before),
+            self.startersBack(self.pyboy.memory),
+            "Starters Back",
         )
 
-        # Pokémon 1st Slot (In-Battle)
-        if (
-            primary_memo_before[0xD016] << 8 | primary_memo_before[0xD015]
-            < self.pyboy.memory[0xD016] << 8 | self.pyboy.memory[0xD015]
-        ):  # Current HP
-            reward += 1
-
-        # Status
-        reward -= self.rewardStatus(
-            primary_memo_before[0xD018], self.pyboy.memory[0xD018]
+        reward += self.rewardEventFlag(
+            self.haveTownMap(primary_memo_before),
+            self.haveTownMap(self.pyboy.memory),
+            "Have Town map?",
         )
 
-        # Critical Hit / OHKO Flag
-        if primary_memo_before[0xD05E] != self.pyboy.memory[0xD05E]:
-            reward += self.pyboy.memory[0xD05E]
-
-        if (
-            primary_memo_before[0xD05F] != self.pyboy.memory[0xD05F]
-            and self.pyboy.memory[0xD05F] == 1
-        ):
-            reward += 1
-
-        # Pokémon 1
-        if (
-            primary_memo_before[0xD16D] << 8 | primary_memo_before[0xD16C]
-            < self.pyboy.memory[0xD16D] << 8 | self.pyboy.memory[0xD16C]
-        ):  # Current HP
-            reward += 1
-        elif (
-            primary_memo_before[0xD16D] << 8 | primary_memo_before[0xD16C]
-            > self.pyboy.memory[0xD16D] << 8 | self.pyboy.memory[0xD16C]
-        ):
-            reward -= 1
-
-        reward -= self.rewardStatus(
-            primary_memo_before[0xD16F], self.pyboy.memory[0xD16F]
-        )  # Status
-
-        if primary_memo_before[0xD18C] < self.pyboy.memory[0xD18C]:  # Level
-            reward += 1
-        elif primary_memo_before[0xD18C] > self.pyboy.memory[0xD18C]:
-            reward -= 1
-
-        # Pokémon 2
-        if (
-            primary_memo_before[0xD199] << 8 | primary_memo_before[0xD198]
-            < self.pyboy.memory[0xD199] << 8 | self.pyboy.memory[0xD198]
-        ):  # Current HP
-            reward += 1
-        elif (
-            primary_memo_before[0xD199] << 8 | primary_memo_before[0xD198]
-            > self.pyboy.memory[0xD199] << 8 | self.pyboy.memory[0xD198]
-        ):
-            reward -= 1
-
-        reward -= self.rewardStatus(
-            primary_memo_before[0xD19B], self.pyboy.memory[0xD19B]
-        )  # Status
-
-        if primary_memo_before[0xD1B8] < self.pyboy.memory[0xD1B8]:  # Level
-            reward += 1
-        elif primary_memo_before[0xD1B8] > self.pyboy.memory[0xD1B8]:
-            reward -= 1
-
-        # Pokémon 3
-        if (
-            primary_memo_before[0xD1C5] << 8 | primary_memo_before[0xD1C4]
-            < self.pyboy.memory[0xD1C5] << 8 | self.pyboy.memory[0xD1C4]
-        ):  # Current HP
-            reward += 1
-        elif (
-            primary_memo_before[0xD1C5] << 8 | primary_memo_before[0xD1C4]
-            > self.pyboy.memory[0xD1C5] << 8 | self.pyboy.memory[0xD1C4]
-        ):
-            reward -= 1
-
-        reward -= self.rewardStatus(
-            primary_memo_before[0xD1C7], self.pyboy.memory[0xD1C7]
-        )  # Status
-
-        if primary_memo_before[0xD1E4] < self.pyboy.memory[0xD1E4]:  # Level
-            reward += 1
-        elif primary_memo_before[0xD1E4] > self.pyboy.memory[0xD1E4]:
-            reward -= 1
-
-        # Pokémon 4
-        if (
-            primary_memo_before[0xD1F1] << 8 | primary_memo_before[0xD1F0]
-            < self.pyboy.memory[0xD1F1] << 8 | self.pyboy.memory[0xD1F0]
-        ):  # Current HP
-            reward += 1
-        elif (
-            primary_memo_before[0xD1F1] << 8 | primary_memo_before[0xD1F0]
-            > self.pyboy.memory[0xD1F1] << 8 | self.pyboy.memory[0xD1F0]
-        ):
-            reward -= 1
-
-        reward -= self.rewardStatus(
-            primary_memo_before[0xD1F3], self.pyboy.memory[0xD1F3]
-        )  # Status
-
-        if primary_memo_before[0xD210] < self.pyboy.memory[0xD210]:  # Level
-            reward += 1
-        elif primary_memo_before[0xD210] > self.pyboy.memory[0xD210]:
-            reward -= 1
-
-        # Pokémon 5
-        if (
-            primary_memo_before[0xD21D] << 8 | primary_memo_before[0xD21C]
-            < self.pyboy.memory[0xD21D] << 8 | self.pyboy.memory[0xD21C]
-        ):  # Current HP
-            reward += 1
-        elif (
-            primary_memo_before[0xD21D] << 8 | primary_memo_before[0xD21C]
-            > self.pyboy.memory[0xD21D] << 8 | self.pyboy.memory[0xD21C]
-        ):
-            reward -= 1
-
-        reward -= self.rewardStatus(
-            primary_memo_before[0xD21F], self.pyboy.memory[0xD21F]
-        )  # Status
-
-        if primary_memo_before[0xD23C] < self.pyboy.memory[0xD23C]:  # Level
-            reward += 1
-        elif primary_memo_before[0xD23C] > self.pyboy.memory[0xD23C]:
-            reward -= 1
-
-        # Pokémon 6
-        if (
-            primary_memo_before[0xD249] << 8 | primary_memo_before[0xD248]
-            < self.pyboy.memory[0xD249] << 8 | self.pyboy.memory[0xD248]
-        ):  # Current HP
-            reward += 1
-        elif (
-            primary_memo_before[0xD249] << 8 | primary_memo_before[0xD248]
-            > self.pyboy.memory[0xD249] << 8 | self.pyboy.memory[0xD248]
-        ):
-            reward -= 1
-
-        reward -= self.rewardStatus(
-            primary_memo_before[0xD24B], self.pyboy.memory[0xD24B]
-        )  # Status
-
-        if primary_memo_before[0xD268] < self.pyboy.memory[0xD268]:  # Level
-            reward += 1
-        elif primary_memo_before[0xD268] > self.pyboy.memory[0xD268]:
-            reward -= 1
-
-        # Pokedex
-        for i in range(0xD2F7, 0xD31C):
-            reward += self.rewardPokedex(primary_memo_before[i], self.pyboy.memory[i])
-
-        # Miscellaneous
-        reward += self.rewardBadges(
-            primary_memo_before[0xD356], self.pyboy.memory[0xD356]
+        reward += self.rewardEventFlag(
+            self.haveOaksParcel(primary_memo_before),
+            self.haveOaksParcel(self.pyboy.memory),
+            "Have Oak's Parcel?",
         )
 
-        # Starters Back?
-        if (
-            primary_memo_before[0xD5AB] != self.pyboy.memory[0xD5AB]
-            and self.pyboy.memory[0xD5AB]
-        ):
-            reward += 30
-            self.updateDoneGraph("Starters Back", True)
+        reward += self.rewardEventFlag(
+            self.fossilizedPokemon(primary_memo_before),
+            self.fossilizedPokemon(self.pyboy.memory),
+            "Fossilized Pokémon?",
+        )
 
-        # Have Town map?
-        if (
-            primary_memo_before[0xD5F3] != self.pyboy.memory[0xD5F3]
-            and self.pyboy.memory[0xD5F3]
-        ):
-            reward += 30
-            self.updateDoneGraph("Have Town map?", True)
+        reward += self.rewardEventFlag(
+            self.positionInAir(primary_memo_before),
+            self.positionInAir(self.pyboy.memory),
+            "Position in Air",
+        )
 
-        # Have Oak's Parcel?
-        if (
-            primary_memo_before[0xD60D] != self.pyboy.memory[0xD60D]
-            and self.pyboy.memory[0xD60D]
-        ):
-            reward += 30
-            self.updateDoneGraph("Have Oak's Parcel?", True)
+        reward += self.rewardEventFlag(
+            self.didYouGetLaprasYet(primary_memo_before),
+            self.didYouGetLaprasYet(self.pyboy.memory),
+            "Did you get Lapras Yet?",
+        )
 
-        # Fossilized Pokémon?
-        if (
-            primary_memo_before[0xD710] != self.pyboy.memory[0xD710]
-            and self.pyboy.memory[0xD710]
-        ):
-            reward += 30
-            self.updateDoneGraph("Fossilized Pokémon?", True)
+        reward += self.rewardEventFlag(
+            self.debugNewGame(primary_memo_before),
+            self.debugNewGame(self.pyboy.memory),
+            "Debug New Game",
+        )
 
-        # Did you get Lapras Yet?
-        if (
-            primary_memo_before[0xD72E] != self.pyboy.memory[0xD72E]
-            and self.pyboy.memory[0xD72E]
-        ):
-            reward += 30
-            self.updateDoneGraph("Did you get Lapras Yet?", True)
+        reward += self.rewardEventFlag(
+            self.foughtGiovanniYet(primary_memo_before),
+            self.foughtGiovanniYet(self.pyboy.memory),
+            "Fought Giovanni Yet?",
+        )
 
-        # Fought Giovanni Yet?
-        if (
-            primary_memo_before[0xD751] != self.pyboy.memory[0xD751]
-            and self.pyboy.memory[0xD751]
-        ):
-            reward += 30
-            self.updateDoneGraph("Fought Giovanni Yet?", True)
+        reward += self.rewardEventFlag(
+            self.foughtBrockYet(primary_memo_before),
+            self.foughtBrockYet(self.pyboy.memory),
+            "Fought Brock Yet?",
+        )
 
-        # Fought Brock Yet?
-        if (
-            primary_memo_before[0xD755] != self.pyboy.memory[0xD755]
-            and self.pyboy.memory[0xD755]
-        ):
-            reward += 30
-            self.updateDoneGraph("Fought Brock Yet?", True)
+        reward += self.rewardEventFlag(
+            self.foughtMistyYet(primary_memo_before),
+            self.foughtMistyYet(self.pyboy.memory),
+            "Fought Misty Yet?",
+        )
 
-        # Fought Misty Yet?
-        if (
-            primary_memo_before[0xD75E] != self.pyboy.memory[0xD75E]
-            and self.pyboy.memory[0xD75E]
-        ):
-            reward += 30
-            self.updateDoneGraph("Fought Misty Yet?", True)
+        reward += self.rewardEventFlag(
+            self.foughtLtSurgeYet(primary_memo_before),
+            self.foughtLtSurgeYet(self.pyboy.memory),
+            "Fought Lt. Surge Yet?",
+        )
 
-        # Fought Lt. Surge Yet?
-        if (
-            primary_memo_before[0xD773] != self.pyboy.memory[0xD773]
-            and self.pyboy.memory[0xD773]
-        ):
-            reward += 30
-            self.updateDoneGraph("Fought Lt. Surge Yet?", True)
+        reward += self.rewardEventFlag(
+            self.foughtErikaYet(primary_memo_before),
+            self.foughtErikaYet(self.pyboy.memory),
+            "Fought Erika Yet?",
+        )
 
-        # Fought Erika Yet?
-        if (
-            primary_memo_before[0xD77C] != self.pyboy.memory[0xD77C]
-            and self.pyboy.memory[0xD77C]
-        ):
-            reward += 30
-            self.updateDoneGraph("Fought Erika Yet?", True)
+        reward += self.rewardEventFlag(
+            self.foughtArticunoYet(primary_memo_before),
+            self.foughtArticunoYet(self.pyboy.memory),
+            "Fought Articuno Yet?",
+        )
 
-        # Fought Articuno Yet?
-        if (
-            primary_memo_before[0xD782] != self.pyboy.memory[0xD782]
-            and self.pyboy.memory[0xD782]
-        ):
-            reward += 30
-            self.updateDoneGraph("Fought Articuno Yet?", True)
+        reward += self.rewardEventFlag(
+            self.foughtKogaYet(primary_memo_before),
+            self.foughtKogaYet(self.pyboy.memory),
+            "Fought Koga Yet?",
+        )
 
-        # Fought Koga Yet?
-        if (
-            primary_memo_before[0xD792] != self.pyboy.memory[0xD792]
-            and self.pyboy.memory[0xD792]
-        ):
-            reward += 30
-            self.updateDoneGraph("Fought Koga Yet?", True)
+        reward += self.rewardEventFlag(
+            self.foughtBlaineYet(primary_memo_before),
+            self.foughtBlaineYet(self.pyboy.memory),
+            "Fought Blaine Yet?",
+        )
 
-        # Fought Blaine Yet?
-        if (
-            primary_memo_before[0xD79A] != self.pyboy.memory[0xD79A]
-            and self.pyboy.memory[0xD79A]
-        ):
-            reward += 30
-            self.updateDoneGraph("Fought Blaine Yet?", True)
+        reward += self.rewardEventFlag(
+            self.foughtSabrinaYet(primary_memo_before),
+            self.foughtSabrinaYet(self.pyboy.memory),
+            "Fought Sabrina Yet?",
+        )
 
-        # Fought Sabrina Yet?
-        if (
-            primary_memo_before[0xD7B3] != self.pyboy.memory[0xD7B3]
-            and self.pyboy.memory[0xD7B3]
-        ):
-            reward += 30
-            self.updateDoneGraph("Fought Sabrina Yet?", True)
+        reward += self.rewardEventFlag(
+            self.foughtZapdosYet(primary_memo_before),
+            self.foughtZapdosYet(self.pyboy.memory),
+            "Fought Zapdos Yet?",
+        )
 
-        # Fought Zapdos Yet?
-        if (
-            primary_memo_before[0xD7D4] != self.pyboy.memory[0xD7D4]
-            and self.pyboy.memory[0xD7D4]
-        ):
-            reward += 30
-            self.updateDoneGraph("Fought Zapdos Yet?", True)
+        reward += self.rewardEventFlag(
+            self.foughtSnorlaxYetVermilion(primary_memo_before),
+            self.foughtSnorlaxYetVermilion(self.pyboy.memory),
+            "Fought Snorlax Yet (Vermilion)",
+        )
 
-        # Fought Snorlax Yet (Vermilion)
-        if (
-            primary_memo_before[0xD7D8] != self.pyboy.memory[0xD7D8]
-            and self.pyboy.memory[0xD7D8]
-        ):
-            reward += 30
-            self.updateDoneGraph("Fought Snorlax Yet (Vermilion)", True)
+        reward += self.rewardEventFlag(
+            self.foughtSnorlaxYetCeladon(primary_memo_before),
+            self.foughtSnorlaxYetCeladon(self.pyboy.memory),
+            "Fought Snorlax Yet? (Celadon)",
+        )
 
-        # Fought Snorlax Yet? (Celadon)
-        if (
-            primary_memo_before[0xD7E0] != self.pyboy.memory[0xD7E0]
-            and self.pyboy.memory[0xD7E0]
-        ):
-            reward += 30
-            self.updateDoneGraph("Fought Snorlax Yet? (Celadon)", True)
+        reward += self.rewardEventFlag(
+            self.foughtMoltresYet(primary_memo_before),
+            self.foughtMoltresYet(self.pyboy.memory),
+            "Fought Moltres Yet?",
+        )
 
-        # Fought Moltres Yet?
-        if (
-            primary_memo_before[0xD7EE] != self.pyboy.memory[0xD7EE]
-            and self.pyboy.memory[0xD7EE]
-        ):
-            reward += 30
-            self.updateDoneGraph("Fought Moltres Yet", True)
-
-        # Opponent Trainer’s Pokémon
-        # Pokémon 1
-        if (
-            primary_memo_before[0xD8A6] << 8 | primary_memo_before[0xD8A5]
-            > self.pyboy.memory[0xD8A6] << 8 | self.pyboy.memory[0xD8A5]
-        ):  # Current HP
-            reward += 1
-        elif (
-            primary_memo_before[0xD8A6] << 8 | primary_memo_before[0xD8A5]
-            < self.pyboy.memory[0xD8A6] << 8 | self.pyboy.memory[0xD8A5]
-        ):
-            reward -= 1
-
-        reward += self.rewardStatus(
-            primary_memo_before[0xD8A8], self.pyboy.memory[0xD8A8]
-        )  # Status
-
-        # Pokémon 2
-        if (
-            primary_memo_before[0xD8D2] << 8 | primary_memo_before[0xD8D1]
-            > self.pyboy.memory[0xD8D2] << 8 | self.pyboy.memory[0xD8D1]
-        ):  # Current HP
-            reward += 1
-        elif (
-            primary_memo_before[0xD8D2] << 8 | primary_memo_before[0xD8D1]
-            < self.pyboy.memory[0xD8D2] << 8 | self.pyboy.memory[0xD8D1]
-        ):
-            reward -= 1
-
-        reward += self.rewardStatus(
-            primary_memo_before[0xD8D4], self.pyboy.memory[0xD8D4]
-        )  # Status
-
-        # Pokémon 3
-        if (
-            primary_memo_before[0xD8FE] << 8 | primary_memo_before[0xD8FD]
-            > self.pyboy.memory[0xD8FE] << 8 | self.pyboy.memory[0xD8FD]
-        ):  # Current HP
-            reward += 1
-        elif (
-            primary_memo_before[0xD8FE] << 8 | primary_memo_before[0xD8FD]
-            < self.pyboy.memory[0xD8FE] << 8 | self.pyboy.memory[0xD8FD]
-        ):
-            reward -= 1
-
-        reward += self.rewardStatus(
-            primary_memo_before[0xD900], self.pyboy.memory[0xD900]
-        )  # Status
-
-        # Pokémon 4
-        if (
-            primary_memo_before[0xD92A] << 8 | primary_memo_before[0xD929]
-            > self.pyboy.memory[0xD92A] << 8 | self.pyboy.memory[0xD929]
-        ):  # Current HP
-            reward += 1
-        elif (
-            primary_memo_before[0xD92A] << 8 | primary_memo_before[0xD929]
-            < self.pyboy.memory[0xD92A] << 8 | self.pyboy.memory[0xD929]
-        ):
-            reward -= 1
-
-        reward += self.rewardStatus(
-            primary_memo_before[0xD92C], self.pyboy.memory[0xD92C]
-        )  # Status
-
-        # Pokémon 5
-        if (
-            primary_memo_before[0xD956] << 8 | primary_memo_before[0xD955]
-            > self.pyboy.memory[0xD956] << 8 | self.pyboy.memory[0xD955]
-        ):  # Current HP
-            reward += 1
-        elif (
-            primary_memo_before[0xD956] << 8 | primary_memo_before[0xD955]
-            < self.pyboy.memory[0xD956] << 8 | self.pyboy.memory[0xD955]
-        ):
-            reward -= 1
-
-        reward += self.rewardStatus(
-            primary_memo_before[0xD958], self.pyboy.memory[0xD958]
-        )  # Status
-
-        # Pokémon 6
-        if (
-            primary_memo_before[0xD982] << 8 | primary_memo_before[0xD981]
-            > self.pyboy.memory[0xD982] << 8 | self.pyboy.memory[0xD981]
-        ):  # Current HP
-            reward += 1
-        elif (
-            primary_memo_before[0xD982] << 8 | primary_memo_before[0xD981]
-            < self.pyboy.memory[0xD982] << 8 | self.pyboy.memory[0xD981]
-        ):
-            reward -= 1
-
-        reward += self.rewardStatus(
-            primary_memo_before[0xD984], self.pyboy.memory[0xD984]
-        )  # Status
+        reward += self.rewardEventFlag(
+            self.isSSAnneHere(primary_memo_before),
+            self.isSSAnneHere(self.pyboy.memory),
+            "Is SS Anne here?",
+        )
 
         reward += self.rewardDialog()
+        reward += self.rewardBattle()
         reward += self.rewardPosition()
         reward += self.rewardMap()
         reward += self.panishWorldIllegalMoves(primary_memo_before, reward)
@@ -893,6 +614,12 @@ class Emulator:
         reward -= 0.01
 
         return reward
+
+    def rewardBattle(self):
+        if not self.isBattle():
+            return 0.0
+
+        return 0.2 - 0.01 * self._battleCount
 
     def mask_action(self, action: int) -> int:
         if self.menuCooldown > 0:
@@ -980,25 +707,56 @@ class Emulator:
 
         self.visitedPositionsCount[position] += 1
 
-    def rewardPokedex(self, before, after):
+    def battleCount(self, before, after):
+        if not self.isBattle() or self.numberOfTurnsInCurrentBattle(
+            before
+        ) < self.numberOfTurnsInCurrentBattle(after):
+            self._battleCount = 0
+        else:
+            self._battleCount += 1
+
+    def rewardPokedexOwn(self, before, after):
         reward = 0
 
-        for i in range(8):
-            if after & (1 << i) and before & (1 << i) != after & (1 << i):
-                reward += 20
-                self.updateDoneGraph(f"rewardPokedex-{i}", True)
+        for i, (bit_before, bit_after) in enumerate(
+            zip(self.pokedexOwn(before), self.pokedexOwn(after))
+        ):
+            if bit_before == 0 and bit_after == 1:
+                reward += 100
+                self.updateDoneGraph(f"rewardPokedexOwn-{i}", True)
+
+        return reward
+
+    def rewardPokedexSeen(self, before, after):
+        reward = 0
+
+        for i, (bit_before, bit_after) in enumerate(
+            zip(self.pokedexSeen(before), self.pokedexSeen(after))
+        ):
+            if bit_before == 0 and bit_after == 1:
+                reward += 50
+                self.updateDoneGraph(f"rewardPokedexSeen-{i}", True)
 
         return reward
 
     def rewardBadges(self, before, after):
         reward = 0
 
-        for i in range(8):
-            if after & (1 << i) and before & (1 << i) != after & (1 << i):
-                reward += 40
+        for i, (bit_before, bit_after) in enumerate(
+            zip(self.badges(before), self.badges(after))
+        ):
+            if bit_before == 0 and bit_after == 1:
+                reward += 1000
                 self.updateDoneGraph(f"rewardBadges-{i}", True)
 
         return reward
+
+    def rewardEventFlag(self, before, after, name):
+        if before == 0 and after == 1:
+            self.updateDoneGraph(name, True)
+            return 500
+
+        return 0
 
     def panishSameAction(self, action, reward):
         if reward > 0:
@@ -1178,11 +936,13 @@ class Emulator:
 
         return reward
 
-    def reset(self, stateStart=False):
+    def reset(self, stateStart=False, path=None):
         base = f"roms/{self.game}/saves"
         dir = "start"
 
-        if not stateStart:
+        if path is not None:
+            dir = path
+        elif not stateStart:
             dir = random.choice(os.listdir(base))
 
         try:
@@ -1230,6 +990,7 @@ class Emulator:
         self.menuCooldown = 0
         self.menuToggleStreak = 0
         self.buffer.clear()
+        self._battleCount = 0
 
     def data(self):
         data = []
@@ -1254,8 +1015,6 @@ class Emulator:
 
         data += self.moneyData()
 
-        data += self.rivalData()
-
         data += self.miscellaneousData()
 
         data += self.storedItemsData()
@@ -1266,22 +1025,30 @@ class Emulator:
 
         data += self.opponentTrainersPokemonData()
 
+        data += self.storedPokemonData()
+
         return data
 
+    def storedPokemonData(self):
+        data = [self.pyboy.memory[i] for i in range(0xDA80, 0xDD2A)]
+
+        return data if self.isMenu() else [0] * len(data)
+
     def modeFlags(self):
-        return [
-            int(self.isWorld()),
-            int(self.isMenu()),
-            int(self.isDialog()),
-            int(self.isBattle()),
-        ]
+        if self.isBattle():
+            return 1
+        elif self.isDialog():
+            return 2
+        elif self.isMenu():
+            return 3
+        else:
+            return 0
 
     def dialogId(self, memory):
         return memory[0xCF13]
 
     def inputs(self):
-        mode = self.modeFlags()
-        mode = torch.tensor([mode], dtype=torch.long)
+        mode = torch.tensor([self.modeFlags()], dtype=torch.long)
 
         continuous = torch.tensor(self.data(), dtype=torch.float32)
 
@@ -1301,24 +1068,6 @@ class Emulator:
         else:
             dialog_id = torch.tensor([0], dtype=torch.long)
 
-        if self.isBattle():
-            battle_type = torch.tensor([self.pyboy.memory[0xD057]], dtype=torch.long)
-            pokemon_status = torch.tensor([self.pyboy.memory[0xD018]], dtype=torch.long)
-            move_type = torch.tensor([self.pyboy.memory[0xCFD5]], dtype=torch.long)
-            pokemon_type = torch.tensor([self.pyboy.memory[0xD019]], dtype=torch.long)
-            battle_state = (
-                self.pyboy.memory[0xD062]
-                | (self.pyboy.memory[0xD063] << 8)
-                | (self.pyboy.memory[0xD064] << 16)
-            )
-            battle_state = torch.tensor([battle_state], dtype=torch.long)
-        else:
-            battle_type = torch.tensor([0], dtype=torch.long)
-            pokemon_status = torch.tensor([0], dtype=torch.long)
-            move_type = torch.tensor([0], dtype=torch.long)
-            pokemon_type = torch.tensor([0], dtype=torch.long)
-            battle_state = torch.tensor([0], dtype=torch.long)
-
         return {
             "mode": mode,
             "continuous": continuous,
@@ -1326,11 +1075,6 @@ class Emulator:
             "pos_x": pos_x,
             "pos_y": pos_y,
             "dialog_id": dialog_id,
-            "battle_type": battle_type,
-            "pokemon_status": pokemon_status,
-            "move_type": move_type,
-            "pokemon_type": pokemon_type,
-            "battle_state": battle_state,
         }
 
     def dialogData(self):
@@ -1348,12 +1092,14 @@ class Emulator:
         return data if self.isWorld() else [0] * len(data)
 
     def isBattle(self):
-        return True if self.pyboy.memory[0xD057] else False
+        return True if self.typeOfBattle(self.pyboy.memory) else False
 
     def isMenu(self):
         return (
             True
-            if self.isBlocked() and self.dialogId(self.pyboy.memory) == 0
+            if self.isBlocked()
+            and self.dialogId(self.pyboy.memory) == 0
+            and not self.isBattle()
             else False
         )
 
@@ -1384,39 +1130,40 @@ class Emulator:
         )
 
     def menuData(self):
-        data = [self.pyboy.memory[i] for i in range(0xCC24, 0xCC30)]
+        data = [self.pyboy.memory[i] for i in range(0xCC24, 0xCC36)]
 
-        return data if self.isMenu() else [0] * len(data)
+        return data if self.isMenu() or self.isBattle() else [0] * len(data)
 
     def battleData(self):
-        data = [
-            self.pyboy.memory[0xCCD5],
-            self.playersSubstituteHp(self.pyboy.memory),
-            self.enemySubstituteHp(self.pyboy.memory),
-            self.moveMenuType(self.pyboy.memory),
-            self.playerSelectedMove(self.pyboy.memory),
-            self.enemySelectedMove(self.pyboy.memory),
-            self.yourMoveUsed(self.pyboy.memory),
-            self.yourMoveType(self.pyboy.memory),
-            self.yourMoveEffect(self.pyboy.memory),
-            self.enemyMoveId(self.pyboy.memory),
-            self.enemyMoveEffect(self.pyboy.memory),
-            self.enemyMovePower(self.pyboy.memory),
-            self.enemyMoveType(self.pyboy.memory),
-            self.enemyMoveAccuracy(self.pyboy.memory),
-            self.enemyMoveMaxPP(self.pyboy.memory),
-            self.playerMoveId(self.pyboy.memory),
-            self.playerMovePower(self.pyboy.memory),
-            self.playerMoveAccuracy(self.pyboy.memory),
-            self.playerMoveMaxPP(self.pyboy.memory),
-            self.enemyPokemonInternalId1(self.pyboy.memory),
-            self.playerPokemonInterna2Id(self.pyboy.memory),
-            self.enemyPokemonInternalId2(self.pyboy.memory),
-            self.enemyHp(self.pyboy.memory),
-            self.enemyLevel1(self.pyboy.memory),
-        ] + self.enemyStatus(self.pyboy.memory)
-        (
-            +[
+        data = (
+            [
+                self.numberOfTurnsInCurrentBattle(self.pyboy.memory),
+                self.playersSubstituteHp(self.pyboy.memory),
+                self.enemySubstituteHp(self.pyboy.memory),
+                self.moveMenuType(self.pyboy.memory),
+                self.playerSelectedMove(self.pyboy.memory),
+                self.enemySelectedMove(self.pyboy.memory),
+                self.yourMoveUsed(self.pyboy.memory),
+                self.yourMoveType(self.pyboy.memory),
+                self.yourMoveEffect(self.pyboy.memory),
+                self.enemyMoveId(self.pyboy.memory),
+                self.enemyMoveEffect(self.pyboy.memory),
+                self.enemyMovePower(self.pyboy.memory),
+                self.enemyMoveType(self.pyboy.memory),
+                self.enemyMoveAccuracy(self.pyboy.memory),
+                self.enemyMoveMaxPP(self.pyboy.memory),
+                self.playerMoveId(self.pyboy.memory),
+                self.playerMovePower(self.pyboy.memory),
+                self.playerMoveAccuracy(self.pyboy.memory),
+                self.playerMoveMaxPP(self.pyboy.memory),
+                self.enemyPokemonInternalId1(self.pyboy.memory),
+                self.playerPokemonInterna2Id(self.pyboy.memory),
+                self.enemyPokemonInternalId2(self.pyboy.memory),
+                self.enemyHp(self.pyboy.memory),
+                self.enemyLevel1(self.pyboy.memory),
+            ]
+            + self.enemyStatus(self.pyboy.memory)
+            + [
                 self.enemyType1(self.pyboy.memory),
                 self.enemyType2(self.pyboy.memory),
                 self.enemyMove1(self.pyboy.memory),
@@ -1454,7 +1201,7 @@ class Emulator:
                 self.pokemonAttackAndDefenseIVs1(self.pyboy.memory),
                 self.pokemonSpeedAndSpecialIVs1(self.pyboy.memory),
                 self.pokemonLevel1(self.pyboy.memory),
-                self.pokemonMaxHP1(self.pyboy.memory),
+                self.pokemonMaxHp1(self.pyboy.memory),
                 self.pokemonAttack1(self.pyboy.memory),
                 self.pokemonDefense1(self.pyboy.memory),
                 self.pokemonSpeed1(self.pyboy.memory),
@@ -1483,7 +1230,6 @@ class Emulator:
     def playerData(self):
         data = (
             [self.pyboy.memory[i] for i in range(0xD163, 0xD16F)]
-            + self.bitsExtractor(self.pyboy.memory[0xCFE9], 3, 6)
             + [self.pyboy.memory[i] for i in range(0xD170, 0xD19B)]
             + self.bitsExtractor(self.pyboy.memory[0xD19B], 3, 6)
             + [self.pyboy.memory[i] for i in range(0xD19C, 0xD1C7)]
@@ -1504,9 +1250,7 @@ class Emulator:
         )
 
     def pokedexData(self):
-        data = [self.pyboy.memory[i] for i in range(0xD2F7, 0xD31D)]
-
-        return data
+        return self.pokedexOwn(self.pyboy.memory) + self.pokedexSeen(self.pyboy.memory)
 
     def itemsData(self):
         data = [self.pyboy.memory[i] for i in range(0xD31D, 0xD347)]
@@ -1514,84 +1258,59 @@ class Emulator:
         return data if self.isMenu() or self.isBattle() else [0] * len(data)
 
     def moneyData(self):
-        b0 = self.pyboy.memory[0xD347]
-        b1 = self.pyboy.memory[0xD348]
-        b2 = self.pyboy.memory[0xD349]
-
-        money = (
-            (b0 & 0x0F) * 10**5
-            + (b0 >> 4) * 10**6
-            + (b1 & 0x0F) * 10**3
-            + (b1 >> 4) * 10**4
-            + (b2 & 0x0F) * 10**1
-            + (b2 >> 4) * 10**2
+        return (
+            [self.playerMoney(self.pyboy.memory)]
+            if self.isMenu() or self.isDialog()
+            else [0]
         )
 
-        return [money] if self.isMenu() else [0]
-
-    def rivalData(self):
-        data = [self.pyboy.memory[i] for i in range(0xD347, 0xD350)]
-
-        return data if self.isBattle() else [0] * len(data)
-
     def miscellaneousData(self):
-        return self.bitsExtractor(self.pyboy.memory[0xD356]) + [
-            self.pyboy.memory[i] for i in range(0xD35F, 0xD361)
-        ]
+        return self.badges(self.pyboy.memory)
 
     def storedItemsData(self):
-        data = [self.pyboy.memory[i] for i in range(0xD53A, 0xD560)]
+        data = self.storedItems(self.pyboy.memory)
 
         return data if self.isMenu() else [0] * len(data)
 
     def gameCoinsData(self):
-        b0 = self.pyboy.memory[0xD5A4]
-        b1 = self.pyboy.memory[0xD5A5]
-
-        coins = (
-            (b0 & 0x0F) * 10**1
-            + (b0 >> 4) * 10**2
-            + (b1 & 0x0F) * 10**3
-            + (b1 >> 4) * 10**4
-        )
-
-        return [coins] if self.isMenu() else [0]
+        return [self.gameCoins(self.pyboy.memory)] if self.isMenu() else [0]
 
     def eventFlagsData(self):
-        return [
-            self.pyboy.memory[0xD5AB],
-            self.pyboy.memory[0xD5C0],
-            self.pyboy.memory[0xD5F3],
-            self.pyboy.memory[0xD60D],
-            self.pyboy.memory[0xD700],
-            self.pyboy.memory[0xD70B],
-            self.pyboy.memory[0xD70C],
-            self.pyboy.memory[0xD70D],
-            self.pyboy.memory[0xD70E],
-            self.pyboy.memory[0xD710],
-            self.pyboy.memory[0xD714],
-            self.pyboy.memory[0xD72E],
-            self.pyboy.memory[0xD732],
-            self.pyboy.memory[0xD751],
-            self.pyboy.memory[0xD755],
-            self.pyboy.memory[0xD75E],
-            self.pyboy.memory[0xD773],
-            self.pyboy.memory[0xD77C],
-            self.pyboy.memory[0xD782],
-            self.pyboy.memory[0xD790],
-            self.pyboy.memory[0xD792],
-            self.pyboy.memory[0xD79A],
-            self.pyboy.memory[0xD7B3],
-            self.pyboy.memory[0xD7D4],
-            self.pyboy.memory[0xD7D8],
-            self.pyboy.memory[0xD7E0],
-            self.pyboy.memory[0xD7EE],
-            self.pyboy.memory[0xD803],
-            self.pyboy.memory[0xD85F],
-        ]
+        return (
+            [
+                self.startersBack(self.pyboy.memory),
+                self.pyboy.memory[0xD5C0] & 1,
+                self.haveTownMap(self.pyboy.memory),
+                self.haveOaksParcel(self.pyboy.memory),
+                self.bikeSpeed(self.pyboy.memory),
+            ]
+            + self.flyAnywhere(self.pyboy.memory)
+            + [
+                self.safariZoneTime(self.pyboy.memory),
+                self.fossilizedPokemon(self.pyboy.memory),
+                self.positionInAir(self.pyboy.memory),
+                self.didYouGetLaprasYet(self.pyboy.memory),
+                self.debugNewGame(self.pyboy.memory),
+                self.foughtGiovanniYet(self.pyboy.memory),
+                self.foughtBrockYet(self.pyboy.memory),
+                self.foughtMistyYet(self.pyboy.memory),
+                self.foughtLtSurgeYet(self.pyboy.memory),
+                self.foughtErikaYet(self.pyboy.memory),
+                self.foughtArticunoYet(self.pyboy.memory),
+                self.foughtKogaYet(self.pyboy.memory),
+                self.foughtBlaineYet(self.pyboy.memory),
+                self.foughtSabrinaYet(self.pyboy.memory),
+                self.foughtZapdosYet(self.pyboy.memory),
+                self.foughtSnorlaxYetVermilion(self.pyboy.memory),
+                self.foughtSnorlaxYetCeladon(self.pyboy.memory),
+                self.foughtMoltresYet(self.pyboy.memory),
+                self.isSSAnneHere(self.pyboy.memory),
+                self.mewtwoCanBeCaught(self.pyboy.memory),
+            ]
+        )
 
     def opponentTrainersPokemonData(self):
-        data = [self.pyboy.memory[i] for i in range(0xD89C, 0xDA30)]
+        data = [self.pyboy.memory[i] for i in range(0xD89C, 0xD9AC)]
 
         return data if self.isBattle() else [0] * len(data)
 
@@ -1634,6 +1353,88 @@ class Emulator:
     @property
     def done(self):
         return self.terminated or self.truncated
+
+    def startersBack(self, memory):
+        return memory[0xD5AB] & 1
+
+    def haveTownMap(self, memory):
+        return memory[0xD5F3] & 1
+
+    def haveOaksParcel(self, memory):
+        return memory[0xD60D] & 1
+
+    def bikeSpeed(self, memory):
+        return memory[0xD700]
+
+    def flyAnywhere(self, memory):
+        return self.bitsExtractor(memory[0xD70B]) + self.bitsExtractor(memory[0xD70C])
+
+    def safariZoneTime(self, memory):
+        return memory[0xD70D] | (memory[0xD70E] << 8)
+
+    def fossilizedPokemon(self, memory):
+        return memory[0xD710] & 1
+
+    def positionInAir(self, memory):
+        return memory[0xD714] & 1
+
+    def didYouGetLaprasYet(self, memory):
+        return memory[0xD72E] & 1
+
+    def debugNewGame(self, memory):
+        return memory[0xD732] & 1
+
+    def foughtGiovanniYet(self, memory):
+        return memory[0xD751] & 1
+
+    def foughtBrockYet(self, memory):
+        return memory[0xD755] & 1
+
+    def foughtMistyYet(self, memory):
+        return memory[0xD75E] & 1
+
+    def foughtLtSurgeYet(self, memory):
+        return memory[0xD773] & 1
+
+    def foughtErikaYet(self, memory):
+        return memory[0xD77C] & 1
+
+    def foughtArticunoYet(self, memory):
+        return memory[0xD782] & 1
+
+    def safariGameover(self, memory):
+        return memory[0xD790] & 0x80
+
+    def foughtKogaYet(self, memory):
+        return memory[0xD792] & 1
+
+    def foughtBlaineYet(self, memory):
+        return memory[0xD79A] & 1
+
+    def foughtSabrinaYet(self, memory):
+        return memory[0xD7B3] & 1
+
+    def foughtZapdosYet(self, memory):
+        return memory[0xD7D4] & 1
+
+    def foughtSnorlaxYetVermilion(self, memory):
+        return memory[0xD7D8] & 1
+
+    def foughtSnorlaxYetCeladon(self, memory):
+        return memory[0xD7E0] & 1
+
+    def foughtMoltresYet(self, memory):
+        return memory[0xD7EE] & 1
+
+    def isSSAnneHere(self, memory):
+        return memory[0xD803] & 1
+
+    def mewtwoCanBeCaught(self, memory):
+        return memory[0xD85F] & 1
+
+    def numberOfTurnsInCurrentBattle(self, memory):
+        return memory[0xCCD5]
+
     def playersSubstituteHp(self, memory):
         return memory[0xCCD7]
 
@@ -1709,13 +1510,24 @@ class Emulator:
         return memory[0xCFE6] << 8 | memory[0xCFE7]
 
     def rewardEnemyHp(self, before, after):
-        return (self.enemyHp(before) - self.enemyHp(after)) / 65535
+        return (self.enemyHp(before) - self.enemyHp(after)) / self.enemyMaxHp(after)
 
     def enemyLevel1(self, memory):
         return memory[0xCFE8]
 
     def enemyStatus(self, memory):
         return self.bitsExtractor(memory[0xCFE9], end_bit=6)
+
+    def rewardEnemyStatus(self, before, after):
+        reward = 0
+
+        for bit_before, bit_after in zip(
+            self.enemyStatus(before), self.enemyStatus(after)
+        ):
+            if bit_before == 0 and bit_after == 1:
+                reward += 1
+
+        return reward
 
     def enemyType1(self, memory):
         return memory[0xCFEA]
@@ -1786,8 +1598,24 @@ class Emulator:
     def pokemonCurrentHP1(self, memory):
         return memory[0xD015] | (memory[0xD016] << 8)
 
+    def rewardPokemonCurrentHP1(self, before, after):
+        return (
+            self.pokemonCurrentHP1(after) - self.pokemonCurrentHP1(before)
+        ) / self.pokemonMaxHp1(after)
+
     def pokemonStatus1(self, memory):
         return self.bitsExtractor(memory[0xD018], end_bit=6)
+
+    def rewardPokemonStatus1(self, before, after):
+        reward = 0
+
+        for bit_before, bit_after in zip(
+            self.pokemonStatus1(before), self.pokemonStatus1(after)
+        ):
+            if bit_before == 0 and bit_after == 1:
+                reward += 1
+
+        return reward
 
     def pokemonType11(self, memory):
         return memory[0xD019]
@@ -1855,8 +1683,22 @@ class Emulator:
     def criticalHitFlag(self, memory):
         return memory[0xD05E] & 1
 
+    def rewardCriticalHitFlag(self, before, after):
+        return (
+            1.0
+            if self.criticalHitFlag(before) is 0 and self.criticalHitFlag(after) is 0
+            else 0.0
+        )
+
     def oneHitKOFlag(self, memory):
         return memory[0xD05E] & 2
+
+    def rewardOneHitKOFlag(self, before, after):
+        return (
+            2.0
+            if self.oneHitKOFlag(before) is 0 and self.oneHitKOFlag(after) is 0
+            else 0.0
+        )
 
     def hookedPokemonFlag(self, memory):
         return memory[0xD05F] & 1
@@ -1867,3 +1709,33 @@ class Emulator:
             + self.bitsExtractor(memory[0xD063])
             + self.bitsExtractor(memory[0xD064], 0, 3)
         )
+
+    def pokedexOwn(self, memory):
+        data = memory[0xD2F7:0xD30A]
+
+        bits = []
+        for byte in data:
+            bits.extend(self.bitsExtractor(byte))
+
+        return bits
+
+    def pokedexSeen(self, memory):
+        data = memory[0xD30A:0xD31D]
+
+        bits = []
+        for byte in data:
+            bits.extend(self.bitsExtractor(byte))
+
+        return bits
+
+    def playerMoney(self, memory):
+        return memory[0xD347] + (memory[0xD348] << 8) + (memory[0xD349] << 16)
+
+    def badges(self, memory):
+        return self.bitsExtractor(memory[0xD356])
+
+    def storedItems(self, memory):
+        return [memory[i] for i in range(0xD53A, 0xD5A0)]
+
+    def gameCoins(self, memory):
+        return memory[0xD5A4] + (memory[0xD5A5] << 8)
