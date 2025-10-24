@@ -1505,7 +1505,7 @@ class Emulator:
         return memory[0xCFE6] << 8 | memory[0xCFE7]
 
     def rewardEnemyHp(self, before, after):
-        return (self.enemyHp(before) - self.enemyHp(after)) / self.enemyMaxHp(after)
+        return (self.enemyHp(before) - self.enemyHp(after)) / self.enemyMaxHp(after) if self.enemyMaxHp(after) != 0 else 0
 
     def enemyLevel1(self, memory):
         return memory[0xCFE8]
@@ -1596,7 +1596,7 @@ class Emulator:
     def rewardPokemonCurrentHP1(self, before, after):
         return (
             self.pokemonCurrentHP1(after) - self.pokemonCurrentHP1(before)
-        ) / self.pokemonMaxHp1(after)
+        ) / self.pokemonMaxHp1(after) if self.pokemonMaxHp1(after) != 0 else 0
 
     def pokemonStatus1(self, memory):
         return self.bitsExtractor(memory[0xD018], end_bit=6)
