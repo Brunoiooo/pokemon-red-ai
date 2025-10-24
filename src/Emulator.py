@@ -875,7 +875,7 @@ class Emulator:
 
         self.visitedMaps.append(mapId)
         self.updateDoneGraph(f"rewardMap-{mapId}", True)
-        return 10.0
+        return 50.0
 
     def isSameMenuPosition(self, primary_memo_before):
         return (
@@ -1058,21 +1058,12 @@ class Emulator:
 
         continuous = torch.tensor(self.data(), dtype=torch.float32)
 
-        if self.isWorld():
-            map_id = torch.tensor([self.mapId(self.pyboy.memory)], dtype=torch.long)
-            pos_x = torch.tensor([self.positionX(self.pyboy.memory)], dtype=torch.long)
-            pos_y = torch.tensor([self.positionY(self.pyboy.memory)], dtype=torch.long)
-        else:
-            map_id = torch.tensor([0], dtype=torch.long)
-            pos_x = torch.tensor([0], dtype=torch.long)
-            pos_y = torch.tensor([0], dtype=torch.long)
-
-        if self.isDialog():
-            dialog_id = torch.tensor(
-                [self.dialogId(self.pyboy.memory)], dtype=torch.long
-            )
-        else:
-            dialog_id = torch.tensor([0], dtype=torch.long)
+        map_id = torch.tensor([self.mapId(self.pyboy.memory)], dtype=torch.long)
+        pos_x = torch.tensor([self.positionX(self.pyboy.memory)], dtype=torch.long)
+        pos_y = torch.tensor([self.positionY(self.pyboy.memory)], dtype=torch.long)
+        dialog_id = torch.tensor(
+            [self.dialogId(self.pyboy.memory)], dtype=torch.long
+        )
 
         return {
             "mode": mode,
@@ -1692,7 +1683,7 @@ class Emulator:
 
     def rewardCriticalHitFlag(self, before, after):
         return (
-            1.0
+            15
             if self.criticalHitFlag(before) is 0 and self.criticalHitFlag(after) is 0
             else 0.0
         )
@@ -1702,7 +1693,7 @@ class Emulator:
 
     def rewardOneHitKOFlag(self, before, after):
         return (
-            2.0
+            25
             if self.oneHitKOFlag(before) is 0 and self.oneHitKOFlag(after) is 0
             else 0.0
         )
