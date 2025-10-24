@@ -71,6 +71,7 @@ class Emulator:
         self.visitedPositionsCount = {}
         self.visitedMaps = []
         self.visitedDialogCount = {}
+        self._battleCount = 0
 
         ckpt_path = None
         if os.path.exists(f"roms/{self.game}/best.pth") and isBest:
@@ -1223,6 +1224,7 @@ class Emulator:
                 self.hookedPokemonFlag(self.pyboy.memory),
             ]
             + self.battleStatusPlayer(self.pyboy.memory)
+            + [self._battleCount]
         )
 
         return data if self.isBattle() else [0] * len(data)
