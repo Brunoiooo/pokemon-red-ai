@@ -390,9 +390,6 @@ class Emulator:
     def saveGameState(self):
         hashPath = self.getHashPath()
 
-        if os.path.isdir(hashPath):
-            return
-
         os.makedirs(hashPath, exist_ok=True)
         with open(f"{hashPath}/checkpoint.state", "wb") as f:
             self.pyboy.save_state(f)
@@ -443,8 +440,6 @@ class Emulator:
                     self.isSSAnneHere(self.pyboy.memory),
                     *self.badges(self.pyboy.memory),
                     self.mapId(self.pyboy.memory),
-                    self.positionX(self.pyboy.memory),
-                    self.positionY(self.pyboy.memory),
                 ]
             )
         ).hexdigest()
