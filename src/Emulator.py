@@ -858,7 +858,7 @@ class Emulator:
     def rewardMap(self):
         mapId = self.mapId(self.pyboy.memory)
 
-        if not self.isWorld() or mapId == 0:
+        if not self.isWorld():
             return 0.0
 
         if len(self.visitedMaps) <= 0:

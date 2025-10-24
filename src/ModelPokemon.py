@@ -10,7 +10,7 @@ class ModelPokemon(nn.Module):
         self.dialog_emb = nn.Embedding(256, 32)
         self.pos_emb_x = nn.Embedding(256, 32)
         self.pos_emb_y = nn.Embedding(256, 32)
-        self.mode_emb = nn.Embedding(4, 8)
+        self.mode_emb = nn.Embedding(5, 8)
 
         total_emb_dim = 32 + 32 + 32 + 32 + 8
 
