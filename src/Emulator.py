@@ -608,7 +608,7 @@ class Emulator:
         reward += self.panishWrongDialogAction(primary_memo_before, action)
         reward += self.panishSwitchMenu()
         reward += self.panishBacktrack()
-        reward -= 0.01
+        reward -= 0.001
 
         return reward
 
@@ -654,7 +654,7 @@ class Emulator:
             self.lastPosition0 == self.getPosition()
             and self.lastPosition0 != self.lastPosition1
         ):
-            reward = -0.2
+            reward = -0.02
         else:
             reward = 0
 
@@ -673,7 +673,7 @@ class Emulator:
         self.wrongDialogActionCount += 1
         if self.wrongDialogActionMax < self.wrongDialogActionCount:
             self.updateDoneGraph(f"panishWrongDialogAction-{action}")
-        return -1.0
+        return -0.1
 
     def mapId(self, memory):
         return memory[0xD35E]
@@ -724,7 +724,7 @@ class Emulator:
 
         for bit_before, bit_after in zip(self.pokedexOwn(before), self.pokedexOwn(after)):
             if bit_before == 0 and bit_after == 1:
-                reward += 100
+                reward += 0.5
 
         return reward
 
@@ -733,7 +733,7 @@ class Emulator:
 
         for bit_before, bit_after in  zip(self.pokedexSeen(before), self.pokedexSeen(after)):
             if bit_before == 0 and bit_after == 1:
-                reward += 50
+                reward += 0.25
 
         return reward
     
@@ -747,7 +747,7 @@ class Emulator:
             zip(self.badges(before), self.badges(after))
         ):
             if bit_before == 0 and bit_after == 1:
-                reward += 1000
+                reward += 2
                 self.updateDoneGraph(f"rewardBadges-{i}", True)
 
         return reward
@@ -755,7 +755,7 @@ class Emulator:
     def rewardEventFlag(self, before, after, name):
         if before == 0 and after == 1:
             self.updateDoneGraph(name, True)
-            return 500
+            return 1
 
         return 0
 
@@ -770,7 +770,7 @@ class Emulator:
             self.sameActionCount = 0
             self.lastAction = action
 
-        return -0.2 if self.sameActionCount > self.maxSameAction else 0.0
+        return -0.02 if self.sameActionCount > self.maxSameAction else 0.0
 
     def panishMenuIn(self, reward):
         if not self.isMenu() or 0 < reward:
@@ -781,7 +781,7 @@ class Emulator:
 
         self.menuInCount += 1
 
-        return -0.4 if self.maxMenuIn < self.menuInCount else 0
+        return -0.04 if self.maxMenuIn < self.menuInCount else 0
 
     def panishMenuPosition(self, primary_memo_before):
         if not self.isMenu():
@@ -794,7 +794,7 @@ class Emulator:
             self.menuSelectCount = 0
             self.menuPositionCount = 0
 
-        return -0.3 if self.maxMenuPosition < self.menuPositionCount else 0
+        return -0.03 if self.maxMenuPosition < self.menuPositionCount else 0
 
     def isSameMenuSelected(self, primary_memo_before):
         return (
@@ -814,7 +814,7 @@ class Emulator:
         else:
             self.menuSelectCount = 0
 
-        return -0.2 if self.maxMenuSelect < self.menuSelectCount else 0
+        return -0.02 if self.maxMenuSelect < self.menuSelectCount else 0
 
     def panishSwitchMenu(self):
         wasMenu = self.lastMenu
@@ -870,7 +870,7 @@ class Emulator:
 
         self.visitedMaps.append(mapId)
         self.updateDoneGraph(f"rewardMap-{mapId}", True)
-        return 50.0
+        return 0.5
 
     def isSameMenuPosition(self, primary_memo_before):
         return (
@@ -891,7 +891,7 @@ class Emulator:
             self.updateDoneGraph("panishMenuIllegalMoves")
 
         if 1 < self.menuIllegalMovesCount:
-            return -3
+            return -0.3
         else:
             return 0
 
@@ -919,7 +919,7 @@ class Emulator:
             self.updateDoneGraph("panishWorldIllegalMoves")
 
         if 1 < self.worldIllegalMovesCount:
-            return -3
+            return -0.3
         else:
             return 0
 
@@ -1680,7 +1680,7 @@ class Emulator:
 
     def rewardCriticalHitFlag(self, before, after):
         return (
-            15
+            0.05
             if self.criticalHitFlag(before) is 0 and self.criticalHitFlag(after) is 0
             else 0.0
         )
@@ -1690,7 +1690,7 @@ class Emulator:
 
     def rewardOneHitKOFlag(self, before, after):
         return (
-            25
+            0.1
             if self.oneHitKOFlag(before) is 0 and self.oneHitKOFlag(after) is 0
             else 0.0
         )
