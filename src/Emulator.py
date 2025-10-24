@@ -441,8 +441,6 @@ class Emulator:
                     self.foughtSnorlaxYetCeladon(self.pyboy.memory),
                     self.foughtMoltresYet(self.pyboy.memory),
                     self.isSSAnneHere(self.pyboy.memory),
-                    *self.pokedexOwn(self.pyboy.memory),
-                    *self.pokedexSeen(self.pyboy.memory),
                     *self.badges(self.pyboy.memory),
                     self.mapId(self.pyboy.memory),
                     self.positionX(self.pyboy.memory),
@@ -470,8 +468,7 @@ class Emulator:
             reward += self.rewardCriticalHitFlag(primary_memo_before, self.pyboy.memory)
             reward += self.rewardOneHitKOFlag(primary_memo_before, self.pyboy.memory)
 
-        reward += self.rewardPokedexOwn(primary_memo_before, self.pyboy.memory)
-        reward += self.rewardPokedexSeen(primary_memo_before, self.pyboy.memory)
+        reward += self.rewardPokedex(primary_memo_before, self.pyboy.memory)
         reward += self.rewardBadges(primary_memo_before, self.pyboy.memory)
 
         reward += self.rewardEventFlag(
@@ -622,7 +619,7 @@ class Emulator:
 
         reward = 0.2 - 0.01 * self._battleCount
 
-        if reward < -0.2:
+        if reward < -0.5:
             self.updateDoneGraph("rewardBattle")
 
         return reward
@@ -692,7 +689,7 @@ class Emulator:
             self.mapId(self.pyboy.memory), 0
         )
 
-        if reward < -0.2:
+        if reward < -0.5:
             self.updateDoneGraph("rewardDialog")
 
         return reward
@@ -730,26 +727,23 @@ class Emulator:
     def rewardPokedexOwn(self, before, after):
         reward = 0
 
-        for i, (bit_before, bit_after) in enumerate(
-            zip(self.pokedexOwn(before), self.pokedexOwn(after))
-        ):
+        for bit_before, bit_after in zip(self.pokedexOwn(before), self.pokedexOwn(after)):
             if bit_before == 0 and bit_after == 1:
                 reward += 100
-                self.updateDoneGraph(f"rewardPokedexOwn-{i}", True)
 
         return reward
 
     def rewardPokedexSeen(self, before, after):
         reward = 0
 
-        for i, (bit_before, bit_after) in enumerate(
-            zip(self.pokedexSeen(before), self.pokedexSeen(after))
-        ):
+        for bit_before, bit_after in  zip(self.pokedexSeen(before), self.pokedexSeen(after)):
             if bit_before == 0 and bit_after == 1:
                 reward += 50
-                self.updateDoneGraph(f"rewardPokedexSeen-{i}", True)
 
         return reward
+    
+    def rewardPokedex(self, before, after):
+        return self.rewardPokedexOwn(before, after) + self.rewardPokedexSeen(before, after)
 
     def rewardBadges(self, before, after):
         reward = 0
@@ -861,7 +855,7 @@ class Emulator:
 
         reward = 0.2 - 0.01 * self.visitedPositionsCount.get(self.getPosition(), 0)
 
-        if reward < -0.2:
+        if reward < -0.5:
             self.updateDoneGraph("rewardPosition")
 
         return reward
