@@ -1042,6 +1042,8 @@ class Emulator:
             return 2
         elif self.isMenu():
             return 3
+        elif self.isWorld():
+            return 4
         else:
             return 0
 
