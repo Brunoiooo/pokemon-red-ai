@@ -388,6 +388,9 @@ class Emulator:
         return next_state
 
     def saveGameState(self):
+        if self.isDialog():
+            return
+
         hashPath = self.getHashPath()
 
         os.makedirs(hashPath, exist_ok=True)
@@ -603,6 +606,7 @@ class Emulator:
         reward += self.panishMenuIn(reward)
         reward += self.panishSameAction(action, reward)
         reward += self.panishWrongDialogAction(primary_memo_before, action)
+        reward += self.panishSwitchMenu()
         reward += self.panishBacktrack()
         reward -= 0.01
 
@@ -612,10 +616,8 @@ class Emulator:
         if not self.isBattle():
             return 0.0
 
-        reward = 0.5 - 0.01 * self._battleCount
+        reward = 0.2 - 0.0025 * self._battleCount
 
-        if reward < -0.5:
-            self.updateDoneGraph("rewardBattle")
 
         return reward
 
@@ -680,12 +682,10 @@ class Emulator:
         if not self.isDialog():
             return 0.0
 
-        reward = 0.5 - 0.01 * self.visitedDialogCount.get(
+        reward = 0.2 - 0.0025 * self.visitedDialogCount.get(
             self.mapId(self.pyboy.memory), 0
         )
 
-        if reward < -0.5:
-            self.updateDoneGraph("rewardDialog")
 
         return reward
 
@@ -848,9 +848,9 @@ class Emulator:
         if not self.isWorld():
             return 0.0
 
-        reward = 0.5 - 0.01 * self.visitedPositionsCount.get(self.getPosition(), 0)
+        reward = 0.2 - 0.01 * self.visitedPositionsCount.get(self.getPosition(), 0)
 
-        if reward < -0.5:
+        if reward < -0.2:
             self.updateDoneGraph("rewardPosition")
 
         return reward
