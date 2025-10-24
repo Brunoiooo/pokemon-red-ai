@@ -630,14 +630,20 @@ class Emulator:
     def mask_action(self, action: int) -> int:
         if self.menuCooldown > 0:
             if action == 3:
-                return 0
+                return 0 
+            
+        if self.isBattle():
+            return action
+
+        if self.isDialog():
+            return 2 if action not in {0, 1, 2} else action
+            
         if self.isMenu():
-            allowed = {0, 1, 2, 5, 6, 7, 8}
-            if action not in allowed:
-                return 2
+            return 2 if action not in {0, 1, 2, 5, 6, 7, 8} else action
+                
         if self.isWorld() and self.menuCooldown > 0 and action == 3:
             return 0
-
+        
         if self.isBlocked():
             return 0
 
