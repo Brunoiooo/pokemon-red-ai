@@ -612,7 +612,7 @@ class Emulator:
         if not self.isBattle():
             return 0.0
 
-        reward = 0.2 - 0.01 * self._battleCount
+        reward = 0.5 - 0.01 * self._battleCount
 
         if reward < -0.5:
             self.updateDoneGraph("rewardBattle")
@@ -680,7 +680,7 @@ class Emulator:
         if not self.isDialog():
             return 0.0
 
-        reward = 0.2 - 0.01 * self.visitedDialogCount.get(
+        reward = 0.5 - 0.01 * self.visitedDialogCount.get(
             self.mapId(self.pyboy.memory), 0
         )
 
@@ -848,7 +848,7 @@ class Emulator:
         if not self.isWorld():
             return 0.0
 
-        reward = 0.2 - 0.01 * self.visitedPositionsCount.get(self.getPosition(), 0)
+        reward = 0.5 - 0.01 * self.visitedPositionsCount.get(self.getPosition(), 0)
 
         if reward < -0.5:
             self.updateDoneGraph("rewardPosition")
