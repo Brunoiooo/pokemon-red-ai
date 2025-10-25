@@ -698,6 +698,9 @@ class Emulator:
 
         self.visitedDialogCount[map] += 1
 
+        if 255 < self.visitedDialogCount[map]:
+            self.updateDoneGraph(f"dialogCount-{map}")
+
     def positionCount(self):
         if not self.isWorld():
             return
@@ -709,6 +712,9 @@ class Emulator:
 
         self.visitedPositionsCount[position] += 1
 
+        if 255 < self.visitedPositionsCount[position]:
+            self.updateDoneGraph(f"positionCount-{position}")
+
     def battleCount(self, before, after):
         if not self.isBattle() or self.numberOfTurnsInCurrentBattle(
             before
@@ -716,6 +722,9 @@ class Emulator:
             self._battleCount = 0
         else:
             self._battleCount += 1
+
+        if 255 < self._battleCount:
+            self.updateDoneGraph("battleCount")
 
     def rewardPokedexOwn(self, before, after):
         reward = 0
