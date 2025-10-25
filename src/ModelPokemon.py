@@ -15,13 +15,19 @@ class ModelPokemon(nn.Module):
         total_emb_dim = 32 + 32 + 32 + 32 + 8
 
         self.fc = nn.Sequential(
-            nn.Linear(continuous_dim + total_emb_dim, 512),
-            nn.LayerNorm(512),
-            nn.GELU(),
+            nn.LayerNorm(continuous_dim + total_emb_dim),
+            nn.Linear(continuous_dim + total_emb_dim, 1024),
+            nn.SiLU(),
+            nn.Dropout(0.1),
+            nn.Linear(1024, 512),
+            nn.SiLU(),
+            nn.Dropout(0.1),
             nn.Linear(512, 256),
-            nn.LayerNorm(256),
-            nn.GELU(),
-            nn.Linear(256, outputs),
+            nn.SiLU(),
+            nn.Dropout(0.1),
+            nn.Linear(256, 128),
+            nn.SiLU(),
+            nn.Linear(128, outputs),
         )
 
     def _as_long_batch(self, t, device):
