@@ -307,7 +307,7 @@ class Emulator:
 
                 ep_ret += float(r)
 
-                if self.truncated:
+                if self.terminated:
                     break
 
                 self.counts(before, self.pyboy.memory)
@@ -348,7 +348,7 @@ class Emulator:
             )
         )
 
-        if self.done or len(self.buffer) >= self.buffer.maxlen:
+        if self.terminated or len(self.buffer) >= self.buffer.maxlen:
             try:
                 while True:
                     R, disc = 0.0, 1.0
@@ -370,7 +370,7 @@ class Emulator:
                         )
                     )
 
-                    if self.done and len(self.buffer) >= 2:
+                    if self.terminated and len(self.buffer) >= 2:
                         self.buffer.popleft()
                     else:
                         break
@@ -379,11 +379,14 @@ class Emulator:
                 pass
 
         if self.done:
-            if self.terminated:
+            if self.truncated:
                 self.saveGameState()
-
-            self.reset()
-            return self.inputs()
+            else:
+                self.reset()
+                return self.inputs()
+            
+        self.truncated = False
+        self.terminated = False
 
         return next_state
 
@@ -595,10 +598,11 @@ class Emulator:
             "Is SS Anne here?",
         )
 
+        reward += self.rewardMap()
         reward += self.rewardDialog()
         reward += self.rewardBattle()
         reward += self.rewardPosition()
-        reward += self.rewardMap()
+
         reward += self.panishWorldIllegalMoves(primary_memo_before, reward)
         reward += self.panishMenuIllegalMoves(primary_memo_before)
         reward += self.panishMenuSelect(primary_memo_before)
@@ -608,6 +612,7 @@ class Emulator:
         reward += self.panishWrongDialogAction(primary_memo_before, action)
         reward += self.panishSwitchMenu()
         reward += self.panishBacktrack()
+
         reward -= 0.001
 
         return reward
@@ -617,6 +622,9 @@ class Emulator:
             return 0.0
 
         reward = 0.2 - 0.0025 * self._battleCount
+        
+        if reward < -0.2:
+            self.updateDoneGraph(f"rewardBattle")
 
         return reward
 
@@ -680,10 +688,17 @@ class Emulator:
     def rewardDialog(self):
         if not self.isDialog():
             return 0.0
+        
+        map = self.mapId(self.pyboy.memory)
 
-        reward = 0.2 - 0.0025 * self.visitedDialogCount.get(
-            self.mapId(self.pyboy.memory), 0
+        count = self.visitedDialogCount.get(
+            map, 0
         )
+
+        reward = 0.2 - 0.0025 * count
+
+        if reward < -0.2:
+            self.updateDoneGraph(f"rewardDialog-{map}")
 
         return reward
 
@@ -864,7 +879,7 @@ class Emulator:
         reward = 0.2 - 0.01 * self.visitedPositionsCount.get(self.getPosition(), 0)
 
         if reward < -0.2:
-            self.updateDoneGraph("rewardPosition")
+            self.updateDoneGraph(f"rewardPosition-{self.getPosition()}")
 
         return reward
 
@@ -1352,12 +1367,12 @@ class Emulator:
 
         self.pyboy.tick(self.ticksPerStep / 2)
 
-    def updateDoneGraph(self, key: str, terminated: bool = False):
+    def updateDoneGraph(self, key: str, truncated: bool = False):
         self.doneGraph[key] = self.doneGraph.get(key, 0) + 1
-        if terminated:
-            self.terminated = True
-        else:
+        if truncated:
             self.truncated = True
+        else:
+            self.terminated = True
 
     def detach_to_cpu(self, obs_dict):
         out = {}
