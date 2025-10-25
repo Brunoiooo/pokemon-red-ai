@@ -618,26 +618,25 @@ class Emulator:
 
         reward = 0.2 - 0.0025 * self._battleCount
 
-
         return reward
 
     def mask_action(self, action: int) -> int:
         if self.menuCooldown > 0:
             if action == 3:
-                return 0 
-            
+                return 0
+
         if self.isBattle():
             return action
 
         if self.isDialog():
             return 2 if action not in {0, 1, 2} else action
-            
+
         if self.isMenu():
             return 2 if action not in {0, 1, 2, 5, 6, 7, 8} else action
-                
+
         if self.isWorld() and self.menuCooldown > 0 and action == 3:
             return 0
-        
+
         if self.isBlocked():
             return 0
 
@@ -686,7 +685,6 @@ class Emulator:
             self.mapId(self.pyboy.memory), 0
         )
 
-
         return reward
 
     def dialogCount(self):
@@ -722,7 +720,9 @@ class Emulator:
     def rewardPokedexOwn(self, before, after):
         reward = 0
 
-        for bit_before, bit_after in zip(self.pokedexOwn(before), self.pokedexOwn(after)):
+        for bit_before, bit_after in zip(
+            self.pokedexOwn(before), self.pokedexOwn(after)
+        ):
             if bit_before == 0 and bit_after == 1:
                 reward += 0.5
 
@@ -731,14 +731,18 @@ class Emulator:
     def rewardPokedexSeen(self, before, after):
         reward = 0
 
-        for bit_before, bit_after in  zip(self.pokedexSeen(before), self.pokedexSeen(after)):
+        for bit_before, bit_after in zip(
+            self.pokedexSeen(before), self.pokedexSeen(after)
+        ):
             if bit_before == 0 and bit_after == 1:
                 reward += 0.25
 
         return reward
-    
+
     def rewardPokedex(self, before, after):
-        return self.rewardPokedexOwn(before, after) + self.rewardPokedexSeen(before, after)
+        return self.rewardPokedexOwn(before, after) + self.rewardPokedexSeen(
+            before, after
+        )
 
     def rewardBadges(self, before, after):
         reward = 0
@@ -1058,9 +1062,7 @@ class Emulator:
         map_id = torch.tensor([self.mapId(self.pyboy.memory)], dtype=torch.long)
         pos_x = torch.tensor([self.positionX(self.pyboy.memory)], dtype=torch.long)
         pos_y = torch.tensor([self.positionY(self.pyboy.memory)], dtype=torch.long)
-        dialog_id = torch.tensor(
-            [self.dialogId(self.pyboy.memory)], dtype=torch.long
-        )
+        dialog_id = torch.tensor([self.dialogId(self.pyboy.memory)], dtype=torch.long)
 
         return {
             "mode": mode,
@@ -1505,7 +1507,11 @@ class Emulator:
         return memory[0xCFE6] << 8 | memory[0xCFE7]
 
     def rewardEnemyHp(self, before, after):
-        return (self.enemyHp(before) - self.enemyHp(after)) / self.enemyMaxHp(after) if self.enemyMaxHp(after) != 0 else 0
+        return (
+            (self.enemyHp(before) - self.enemyHp(after)) / self.enemyMaxHp(after)
+            if self.enemyMaxHp(after) != 0
+            else 0
+        )
 
     def enemyLevel1(self, memory):
         return memory[0xCFE8]
@@ -1595,8 +1601,11 @@ class Emulator:
 
     def rewardPokemonCurrentHP1(self, before, after):
         return (
-            self.pokemonCurrentHP1(after) - self.pokemonCurrentHP1(before)
-        ) / self.pokemonMaxHp1(after) if self.pokemonMaxHp1(after) != 0 else 0
+            (self.pokemonCurrentHP1(after) - self.pokemonCurrentHP1(before))
+            / self.pokemonMaxHp1(after)
+            if self.pokemonMaxHp1(after) != 0
+            else 0
+        )
 
     def pokemonStatus1(self, memory):
         return self.bitsExtractor(memory[0xD018], end_bit=6)
