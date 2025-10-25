@@ -7,13 +7,19 @@ sys.path.append("src")
 
 from Core import Core
 
+
 def main():
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
     torch.backends.cudnn.benchmark = True
     torch.set_float32_matmul_precision("high")
 
-    set_start_method("fork", force=True)
+    if os.name == "nt":
+        set_start_method("spawn", force=True)
+    elif os.name == "posix":
+        set_start_method("fork", force=True)
+    else:
+        set_start_method("spawn", force=True)
 
     os.environ.setdefault("OMP_NUM_THREADS", str(os.cpu_count()))
     os.environ.setdefault("MKL_NUM_THREADS", str(os.cpu_count()))
