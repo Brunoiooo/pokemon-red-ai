@@ -1714,7 +1714,7 @@ class Emulator:
     def rewardCriticalHitFlag(self, before, after):
         return (
             0.05
-            if self.criticalHitFlag(before) is 0 and self.criticalHitFlag(after) is 0
+            if self.criticalHitFlag(before) == 0 and self.criticalHitFlag(after) == 0
             else 0.0
         )
 
@@ -1724,7 +1724,7 @@ class Emulator:
     def rewardOneHitKOFlag(self, before, after):
         return (
             0.1
-            if self.oneHitKOFlag(before) is 0 and self.oneHitKOFlag(after) is 0
+            if self.oneHitKOFlag(before) == 0 and self.oneHitKOFlag(after) == 0
             else 0.0
         )
 
