@@ -1046,7 +1046,7 @@ class Emulator:
     def storedPokemonData(self):
         data = [self.pyboy.memory[i] for i in range(0xDA80, 0xDD2A)]
 
-        return data if self.isMenu() else [0] * len(data)
+        return self.dataNormalizer(data) if self.isMenu() else [0] * len(data)
 
     def modeFlags(self):
         if self.isBattle():
@@ -1087,14 +1087,14 @@ class Emulator:
             self.visitedDialogCount.get(self.mapId(self.pyboy.memory), 0),
         ]
 
-        return data if self.isDialog() else [0] * len(data)
+        return self.dataNormalizer(data) if self.isDialog() else [0] * len(data)
 
     def mapData(self):
         data = [
             self.visitedPositionsCount.get(self.getPosition(), 0),
         ]
 
-        return data if self.isWorld() else [0] * len(data)
+        return self.dataNormalizer(data) if self.isWorld() else [0] * len(data)
 
     def isBattle(self):
         return True if self.typeOfBattle(self.pyboy.memory) else False
@@ -1128,19 +1128,33 @@ class Emulator:
         )
 
     def spriteData(self):
-        return (
-            [self.pyboy.memory[i] for i in range(0xC100, 0xC300)]
-            if self.isWorld()
-            else [0] * (0xC300 - 0xC100)
-        )
+        data = [self.pyboy.memory[i] for i in range(0xC100, 0xC300)]
+
+        return self.dataNormalizer(data) if self.isWorld() else [0] * len(data)
 
     def menuData(self):
         data = [self.pyboy.memory[i] for i in range(0xCC24, 0xCC36)]
 
-        return data if self.isMenu() or self.isBattle() else [0] * len(data)
+        return (
+            self.dataNormalizer(data)
+            if self.isMenu() or self.isBattle()
+            else [0] * len(data)
+        )
 
     def battleData(self):
-        data = (
+        dataBit = (
+            self.enemyStatus(self.pyboy.memory)
+            + self.enemyBaseStats(self.pyboy.memory)
+            + self.pokemonStatus1(self.pyboy.memory)
+            + self.battleStatusPlayer(self.pyboy.memory)
+            + [
+                self.isGymLeaderBattleMusicPlaying(self.pyboy.memory),
+                self.criticalHitFlag(self.pyboy.memory),
+                self.oneHitKOFlag(self.pyboy.memory),
+                self.hookedPokemonFlag(self.pyboy.memory),
+            ]
+        )
+        dataByte = self.dataNormalizer(
             [
                 self.numberOfTurnsInCurrentBattle(self.pyboy.memory),
                 self.playersSubstituteHp(self.pyboy.memory),
@@ -1164,11 +1178,7 @@ class Emulator:
                 self.enemyPokemonInternalId1(self.pyboy.memory),
                 self.playerPokemonInterna2Id(self.pyboy.memory),
                 self.enemyPokemonInternalId2(self.pyboy.memory),
-                self.enemyHp(self.pyboy.memory),
                 self.enemyLevel1(self.pyboy.memory),
-            ]
-            + self.enemyStatus(self.pyboy.memory)
-            + [
                 self.enemyType1(self.pyboy.memory),
                 self.enemyType2(self.pyboy.memory),
                 self.enemyMove1(self.pyboy.memory),
@@ -1178,25 +1188,13 @@ class Emulator:
                 self.enemyAttackAndDefenseIVs(self.pyboy.memory),
                 self.enemyAttackAndSpecialIVs(self.pyboy.memory),
                 self.enemyLevel2(self.pyboy.memory),
-                self.enemyMaxHp(self.pyboy.memory),
-                self.enemyAttack(self.pyboy.memory),
-                self.enemyDefense(self.pyboy.memory),
-                self.enemySpeed(self.pyboy.memory),
-                self.enemySpecial(self.pyboy.memory),
                 self.enemyPPFirstSlot(self.pyboy.memory),
                 self.enemyPPSecondSlot(self.pyboy.memory),
                 self.enemyPPThirdSlot(self.pyboy.memory),
                 self.enemyPPFourthSlot(self.pyboy.memory),
-            ]
-            + self.enemyBaseStats(self.pyboy.memory)
-            + [
                 self.enemyCatchRate(self.pyboy.memory),
                 self.enemyBaseExperience(self.pyboy.memory),
                 self.pokemonNumber1(self.pyboy.memory),
-                self.pokemonCurrentHP1(self.pyboy.memory),
-            ]
-            + self.pokemonStatus1(self.pyboy.memory)
-            + [
                 self.pokemonType11(self.pyboy.memory),
                 self.pokemonType21(self.pyboy.memory),
                 self.pokemonMoveFirstSlot1(self.pyboy.memory),
@@ -1206,32 +1204,41 @@ class Emulator:
                 self.pokemonAttackAndDefenseIVs1(self.pyboy.memory),
                 self.pokemonSpeedAndSpecialIVs1(self.pyboy.memory),
                 self.pokemonLevel1(self.pyboy.memory),
-                self.pokemonMaxHp1(self.pyboy.memory),
-                self.pokemonAttack1(self.pyboy.memory),
-                self.pokemonDefense1(self.pyboy.memory),
-                self.pokemonSpeed1(self.pyboy.memory),
-                self.pokemonSpecial1(self.pyboy.memory),
                 self.pokemonPPFirstSlot1(self.pyboy.memory),
                 self.pokemonPPSecondSlot1(self.pyboy.memory),
                 self.pokemonPPThirdSlot1(self.pyboy.memory),
                 self.pokemonPPFourthSlot1(self.pyboy.memory),
                 self.typeOfBattle(self.pyboy.memory),
                 self.battleType(self.pyboy.memory),
-                self.isGymLeaderBattleMusicPlaying(self.pyboy.memory),
-                self.criticalHitFlag(self.pyboy.memory),
-                self.oneHitKOFlag(self.pyboy.memory),
-                self.hookedPokemonFlag(self.pyboy.memory),
+                self._battleCount,
             ]
-            + self.battleStatusPlayer(self.pyboy.memory)
-            + [self._battleCount]
         )
+        data2Bytes = self.dataNormalizer(
+            [
+                self.enemyHp(self.pyboy.memory),
+                self.enemyMaxHp(self.pyboy.memory),
+                self.enemyAttack(self.pyboy.memory),
+                self.enemyDefense(self.pyboy.memory),
+                self.enemySpeed(self.pyboy.memory),
+                self.enemySpecial(self.pyboy.memory),
+                self.pokemonCurrentHP1(self.pyboy.memory),
+                self.pokemonMaxHp1(self.pyboy.memory),
+                self.pokemonAttack1(self.pyboy.memory),
+                self.pokemonDefense1(self.pyboy.memory),
+                self.pokemonSpeed1(self.pyboy.memory),
+                self.pokemonSpecial1(self.pyboy.memory),
+            ],
+            max=65535,
+        )
+
+        data = dataBit + dataByte + data2Bytes
 
         return data if self.isBattle() else [0] * len(data)
 
     def pokeMartData(self):
         data = [self.pyboy.memory[i] for i in range(0xCF7B, 0xCF86)]
 
-        return data if self.isMenu() else [0] * len(data)
+        return self.dataNormalizer(data) if self.isMenu() else [0] * len(data)
 
     def playerData(self):
         data = (
@@ -1250,7 +1257,7 @@ class Emulator:
         )
 
         return (
-            data
+            self.dataNormalizer(data)
             if self.isBattle() or self.isMenu() or self.isWorld()
             else [0] * len(data)
         )
@@ -1261,11 +1268,15 @@ class Emulator:
     def itemsData(self):
         data = [self.pyboy.memory[i] for i in range(0xD31D, 0xD347)]
 
-        return data if self.isMenu() or self.isBattle() else [0] * len(data)
+        return (
+            self.dataNormalizer(data)
+            if self.isMenu() or self.isBattle()
+            else [0] * len(data)
+        )
 
     def moneyData(self):
         return (
-            [self.playerMoney(self.pyboy.memory)]
+            self.dataNormalizer([self.playerMoney(self.pyboy.memory)], max=16777215)
             if self.isMenu() or self.isDialog()
             else [0]
         )
@@ -1276,10 +1287,14 @@ class Emulator:
     def storedItemsData(self):
         data = self.storedItems(self.pyboy.memory)
 
-        return data if self.isMenu() else [0] * len(data)
+        return self.dataNormalizer(data) if self.isMenu() else [0] * len(data)
 
     def gameCoinsData(self):
-        return [self.gameCoins(self.pyboy.memory)] if self.isMenu() else [0]
+        return (
+            self.dataNormalizer([self.gameCoins(self.pyboy.memory)], max=65535)
+            if self.isMenu()
+            else [0]
+        )
 
     def eventFlagsData(self):
         return (
@@ -1318,7 +1333,7 @@ class Emulator:
     def opponentTrainersPokemonData(self):
         data = [self.pyboy.memory[i] for i in range(0xD89C, 0xD9AC)]
 
-        return data if self.isBattle() else [0] * len(data)
+        return self.dataNormalizer(data) if self.isBattle() else [0] * len(data)
 
     def bitsExtractor(self, byte, start_bit=0, end_bit=7):
         if start_bit < 0 or end_bit > 7 or start_bit > end_bit:
@@ -1436,7 +1451,7 @@ class Emulator:
         return memory[0xD803] & 1
 
     def mewtwoCanBeCaught(self, memory):
-        return memory[0xD85F] & 1
+        return 1 if memory[0xD85F] & 2 else 0
 
     def numberOfTurnsInCurrentBattle(self, memory):
         return memory[0xCCD5]
@@ -1704,7 +1719,7 @@ class Emulator:
         )
 
     def oneHitKOFlag(self, memory):
-        return memory[0xD05E] & 2
+        return 1 if memory[0xD05E] & 2 else 0
 
     def rewardOneHitKOFlag(self, before, after):
         return (
@@ -1752,3 +1767,6 @@ class Emulator:
 
     def gameCoins(self, memory):
         return memory[0xD5A4] + (memory[0xD5A5] << 8)
+
+    def dataNormalizer(self, values: list[int], max=255):
+        return [x / max for x in values]
