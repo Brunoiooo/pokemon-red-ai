@@ -255,7 +255,7 @@ class Core:
                     self.wrongDialogActionMax,
                     False,
                 )
-                avg_ret = emulator.evaluate_greedy(15)
+                avg_ret = emulator.evaluate_greedy(5)
                 # self.plot_done_graph(emulator.doneGraph)
 
                 if avg_ret > self.best_eval_return + 0.5:
@@ -263,7 +263,7 @@ class Core:
 
                 self.next_ckpt += self.ckpt_every
 
-            if self.count % 10 == 0:
+            if self.count % 1000 == 0:
                 sys.stdout.write(
                     f"\rEpsilon: {self.currentEpsilon():.2f} | Count: {self.count} | Progress: {(self.count / self.epsilonDecayCount * 100):.2f}% dataQ: {self.dataQ.qsize()}"
                 )
