@@ -38,6 +38,8 @@ class SettingsModel:
         if os.path.isfile(path):
             raise ValueError(f"Profile {profile} already exists.")
 
+        os.makedirs(os.path.join(self.path_base, profile), exist_ok=True)
+
         with open(path, "w", encoding="utf-8") as file:
             json.dump({}, file, indent=4, ensure_ascii=False)
 

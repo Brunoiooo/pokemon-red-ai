@@ -1,4 +1,14 @@
-from tkinter import Button, Entry, Frame, Listbox, Misc, StringVar
+from tkinter import (
+    BooleanVar,
+    Button,
+    Checkbutton,
+    Entry,
+    Frame,
+    Listbox,
+    Misc,
+    StringVar,
+)
+from typing import Any
 
 
 class SettingsView(Frame):
@@ -27,6 +37,15 @@ class SettingsView(Frame):
         self.button_delete_profile = Button(self.frame_profiles, text="Delete")
         self.button_delete_profile.pack(expand=True, fill="both")
 
+        self.frame_settings = Frame(self)
+
+        self.boolean_var_settings_debug = BooleanVar()
+
+        self.checkbutton_settings_debug = Checkbutton(
+            self.frame_settings, text="Debug", variable=self.boolean_var_settings_debug
+        )
+        self.checkbutton_settings_debug.grid(row=0, column=0)
+
     def load_profiles(self, items: list[str]):
         selected_value = self.selected_value()
 
@@ -41,3 +60,6 @@ class SettingsView(Frame):
     def selected_value(self) -> str | None:
         curselection = self.listbox_profiles.curselection()
         return self.listbox_profiles.get(curselection[0]) if curselection else None
+
+    def load_settings(self, settings: Any):
+        self.boolean_var_settings_debug.set(bool(settings.get("debug")))
