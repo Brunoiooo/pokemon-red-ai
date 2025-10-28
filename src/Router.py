@@ -2,30 +2,26 @@ from tkinter import Tk
 from tkinter.ttk import Notebook
 
 from controllers.TrainController import TrainController
-from controllers.SettingsController import SettingsController
 from models.TrainModel import TrainModel
-from models.SettingsModel import SettingsModel
 from views.TrainView import TrainView
-from views.SettingsView import SettingsView
 
 
 class Router(Tk):
+    settings_model_profile: None | str = None
+
     def __init__(self):
         super().__init__()
 
         self.title("Pokemon Red AI")
         self.state("zoomed")
 
-        notebook = Notebook(self)
-        notebook.pack(expand=True, fill="both")
+        self.__notebook = Notebook(self)
+        self.__notebook.pack(expand=True, fill="both")
 
-        settings_view = SettingsView(notebook)
-        settingsModel = SettingsModel()
-        SettingsController(model=settingsModel, view=settings_view)
-        notebook.add(settings_view, text="Settings")
-
-        train_view = TrainView(notebook)
+        self.__train_view = TrainView(self.__notebook)
+        self.__train_model = TrainModel()
         TrainController(
-            model=TrainModel(), view=train_view, settingsModel=settingsModel
+            model=self.__train_model,
+            view=self.__train_view,
         )
-        notebook.add(train_view, text="Train")
+        self.__notebook.add(self.__train_view, text="Train")

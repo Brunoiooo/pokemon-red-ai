@@ -1,34 +1,60 @@
 import queue
 from tkinter import messagebox
-from models.SettingsModel import SettingsModel
 from models.TrainModel import TrainModel
 from views.TrainView import TrainView
-from workers import TrainWorker
 
 
 class TrainController:
-    def __init__(
-        self, view: TrainView, model: TrainModel, settingsModel: SettingsModel
-    ):
+    def __init__(self, view: TrainView, model: TrainModel):
         self.__view = view
         self.__model = model
-        self.__settingsModel = settingsModel
 
         self.__view.button_start.config(command=self.start)
+        self.__view.button_stop.config(command=self.stop)
+
+        self.__view.boolean_var_settings_debug.trace_add(
+            "write", self.handle_boolean_var_settings_debug
+        )
 
         self.__refresh()
 
-        self.__configure_button_start()
-
     def __refresh(self):
-        pass
+        state = (
+            "disabled"
+            if not self.__model.process or not self.__model.process.is_alive()
+            else "normal"
+        )
+
+        self.__view.button_start.configure(
+            state=(
+                "disabled"
+                if self.__model.process and self.__model.process.is_alive()
+                else "normal"
+            )
+        )
+        self.__view.button_stop.configure(
+            state=(
+                "disabled"
+                if not self.__model.process or not self.__model.process.is_alive()
+                else "normal"
+            )
+        )
+
+        self.__view.after(1000, self.__refresh)
 
     def start(self):
         try:
-            if self.__settingsModel.settings is None:
-                raise ValueError("Profile has not selected.")
+            self.__model.start(self.__model.settings)
 
-            self.__model.start(self.__settingsModel.settings)
+            self.__run_logs()
+        except Exception as e:
+            messagebox.showerror("start", e)
+        finally:
+            self.__refresh()
+
+    def stop(self):
+        try:
+            self.__model.start(self.__model.settings)
 
             self.__run_logs()
         except Exception as e:
@@ -38,25 +64,23 @@ class TrainController:
 
     def __run_logs(self):
         try:
-            for _ in range(self.__settingsModel.settings.get("logs_per_run", 100)):
+            for _ in range(self.__view.int_var_logs_per_run.get()):
                 self.__view.add_log(self.__model.queue_logs.get_nowait())
         except queue.Empty:
             pass
 
-        if self.__is_running:
-            self.__view.after(
-                self.__settingsModel.settings.get("logs_delay_ms", 50), self.__run_logs
-            )
+        if self.__model.process and self.__model.process.is_alive():
+            self.__view.after(self.__view.int_var_logs_per_run.get(), self.__run_logs)
 
-    def __configure_button_start(self):
-        self.__view.button_start.configure(
-            state=(
-                "disabled"
-                if not self.__model.process
-                or not self.__model.process.is_alive()
-                and self.__settingsModel.settings is None
-                else "normal"
-            )
-        )
+    def handle_boolean_var_settings_debug(self, *args):
+        try:
+            if self.__model.settings is None:
+                raise ValueError("Profile has not selected.")
 
-        self.__view.after(1000, self.__configure_button_start)
+            settings = self.__model.settings
+            settings["is_debug"] = self.__view.boolean_var_settings_debug.get()
+            self.__model.settings = settings
+        except Exception as e:
+            messagebox.showerror("handle_boolean_var_settings_debug", e)
+        finally:
+            self.__refresh()
