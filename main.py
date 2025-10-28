@@ -5,7 +5,8 @@ from multiprocessing import set_start_method
 
 sys.path.append("src")
 
-from Core import Core
+from Router import Router
+from window.Window import Window
 
 
 def main():
@@ -25,9 +26,7 @@ def main():
     os.environ.setdefault("MKL_NUM_THREADS", str(os.cpu_count()))
     os.environ.setdefault("CUDA_DEVICE_MAX_CONNECTIONS", "32")
 
-    core = Core("PokemonRed")
-
-    core.start()
+    Router().mainloop()
 
 
 if __name__ == "__main__":
