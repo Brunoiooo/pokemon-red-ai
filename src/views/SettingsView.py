@@ -61,5 +61,5 @@ class SettingsView(Frame):
         curselection = self.listbox_profiles.curselection()
         return self.listbox_profiles.get(curselection[0]) if curselection else None
 
-    def load_settings(self, settings: Any):
-        self.boolean_var_settings_debug.set(bool(settings.get("debug")))
+    def load_settings(self, settings: dict[str, Any]):
+        self.boolean_var_settings_debug.set(bool(settings.get("is_debug", False)))

@@ -5,8 +5,6 @@ from views.SettingsView import SettingsView
 
 
 class SettingsController:
-    settings: Any | None = None
-
     def __init__(self, view: SettingsView, model: SettingsModel):
         self.view = view
         self.model = model
@@ -42,8 +40,8 @@ class SettingsController:
         self.view.button_delete_profile.configure(
             state="normal" if self.view.selected_value() else "disabled"
         )
-        if self.settings is not None:
-            self.view.load_settings(self.settings)
+        if self.model.settings is not None:
+            self.view.load_settings(self.model.settings)
             self.view.frame_settings.grid(row=0, column=1, sticky="nsew")
         else:
             self.view.frame_settings.grid_forget()
@@ -61,9 +59,7 @@ class SettingsController:
 
     def handle_listbox_profiles(self, *args):
         try:
-            profile = self.view.selected_value()
-
-            self.settings = self.model.get_settings(profile) if profile else None
+            self.model.profile = self.view.selected_value()
         except Exception as e:
             messagebox.showerror("handle_listbox_profiles", e)
         finally:
@@ -77,7 +73,6 @@ class SettingsController:
                 raise ValueError("Profile has not selected.")
 
             self.model.delete_profile(profile)
-            self.settings = None
         except Exception as e:
             messagebox.showerror("handle_button_delete_profile", e)
         finally:
@@ -85,13 +80,12 @@ class SettingsController:
 
     def handle_boolean_var_settings_debug(self, *args):
         try:
-            profile = self.view.selected_value()
-            if self.settings is None or not profile:
+            if self.model.settings is None:
                 raise ValueError("Profile has not selected.")
 
-            self.settings["debug"] = self.view.boolean_var_settings_debug.get()
-
-            self.model.set_settings(profile, self.settings)
+            settings = self.model.settings
+            settings["is_debug"] = self.view.boolean_var_settings_debug.get()
+            self.model.settings = settings
         except Exception as e:
             messagebox.showerror("handle_boolean_var_settings_debug", e)
         finally:
