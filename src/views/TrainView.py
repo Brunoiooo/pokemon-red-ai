@@ -48,4 +48,5 @@ class TrainView(Frame):
     def add_log(self, log: str):
         self.scrolled_logs.configure(state="normal")
         self.scrolled_logs.insert("end", f"{log}\n")
+        self.scrolled_logs.see("end")
         self.scrolled_logs.configure(state="disabled")

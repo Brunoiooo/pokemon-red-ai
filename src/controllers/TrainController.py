@@ -17,25 +17,24 @@ class TrainController:
         )
 
         self.__refresh()
+        self.__run_logs()
 
     def __refresh(self):
-        state = (
-            "disabled"
-            if not self.__model.process or not self.__model.process.is_alive()
-            else "normal"
-        )
-
         self.__view.button_start.configure(
             state=(
                 "disabled"
-                if self.__model.process and self.__model.process.is_alive()
+                if self.__model.process
+                and self.__model.process.is_alive()
+                or not self.__model.event_stop.is_set()
                 else "normal"
             )
         )
         self.__view.button_stop.configure(
             state=(
                 "disabled"
-                if not self.__model.process or not self.__model.process.is_alive()
+                if self.__model.event_stop.is_set()
+                or not self.__model.process
+                or not self.__model.process.is_alive()
                 else "normal"
             )
         )
@@ -54,11 +53,9 @@ class TrainController:
 
     def stop(self):
         try:
-            self.__model.start(self.__model.settings)
-
-            self.__run_logs()
+            self.__model.event_stop.set()
         except Exception as e:
-            messagebox.showerror("start", e)
+            messagebox.showerror("stop", e)
         finally:
             self.__refresh()
 
@@ -69,8 +66,10 @@ class TrainController:
         except queue.Empty:
             pass
 
-        if self.__model.process and self.__model.process.is_alive():
-            self.__view.after(self.__view.int_var_logs_per_run.get(), self.__run_logs)
+        self.__view.after(
+            self.__view.int_var_logs_per_run.get(),
+            self.__run_logs,
+        )
 
     def handle_boolean_var_settings_debug(self, *args):
         try:
