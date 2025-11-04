@@ -1,5 +1,5 @@
 import json
-from multiprocessing import Event, Process, Queue
+from multiprocessing import Event, Process, Queue, Value
 import os
 from typing import Any
 
@@ -14,6 +14,7 @@ class TrainModel:
         self.event_stop = Event()
         self.event_stop.set()
         self.queue_logs = Queue()
+        self.count = Value("i", 0)
 
     @property
     def settings(self) -> dict[str, Any]:
@@ -47,9 +48,13 @@ class TrainModel:
 
         self.event_stop.clear()
 
+        train_worker_args.setdefault("event_stop", self.event_stop)
+        train_worker_args.setdefault("queue_logs", self.queue_logs)
+        train_worker_args.setdefault("count", self.count)
+
         self.process = Process(
             target=TrainWorker(**train_worker_args).run,
-            args=(self.event_stop, self.queue_logs),
+            args=(),
             daemon=True,
         )
         self.process.start()
