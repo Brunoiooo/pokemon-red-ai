@@ -2,28 +2,25 @@ from collections import deque
 from dataclasses import dataclass, field
 import io
 from multiprocessing import Pipe, Process, Queue
-from multiprocessing.connection import Connection, PipeConnection
+from multiprocessing.queues import Queue as MPQueue
+from multiprocessing.connection import Connection
 from multiprocessing.sharedctypes import Synchronized
-from multiprocessing.synchronize import Event, Lock
+from multiprocessing.synchronize import Event
 import os
 from queue import Empty
 import random
+import traceback
+from typing import Any
 import torch.optim as optim
-
-from matplotlib.pylab import Any
 import numpy as np
 import torch
-
-from Emulator import Emulator
-from ModelPokemon import ModelPokemon
+from pokemon.Emulator import Emulator
+from pokemon.ModelPokemon import ModelPokemon
 from workers.ExperienceWorker import ExperienceWorker
 
 
 @dataclass
 class TrainWorker:
-    event_stop: Event
-    queue_logs: Queue
-    count: Synchronized
     is_debug = False
     workers: int = field(default_factory=lambda: os.cpu_count() or 1)
     device: str = field(
@@ -50,13 +47,53 @@ class TrainWorker:
 
     __model: None | ModelPokemon = None
 
+    __event_stop: None | Event = None
+
+    @property
+    def event_stop(self):
+        if not self.__event_stop:
+            raise RuntimeError("event_stop is not set")
+
+        return self.__event_stop
+
+    @event_stop.setter
+    def event_stop(self, event_stop: Event):
+        self.__event_stop = event_stop
+
+    __queue_logs: None | MPQueue = None
+
+    @property
+    def queue_logs(self):
+        if not self.__queue_logs:
+            raise RuntimeError("queue_logs is not set")
+
+        return self.__queue_logs
+
+    @queue_logs.setter
+    def queue_logs(self, queue_logs: MPQueue):
+        self.__queue_logs = queue_logs
+
+    __count: None | Synchronized = None
+
+    @property
+    def count(self):
+        if not self.__count:
+            raise RuntimeError("count is not set")
+
+        return self.__count
+
+    @count.setter
+    def count(self, count: Synchronized):
+        self.__count = count
+
     @property
     def model(self):
         if not self.__model:
+            emulator = Emulator()
             self.__model = ModelPokemon(
-                len(emulator.data()),
-                len(emulator.buttons),
+                len(emulator.data.data()), len(emulator.buttons)
             ).to(self.device)
+            emulator.pyboy.stop(False)
 
             ckpt_path = None
             if os.path.exists("models/latest.pth"):
@@ -84,10 +121,11 @@ class TrainWorker:
     @property
     def target_model(self):
         if not self.__target_model:
+            emulator = Emulator()
             self.__target_model = ModelPokemon(
-                len(emulator.data()),
-                len(emulator.buttons),
+                len(emulator.data.data()), len(emulator.buttons)
             ).to(self.device)
+            emulator.pyboy.stop(False)
 
             self.target_model.load_state_dict(self.model.state_dict())
 
@@ -95,7 +133,7 @@ class TrainWorker:
 
         return self.__target_model
 
-    __optimizer: None | optim.AdamW
+    __optimizer: None | optim.AdamW = None
 
     @property
     def optimizer(self):
@@ -147,8 +185,12 @@ class TrainWorker:
     def best_eval_return(self, best_eval_return: float):
         self.__best_eval_return = best_eval_return
 
-    def run(self):
+    def run(self, event_stop: Event, queue_logs: MPQueue, count: Synchronized):
         try:
+            self.event_stop = event_stop
+            self.queue_logs = queue_logs
+            self.count = count
+
             queue_data = Queue(maxsize=self.queue_data_maxsize)
 
             processes: dict[int, Process] = {}
@@ -169,13 +211,20 @@ class TrainWorker:
 
             self.setup_experience_workers(
                 connections_epsilon=connections_epsilon,
-                connections_epsilon=connections_state_dict,
+                connections_state_dict=connections_state_dict,
             )
 
             deque_buffer = deque(maxlen=self.deque_buffer_maxlen)
 
             while not self.event_stop.is_set():
                 with self.count.get_lock():
+                    print("test")
+                    print(self.count.value)
+                    if self.count.value % 1000 == 0:
+                        self.queue_logs.put_nowait(
+                            f"Count: {self.count.value} | Epsilon: {self.current_epsilon:.2f} | Progress: {(self.count.value / self.epsilon_end * 100):.2f}% | queue_data: {queue_data.qsize()} | deque_buffer: {len(deque_buffer)}"
+                        )
+
                     try:
                         deque_buffer.append(queue_data.get_nowait())
                     except Empty as e:
@@ -189,7 +238,7 @@ class TrainWorker:
                     if self.count.value % self.sync_interval == 0:
                         self.setup_experience_workers(
                             connections_epsilon=connections_epsilon,
-                            connections_epsilon=connections_state_dict,
+                            connections_state_dict=connections_state_dict,
                         )
 
                     if self.count.value % self.ckpt_every == 0:
@@ -198,6 +247,7 @@ class TrainWorker:
                     self.count.value += 1
         except Exception as e:
             self.queue_logs.put_nowait(e)
+            print(traceback.print_exc())
             self.event_stop.set()
 
     def optimize_batch(self, deque_buffer: deque):
@@ -280,6 +330,7 @@ class TrainWorker:
                 tp.data.copy_(self.tau * p.data + (1 - self.tau) * tp.data)
 
     def save_latest(self):
+        os.makedirs("models", exist_ok=True)
         with self.count.get_lock():
             torch.save(
                 {
@@ -304,7 +355,7 @@ class TrainWorker:
                 "models/best.pth",
             )
 
-    def create_process(self, queue_data: Queue):
+    def create_process(self, queue_data: MPQueue):
         connection_epsilon_parent, connection_epsilon_child = Pipe(duplex=True)
         connection_state_dict_parent, connection_state_dict_child = Pipe(duplex=True)
 
@@ -327,7 +378,7 @@ class TrainWorker:
         connections_epsilon: dict[int, Connection],
         connections_state_dict: dict[int, Connection],
     ):
-        for i in zip(connections_epsilon):
+        for i in connections_epsilon:
             connections_epsilon[i].send(self.current_epsilon)
 
         buffer = io.BytesIO()
@@ -339,8 +390,8 @@ class TrainWorker:
     def evaluate_greedy(self):
         self.save_latest()
 
-        avg_ret = Emulator().emulator.evaluate_greedy(
-            self.model, self.evaluate_greedy_times
+        avg_ret = Emulator().evaluate_greedy(
+            model=self.model, evaluate_greedy_times=self.evaluate_greedy_times
         )
 
         if avg_ret > self.best_eval_return:

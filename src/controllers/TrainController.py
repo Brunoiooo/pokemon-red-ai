@@ -43,7 +43,7 @@ class TrainController:
 
     def start(self):
         try:
-            self.__model.start(self.__model.settings)
+            self.__model.start()
 
             self.__run_logs()
         except Exception as e:

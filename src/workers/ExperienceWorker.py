@@ -7,13 +7,9 @@ from multiprocessing.synchronize import Event
 from queue import Full
 import random
 import time
-from typing import Any
-
-from pyboy import PyBoy
 import torch
-
-from Emulator import Emulator
-from ModelPokemon import ModelPokemon
+from pokemon.Emulator import Emulator
+from pokemon.ModelPokemon import ModelPokemon
 
 
 @dataclass
@@ -24,12 +20,23 @@ class ExperienceWorker:
     connection_state_dict: Connection
     queue_data: Queue
     gamma: float
-    emulator: Emulator = field(default_factory=Emulator)
-    model: ModelPokemon = field(
-        default_factory=lambda: ModelPokemon(len(data()), len(buttons)).to("cpu")
-    )
     epsilon: float = 1.0
     td_error_steps = 5
+
+    __model: None | ModelPokemon = None
+
+    @property
+    def model(self):
+        if not self.__model:
+            emulator = Emulator()
+            self.__model = ModelPokemon(
+                len(emulator.data.data()), len(emulator.buttons)
+            )
+            emulator.pyboy.stop(False)
+
+            self.model.eval()
+
+        return self.__model
 
     __buffer: deque | None = None
 
@@ -40,19 +47,28 @@ class ExperienceWorker:
 
         return self.__buffer
 
+    __emulator: Emulator | None = None
+
+    @property
+    def emulator(self):
+        if self.__emulator is None:
+            self.__emulator = Emulator()
+
+        return self.__emulator
+
     def start(self):
         try:
             self.sync()
 
-            inputs = self.emulator.reset()
+            memory, inputs = self.emulator.reset()
 
             while not self.event_stop.is_set():
                 self.poll()
 
                 action = self.get_action(inputs)
 
-                next_inputs, reward, terminated, truncated = self.emulator.step(
-                    inputs=inputs, action=action
+                next_memory, next_inputs, reward, terminated, truncated = (
+                    self.emulator.step(memory=memory, action=action)
                 )
 
                 self.buffer.append(
@@ -66,12 +82,18 @@ class ExperienceWorker:
 
                 self.put_to_queue_data(terminated=terminated, truncated=truncated)
 
-                inputs = (
-                    self.emulator.reset() if terminated or truncated else next_inputs
+                if terminated:
+                    self.emulator.save()
+
+                memory, inputs = (
+                    self.emulator.reset()
+                    if terminated or truncated
+                    else (next_memory, next_inputs)
                 )
 
         except Exception as e:
             self.queue_logs.put_nowait(e)
+            self.emulator.pyboy.stop(False)
 
     def sync(self):
         self.load_state_dict(self.connection_state_dict.recv())

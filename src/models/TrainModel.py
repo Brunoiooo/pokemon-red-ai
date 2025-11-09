@@ -42,19 +42,19 @@ class TrainModel:
         ) as file:
             json.dump(settings, file, indent=4, ensure_ascii=False)
 
-    def start(self, train_worker_args: dict[str, Any]):
+    def start(self):
         if self.process is not None and self.process.is_alive():
             raise RuntimeError(f"Worker (pid={self.process.pid}) is already running")
 
         self.event_stop.clear()
 
-        train_worker_args.setdefault("event_stop", self.event_stop)
-        train_worker_args.setdefault("queue_logs", self.queue_logs)
-        train_worker_args.setdefault("count", self.count)
-
         self.process = Process(
-            target=TrainWorker(**train_worker_args).run,
-            args=(),
-            daemon=True,
+            target=TrainWorker().run,
+            kwargs={
+                "event_stop": self.event_stop,
+                "queue_logs": self.queue_logs,
+                "count": self.count,
+            },
+            daemon=False,
         )
         self.process.start()
