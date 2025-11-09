@@ -1,5 +1,5 @@
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import io
 from multiprocessing import Queue
 from multiprocessing.connection import Connection
