@@ -241,8 +241,6 @@ class TrainWorker:
                     if self.count.value % self.ckpt_every == 0:
                         self.evaluate_greedy()
 
-                    print("test")
-
                     self.count.value += 1
         except Exception as e:
             self.queue_logs.put_nowait(e)
