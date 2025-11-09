@@ -218,8 +218,6 @@ class TrainWorker:
 
             while not self.event_stop.is_set():
                 with self.count.get_lock():
-                    print("test")
-                    print(self.count.value)
                     if self.count.value % 1000 == 0:
                         self.queue_logs.put_nowait(
                             f"Count: {self.count.value} | Epsilon: {self.current_epsilon:.2f} | Progress: {(self.count.value / self.epsilon_end * 100):.2f}% | queue_data: {queue_data.qsize()} | deque_buffer: {len(deque_buffer)}"
@@ -228,7 +226,6 @@ class TrainWorker:
                     try:
                         deque_buffer.append(queue_data.get_nowait())
                     except Empty as e:
-                        self.queue_logs.put_nowait(e)
                         self.event_stop.wait(0.001)
 
                     if self.count.value % self.optimize_every == 0:
@@ -243,6 +240,8 @@ class TrainWorker:
 
                     if self.count.value % self.ckpt_every == 0:
                         self.evaluate_greedy()
+
+                    print("test")
 
                     self.count.value += 1
         except Exception as e:

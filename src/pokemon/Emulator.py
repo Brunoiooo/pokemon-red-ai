@@ -39,14 +39,14 @@ class Emulator:
 
     __pyboy: None | PyBoy = None
 
-    __window: Literal["null", "window"] = "null"
+    __window: Literal["null", "SDL2"] = "null"
 
     @property
     def window(self):
         return self.__window
 
     @window.setter
-    def window(self, window: Literal["null", "window"]):
+    def window(self, window: Literal["null", "SDL2"]):
         if window == self.__window:
             return
 
