@@ -16,8 +16,13 @@ class TrainController:
             "write", self.handle_boolean_var_settings_debug
         )
 
+        self.__view.boolean_var_settings_evaluation_window.trace_add(
+            "write", self.handle_boolean_var_settings_evaluation_window
+        )
+
         self.__refresh()
         self.__run_logs()
+        self.__run_evaluation_logs()
 
     def __refresh(self):
         self.__view.button_start.configure(
@@ -62,7 +67,7 @@ class TrainController:
     def __run_logs(self):
         try:
             for _ in range(self.__view.int_var_logs_per_run.get()):
-                self.__view.add_log(self.__model.queue_logs.get_nowait())
+                self.__view.add_log(self.__model.queue_logs.get_nowait(), "INFO")
         except queue.Empty:
             pass
 
@@ -71,15 +76,38 @@ class TrainController:
             self.__run_logs,
         )
 
+    def __run_evaluation_logs(self):
+        try:
+            for _ in range(self.__view.int_var_logs_per_run.get()):
+                self.__view.add_log(
+                    self.__model.queue_evaluation_logs.get_nowait(), "EVAL"
+                )
+        except queue.Empty:
+            pass
+
+        self.__view.after(
+            self.__view.int_var_logs_per_run.get(),
+            self.__run_evaluation_logs,
+        )
+
     def handle_boolean_var_settings_debug(self, *args):
         try:
-            if self.__model.settings is None:
-                raise ValueError("Profile has not selected.")
-
-            settings = self.__model.settings
-            settings["is_debug"] = self.__view.boolean_var_settings_debug.get()
-            self.__model.settings = settings
+            with self.__model.is_debug.get_lock():
+                self.__model.is_debug.value = (
+                    self.__view.boolean_var_settings_debug.get()
+                )
         except Exception as e:
             messagebox.showerror("handle_boolean_var_settings_debug", e)
+        finally:
+            self.__refresh()
+
+    def handle_boolean_var_settings_evaluation_window(self, *args):
+        try:
+            with self.__model.is_evaluation_window.get_lock():
+                self.__model.is_evaluation_window.value = (
+                    self.__view.boolean_var_settings_evaluation_window.get()
+                )
+        except Exception as e:
+            messagebox.showerror("handle_boolean_var_settings_evaluation_window", e)
         finally:
             self.__refresh()

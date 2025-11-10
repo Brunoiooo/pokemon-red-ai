@@ -40,13 +40,23 @@ class TrainView(Frame):
             row=0, column=6, padx=6, pady=6, sticky="e"
         )
 
+        self.boolean_var_settings_evaluation_window = BooleanVar()
+        self.checkbutton_settings_evaluation_window = Checkbutton(
+            self,
+            text="Evaluation Window",
+            variable=self.boolean_var_settings_evaluation_window,
+        )
+        self.checkbutton_settings_evaluation_window.grid(
+            row=0, column=7, padx=6, pady=6, sticky="e"
+        )
+
         self.scrolled_logs = ScrolledText(self, wrap="word", state="disabled")
         self.scrolled_logs.grid(
             row=1, column=0, columnspan=7, sticky="nsew", padx=6, pady=(0, 6)
         )
 
-    def add_log(self, log: str):
+    def add_log(self, log: str, type: str):
         self.scrolled_logs.configure(state="normal")
-        self.scrolled_logs.insert("end", f"{log}\n")
+        self.scrolled_logs.insert("end", f"[{type}] {log}\n")
         self.scrolled_logs.see("end")
         self.scrolled_logs.configure(state="disabled")

@@ -15,6 +15,9 @@ class TrainModel:
         self.event_stop.set()
         self.queue_logs = Queue()
         self.count = Value("i", 0)
+        self.is_debug = Value("b", False)
+        self.queue_evaluation_logs = Queue()
+        self.is_evaluation_window = Value("b", False)
 
     @property
     def settings(self) -> dict[str, Any]:
@@ -54,6 +57,9 @@ class TrainModel:
                 "event_stop": self.event_stop,
                 "queue_logs": self.queue_logs,
                 "count": self.count,
+                "is_debug": self.is_debug,
+                "queue_evaluation_logs": self.queue_evaluation_logs,
+                "is_evaluation_window": self.is_evaluation_window,
             },
             daemon=False,
         )

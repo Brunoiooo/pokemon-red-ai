@@ -1,7 +1,9 @@
 from dataclasses import dataclass
 import hashlib
 import io
+from multiprocessing.sharedctypes import Synchronized
 import os
+from queue import Queue
 import random
 from typing import Literal
 
@@ -138,9 +140,26 @@ class Emulator:
 
         return action
 
-    def evaluate_greedy(self, model: ModelPokemon, evaluate_greedy_times: int):
+    def evaluate_greedy(
+        self,
+        model: ModelPokemon,
+        evaluate_greedy_times: int,
+        queue_logs: Queue,
+        is_debug: Synchronized,
+        is_evaluation_window: Synchronized,
+    ):
+        with is_debug.get_lock():
+            if is_debug.value:
+                queue_logs.put_nowait("Started")
+
+        with is_evaluation_window.get_lock():
+            if is_evaluation_window.value:
+                self.window = "SDL2"
+            else:
+                self.window = "null"
+
         total = 0.0
-        for _ in range(evaluate_greedy_times):
+        for i in range(evaluate_greedy_times):
             memory, inputs = self.reset(random=False)
 
             ep_ret = 0.0
@@ -158,6 +177,12 @@ class Emulator:
 
                 ep_ret += float(reward)
 
+                with is_debug.get_lock():
+                    if is_debug.value:
+                        queue_logs.put_nowait(
+                            f"Episode: {i + 1}, Action: {action}, Reward: {reward:.2f}, Terminated: {terminated}, Truncated: {truncated}"
+                        )
+
                 if truncated:
                     break
 
@@ -170,6 +195,8 @@ class Emulator:
 
         self.pyboy.stop(False)
 
+        queue_logs.put_nowait("Finished")
+
         return total / evaluate_greedy_times
 
     def save(self):
@@ -181,5 +208,5 @@ class Emulator:
 
     def get_hash(self):
         return hashlib.sha256(
-            self.data.badges(self.pyboy.memory) + self.data.event_flags_data()
+            bytes(self.data.badges(self.pyboy.memory) + self.data.event_flags_data())
         ).hexdigest()

@@ -17,11 +17,11 @@ import torch
 from pokemon.Emulator import Emulator
 from pokemon.ModelPokemon import ModelPokemon
 from workers.ExperienceWorker import ExperienceWorker
+from math import inf
 
 
 @dataclass
 class TrainWorker:
-    is_debug = False
     workers: int = field(default_factory=lambda: os.cpu_count() or 1)
     device: str = field(
         default_factory=lambda: "cuda" if torch.cuda.is_available() else "cpu"
@@ -170,14 +170,19 @@ class TrainWorker:
     def best_eval_return(self):
 
         if self.__best_eval_return is None:
+            try:
+                model_best = torch.load(
+                    "models/best.pth", map_location=torch.device("cpu")
+                )
 
-            model_best = torch.load("models/best.pth", map_location=torch.device("cpu"))
+                self.__best_eval_return = float(
+                    model_best["best_return"]
+                    if isinstance(model_best, dict) and "best_return" in model_best
+                    else -float("inf")
+                )
 
-            self.__best_eval_return = float(
-                model_best["best_return"]
-                if isinstance(model_best, dict) and "best_return" in model_best
-                else -float("inf")
-            )
+            except Exception:
+                self.__best_eval_return = -inf
 
         return self.__best_eval_return
 
@@ -185,11 +190,22 @@ class TrainWorker:
     def best_eval_return(self, best_eval_return: float):
         self.__best_eval_return = best_eval_return
 
-    def run(self, event_stop: Event, queue_logs: MPQueue, count: Synchronized):
+    def run(
+        self,
+        event_stop: Event,
+        queue_logs: MPQueue,
+        count: Synchronized,
+        queue_evaluation_logs: MPQueue,
+        is_debug: Synchronized,
+        is_evaluation_window: Synchronized,
+    ):
         try:
             self.event_stop = event_stop
             self.queue_logs = queue_logs
             self.count = count
+            self.queue_evaluation_logs = queue_evaluation_logs
+            self.is_debug = is_debug
+            self.is_evaluation_window = is_evaluation_window
 
             queue_data = Queue(maxsize=self.queue_data_maxsize)
 
@@ -220,13 +236,15 @@ class TrainWorker:
                 with self.count.get_lock():
                     if self.count.value % 1000 == 0:
                         self.queue_logs.put_nowait(
-                            f"Count: {self.count.value} | Epsilon: {self.current_epsilon:.2f} | Progress: {(self.count.value / self.epsilon_end * 100):.2f}% | queue_data: {queue_data.qsize()} | deque_buffer: {len(deque_buffer)}"
+                            f"Count: {self.count.value} | Epsilon: {self.current_epsilon:.2f} | Progress: {(self.count.value / self.epsilon_decay_count * 100):.2f}% | queue_data: {queue_data.qsize()} | deque_buffer: {len(deque_buffer)}"
                         )
 
                     try:
                         deque_buffer.append(queue_data.get_nowait())
                     except Empty as e:
                         self.event_stop.wait(0.001)
+                    finally:
+                        self.count.value += 1
 
                     if self.count.value % self.optimize_every == 0:
                         for _ in range(self.updates_per_optimize):
@@ -241,11 +259,19 @@ class TrainWorker:
                     if self.count.value % self.ckpt_every == 0:
                         self.evaluate_greedy()
 
-                    self.count.value += 1
         except Exception as e:
             self.queue_logs.put_nowait(e)
             print(traceback.print_exc())
             self.event_stop.set()
+        finally:
+            for i, process in processes.items():
+                print(f"Stopping process {i}...")
+                process.join(timeout=5)
+
+                if process.is_alive():
+                    print(f"⚠️ Process {i} did not exit, terminating...")
+                    process.terminate()
+                    process.join(timeout=2)
 
     def optimize_batch(self, deque_buffer: deque):
         if len(deque_buffer) < self.batch_size:
@@ -342,6 +368,7 @@ class TrainWorker:
     def save_best(self, avg_return: float):
         self.best_eval_return = avg_return
 
+        os.makedirs("models", exist_ok=True)
         with self.count.get_lock():
             torch.save(
                 {
@@ -388,7 +415,11 @@ class TrainWorker:
         self.save_latest()
 
         avg_ret = Emulator().evaluate_greedy(
-            model=self.model, evaluate_greedy_times=self.evaluate_greedy_times
+            model=self.model,
+            evaluate_greedy_times=self.evaluate_greedy_times,
+            queue_logs=self.queue_evaluation_logs,
+            is_debug=self.is_debug,
+            is_evaluation_window=self.is_evaluation_window,
         )
 
         if avg_ret > self.best_eval_return:

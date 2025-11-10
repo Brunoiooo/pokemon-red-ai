@@ -7,6 +7,7 @@ from multiprocessing.synchronize import Event
 from queue import Full
 import random
 import time
+import traceback
 import torch
 from pokemon.Emulator import Emulator
 from pokemon.ModelPokemon import ModelPokemon
@@ -92,8 +93,12 @@ class ExperienceWorker:
                 )
 
         except Exception as e:
+            self.event_stop.set()
             self.queue_logs.put_nowait(e)
+            print(traceback.format_exc())
+        finally:
             self.emulator.pyboy.stop(False)
+            print("ExperienceWorker stopped.")
 
     def sync(self):
         self.load_state_dict(self.connection_state_dict.recv())
