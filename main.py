@@ -6,7 +6,6 @@ from multiprocessing import set_start_method
 sys.path.append("src")
 
 from Router import Router
-from window.Window import Window
 
 
 def main():

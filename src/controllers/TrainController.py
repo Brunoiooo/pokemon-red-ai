@@ -1,34 +1,54 @@
 import queue
 from tkinter import messagebox
-from models.SettingsModel import SettingsModel
 from models.TrainModel import TrainModel
 from views.TrainView import TrainView
-from workers import TrainWorker
 
 
 class TrainController:
-    def __init__(
-        self, view: TrainView, model: TrainModel, settingsModel: SettingsModel
-    ):
+    def __init__(self, view: TrainView, model: TrainModel):
         self.__view = view
         self.__model = model
-        self.__settingsModel = settingsModel
 
         self.__view.button_start.config(command=self.start)
+        self.__view.button_stop.config(command=self.stop)
+
+        self.__view.boolean_var_settings_debug.trace_add(
+            "write", self.handle_boolean_var_settings_debug
+        )
+
+        self.__view.boolean_var_settings_evaluation_window.trace_add(
+            "write", self.handle_boolean_var_settings_evaluation_window
+        )
 
         self.__refresh()
-
-        self.__configure_button_start()
+        self.__run_logs()
+        self.__run_evaluation_logs()
 
     def __refresh(self):
-        pass
+        self.__view.button_start.configure(
+            state=(
+                "disabled"
+                if self.__model.process
+                and self.__model.process.is_alive()
+                or not self.__model.event_stop.is_set()
+                else "normal"
+            )
+        )
+        self.__view.button_stop.configure(
+            state=(
+                "disabled"
+                if self.__model.event_stop.is_set()
+                or not self.__model.process
+                or not self.__model.process.is_alive()
+                else "normal"
+            )
+        )
+
+        self.__view.after(1000, self.__refresh)
 
     def start(self):
         try:
-            if self.__settingsModel.settings is None:
-                raise ValueError("Profile has not selected.")
-
-            self.__model.start(self.__settingsModel.settings)
+            self.__model.start()
 
             self.__run_logs()
         except Exception as e:
@@ -36,27 +56,58 @@ class TrainController:
         finally:
             self.__refresh()
 
+    def stop(self):
+        try:
+            self.__model.event_stop.set()
+        except Exception as e:
+            messagebox.showerror("stop", e)
+        finally:
+            self.__refresh()
+
     def __run_logs(self):
         try:
-            for _ in range(self.__settingsModel.settings.get("logs_per_run", 100)):
-                self.__view.add_log(self.__model.queue_logs.get_nowait())
+            for _ in range(self.__view.int_var_logs_per_run.get()):
+                self.__view.add_log(self.__model.queue_logs.get_nowait(), "INFO")
         except queue.Empty:
             pass
 
-        if self.__is_running:
-            self.__view.after(
-                self.__settingsModel.settings.get("logs_delay_ms", 50), self.__run_logs
-            )
-
-    def __configure_button_start(self):
-        self.__view.button_start.configure(
-            state=(
-                "disabled"
-                if not self.__model.process
-                or not self.__model.process.is_alive()
-                and self.__settingsModel.settings is None
-                else "normal"
-            )
+        self.__view.after(
+            self.__view.int_var_logs_per_run.get(),
+            self.__run_logs,
         )
 
-        self.__view.after(1000, self.__configure_button_start)
+    def __run_evaluation_logs(self):
+        try:
+            for _ in range(self.__view.int_var_logs_per_run.get()):
+                self.__view.add_log(
+                    self.__model.queue_evaluation_logs.get_nowait(), "EVAL"
+                )
+        except queue.Empty:
+            pass
+
+        self.__view.after(
+            self.__view.int_var_logs_per_run.get(),
+            self.__run_evaluation_logs,
+        )
+
+    def handle_boolean_var_settings_debug(self, *args):
+        try:
+            with self.__model.is_debug.get_lock():
+                self.__model.is_debug.value = (
+                    self.__view.boolean_var_settings_debug.get()
+                )
+        except Exception as e:
+            messagebox.showerror("handle_boolean_var_settings_debug", e)
+        finally:
+            self.__refresh()
+
+    def handle_boolean_var_settings_evaluation_window(self, *args):
+        try:
+            with self.__model.is_evaluation_window.get_lock():
+                self.__model.is_evaluation_window.value = (
+                    self.__view.boolean_var_settings_evaluation_window.get()
+                )
+        except Exception as e:
+            messagebox.showerror("handle_boolean_var_settings_evaluation_window", e)
+        finally:
+            self.__refresh()
