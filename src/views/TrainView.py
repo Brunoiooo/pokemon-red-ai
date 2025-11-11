@@ -1,59 +1,90 @@
-from tkinter import BooleanVar, Button, Checkbutton, Entry, Frame, IntVar, Label, Misc
+from tkinter import BooleanVar, IntVar, Misc, Tk
 from tkinter.scrolledtext import ScrolledText
+from tkinter import ttk
 
 
-class TrainView(Frame):
+class TrainView(ttk.Frame):
+    PAD = 6
+
     def __init__(self, master: Misc):
-        super().__init__(master=master)
+        super().__init__(master)
 
-        self.grid_rowconfigure(1, weight=1)
-        for c in range(7):
-            self.grid_columnconfigure(c, weight=1)
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(2, weight=1)
 
-        self.button_start = Button(self, text="Start")
-        self.button_start.grid(row=0, column=0, padx=6, pady=6, sticky="w")
+        toolbar = ttk.Frame(self)
+        toolbar.grid(row=0, column=0, sticky="ew", padx=self.PAD, pady=(self.PAD, 2))
+        toolbar.columnconfigure(10, weight=1)
 
-        self.button_stop = Button(self, text="Stop")
-        self.button_stop.grid(row=0, column=1, padx=6, pady=6, sticky="w")
+        self.button_start = ttk.Button(toolbar, text="Start")
+        self.button_stop = ttk.Button(toolbar, text="Stop")
+        self.button_start.grid(row=0, column=0, padx=(0, self.PAD))
+        self.button_stop.grid(row=0, column=1)
 
-        Label(self, text="Logs batch").grid(row=0, column=2, padx=5, pady=5, sticky="e")
-        self.int_var_logs_per_run = IntVar(value=50)
-        self.entry_logs_per_run = Entry(
-            self, textvariable=self.int_var_logs_per_run, width=6
+        mid = ttk.Frame(self)
+        mid.grid(row=1, column=0, sticky="ew", padx=self.PAD, pady=(2, 2))
+        mid.columnconfigure(0, weight=3)
+        mid.columnconfigure(1, weight=2)
+
+        settings = ttk.LabelFrame(mid, text="Ustawienia")
+        settings.grid(row=0, column=0, sticky="nsew", padx=(0, self.PAD))
+        for c in range(4):
+            settings.columnconfigure(c, weight=1)
+
+        ttk.Label(settings, text="Logs batch:").grid(
+            row=0, column=0, sticky="e", padx=2, pady=2
         )
-        self.entry_logs_per_run.grid(row=0, column=3, padx=5, pady=5, sticky="w")
+        self.int_var_logs_per_run = IntVar(value=50)
+        self.spin_logs_per_run = ttk.Spinbox(
+            settings, from_=1, to=9999, width=6, textvariable=self.int_var_logs_per_run
+        )
+        self.spin_logs_per_run.grid(row=0, column=1, sticky="w", pady=2)
 
-        Label(self, text="Logs delay ms").grid(
-            row=0, column=4, padx=5, pady=5, sticky="e"
+        ttk.Label(settings, text="Delay (ms):").grid(
+            row=0, column=2, sticky="e", padx=2, pady=2
         )
         self.int_var_logs_delay_ms = IntVar(value=50)
-        self.entry_logs_delay_ms = Entry(
-            self, textvariable=self.int_var_logs_delay_ms, width=6
+        self.spin_logs_delay = ttk.Spinbox(
+            settings, from_=0, to=9999, width=6, textvariable=self.int_var_logs_delay_ms
         )
-        self.entry_logs_delay_ms.grid(row=0, column=5, padx=5, pady=5, sticky="w")
+        self.spin_logs_delay.grid(row=0, column=3, sticky="w", pady=2)
 
         self.boolean_var_settings_debug = BooleanVar()
-        self.checkbutton_settings_debug = Checkbutton(
-            self, text="Debug", variable=self.boolean_var_settings_debug
-        )
-        self.checkbutton_settings_debug.grid(
-            row=0, column=6, padx=6, pady=6, sticky="e"
-        )
+        ttk.Checkbutton(
+            settings, text="Debug", variable=self.boolean_var_settings_debug
+        ).grid(row=1, column=0, sticky="w", padx=2, pady=2)
 
         self.boolean_var_settings_evaluation_window = BooleanVar()
-        self.checkbutton_settings_evaluation_window = Checkbutton(
-            self,
-            text="Evaluation Window",
+        ttk.Checkbutton(
+            settings,
+            text="Debug Eval",
             variable=self.boolean_var_settings_evaluation_window,
+        ).grid(row=1, column=1, sticky="w", padx=2, pady=2)
+
+        actions = ttk.LabelFrame(mid, text="Ewaluacja")
+        actions.grid(row=0, column=1, sticky="nsew")
+        self.button_evaluate_greedy_latest = ttk.Button(
+            actions, text="Evaluate Greedy Latest"
         )
-        self.checkbutton_settings_evaluation_window.grid(
-            row=0, column=7, padx=6, pady=6, sticky="e"
+        self.button_evaluate_greedy_best = ttk.Button(
+            actions, text="Evaluate Greedy Best"
+        )
+        self.button_evaluate_greedy_latest.grid(
+            row=0, column=0, sticky="ew", padx=4, pady=(4, 2)
+        )
+        self.button_evaluate_greedy_best.grid(
+            row=1, column=0, sticky="ew", padx=4, pady=(0, 4)
         )
 
-        self.scrolled_logs = ScrolledText(self, wrap="word", state="disabled")
-        self.scrolled_logs.grid(
-            row=1, column=0, columnspan=7, sticky="nsew", padx=6, pady=(0, 6)
+        logs_frame = ttk.LabelFrame(self, text="Logi")
+        logs_frame.grid(
+            row=2, column=0, sticky="nsew", padx=self.PAD, pady=(0, self.PAD)
         )
+        logs_frame.rowconfigure(0, weight=1)
+        logs_frame.columnconfigure(0, weight=1)
+
+        self.scrolled_logs = ScrolledText(logs_frame, wrap="word", state="disabled")
+        self.scrolled_logs.grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
 
     def add_log(self, log: str, type: str):
         self.scrolled_logs.configure(state="normal")
