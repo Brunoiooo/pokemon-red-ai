@@ -22,7 +22,7 @@ class ExperienceWorker:
     connection_state_dict: Connection
     queue_data: Queue
     gamma: float
-    epsilon: float = 0.2
+    epsilon: float = 1
     td_error_steps = 5
 
     __model: None | ModelPokemon = None
