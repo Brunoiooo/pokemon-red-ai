@@ -1,5 +1,34 @@
+import os
 import torch
 import torch.nn as nn
+
+from pokemon import Emulator
+
+
+def get_model(device: str, name: str | None = None):
+    emulator = Emulator.Emulator()
+    model = ModelPokemon(len(emulator.data.data()), len(emulator.buttons)).to(device)
+    emulator.pyboy.stop(False)
+
+    if name is None:
+        return model
+
+    ckpt_path = f"models/{name}.pth"
+    if not os.path.exists(ckpt_path):
+        raise FileNotFoundError(f"Model checkpoint not found: {ckpt_path}")
+
+    state = torch.load(ckpt_path, map_location=device)
+
+    model.load_state_dict(
+        (
+            state["model_state"]
+            if isinstance(state, dict) and "model_state" in state
+            else state
+        ),
+        strict=True,
+    )
+
+    return model
 
 
 class ModelPokemon(nn.Module):

@@ -15,7 +15,7 @@ import torch.optim as optim
 import numpy as np
 import torch
 from pokemon.Emulator import Emulator
-from pokemon.ModelPokemon import ModelPokemon
+from pokemon.ModelPokemon import ModelPokemon, get_model
 from workers.ExperienceWorker import ExperienceWorker
 from math import inf
 
@@ -44,8 +44,6 @@ class TrainWorker:
     epsilon_decay_count = 2000000
     ckpt_every = 25000
     evaluate_greedy_times = 5
-
-    __model: None | ModelPokemon = None
 
     __event_stop: None | Event = None
 
@@ -86,33 +84,20 @@ class TrainWorker:
     def count(self, count: Synchronized):
         self.__count = count
 
+    __model: None | ModelPokemon = None
+
     @property
     def model(self):
         if not self.__model:
-            emulator = Emulator()
-            self.__model = ModelPokemon(
-                len(emulator.data.data()), len(emulator.buttons)
-            ).to(self.device)
-            emulator.pyboy.stop(False)
-
-            ckpt_path = None
+            name = None
             if os.path.exists("models/latest.pth"):
-                ckpt_path = "models/latest.pth"
+                name = "latest"
             elif os.path.exists("models/best.pth"):
-                ckpt_path = "models/best.pth"
+                name = "best"
 
-            if ckpt_path:
-                state = torch.load(ckpt_path, map_location=self.device)
-                self.model.load_state_dict(
-                    (
-                        state["model_state"]
-                        if isinstance(state, dict) and "model_state" in state
-                        else state
-                    ),
-                    strict=True,
-                )
+            self.__model = get_model(self.device, name)
 
-            self.model.train()
+            self.__model.train()
 
         return self.__model
 
@@ -195,7 +180,6 @@ class TrainWorker:
         event_stop: Event,
         queue_logs: MPQueue,
         count: Synchronized,
-        queue_evaluation_logs: MPQueue,
         is_debug: Synchronized,
         is_evaluation_window: Synchronized,
     ):
@@ -203,7 +187,6 @@ class TrainWorker:
             self.event_stop = event_stop
             self.queue_logs = queue_logs
             self.count = count
-            self.queue_evaluation_logs = queue_evaluation_logs
             self.is_debug = is_debug
             self.is_evaluation_window = is_evaluation_window
 
@@ -263,19 +246,16 @@ class TrainWorker:
             self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
             self.event_stop.set()
         finally:
-            with self.is_debug.get_lock():
-                for i, process in processes.items():
-                    if self.is_debug.value:
-                        self.queue_logs.put_nowait(f"Stopping process {i}...")
-                    process.join(timeout=5)
+            for i, process in processes.items():
+                self.queue_logs.put_nowait(f"Stopping process {i}...")
+                process.join(timeout=5)
 
-                    if process.is_alive():
-                        if self.is_debug.value:
-                            self.queue_logs.put_nowait(
-                                f"⚠️ Process {i} did not exit, terminating..."
-                            )
-                        process.terminate()
-                        process.join(timeout=2)
+                if process.is_alive():
+                    self.queue_logs.put_nowait(
+                        f"⚠️ Process {i} did not exit, terminating..."
+                    )
+                    process.terminate()
+                    process.join(timeout=2)
 
     def optimize_batch(self, deque_buffer: deque):
         if len(deque_buffer) < self.batch_size:
@@ -421,7 +401,7 @@ class TrainWorker:
         avg_ret = Emulator().evaluate_greedy(
             model=self.model,
             evaluate_greedy_times=self.evaluate_greedy_times,
-            queue_logs=self.queue_evaluation_logs,
+            queue_logs=self.queue_logs,
             is_debug=self.is_debug,
             is_evaluation_window=self.is_evaluation_window,
         )

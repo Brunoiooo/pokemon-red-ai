@@ -3,6 +3,8 @@ from multiprocessing import Event, Process, Queue, Value
 import os
 from typing import Any
 
+from pokemon.Emulator import Emulator
+from pokemon.ModelPokemon import get_model
 from workers.TrainWorker import TrainWorker
 
 
@@ -16,7 +18,6 @@ class TrainModel:
         self.queue_logs = Queue()
         self.count = Value("i", 0)
         self.is_debug = Value("b", False)
-        self.queue_evaluation_logs = Queue()
         self.is_evaluation_window = Value("b", False)
 
     @property
@@ -58,9 +59,17 @@ class TrainModel:
                 "queue_logs": self.queue_logs,
                 "count": self.count,
                 "is_debug": self.is_debug,
-                "queue_evaluation_logs": self.queue_evaluation_logs,
                 "is_evaluation_window": self.is_evaluation_window,
             },
             daemon=False,
         )
         self.process.start()
+
+    def start_evaluation(self, best_model: bool):
+        return Emulator().evaluate_greedy(
+            model=get_model("cpu", "best" if best_model else "latest"),
+            evaluate_greedy_times=1,
+            queue_logs=self.queue_logs,
+            is_debug=self.is_debug,
+            is_evaluation_window=self.is_evaluation_window,
+        )

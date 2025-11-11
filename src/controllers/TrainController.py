@@ -22,7 +22,6 @@ class TrainController:
 
         self.__refresh()
         self.__run_logs()
-        self.__run_evaluation_logs()
 
     def __refresh(self):
         self.__view.button_start.configure(
@@ -74,20 +73,6 @@ class TrainController:
         self.__view.after(
             self.__view.int_var_logs_per_run.get(),
             self.__run_logs,
-        )
-
-    def __run_evaluation_logs(self):
-        try:
-            for _ in range(self.__view.int_var_logs_per_run.get()):
-                self.__view.add_log(
-                    self.__model.queue_evaluation_logs.get_nowait(), "EVAL"
-                )
-        except queue.Empty:
-            pass
-
-        self.__view.after(
-            self.__view.int_var_logs_per_run.get(),
-            self.__run_evaluation_logs,
         )
 
     def handle_boolean_var_settings_debug(self, *args):
