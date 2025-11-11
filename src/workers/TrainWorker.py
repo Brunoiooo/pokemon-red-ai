@@ -219,7 +219,7 @@ class TrainWorker:
                 with self.count.get_lock():
                     if self.count.value % 1000 == 0:
                         self.queue_logs.put_nowait(
-                            f"Count: {self.count.value} | Epsilon: {self.current_epsilon:.2f} | Progress: {(self.count.value / self.epsilon_decay_count * 100):.2f}% | queue_data: {queue_data.qsize()} | deque_buffer: {len(deque_buffer)}"
+                            f"Count: {self.count.value} | Epsilon: {self.current_epsilon:.2f} | Progress: {(self.count.value / self.epsilon_decay_count * 100):.2f}% | queue_data: {queue_data.qsize()}"
                         )
 
                     try:
