@@ -88,8 +88,8 @@ class ExperienceWorker:
                     self.emulator.save()
 
                 memory, inputs = (
-                    self.emulator.reset()
-                    if terminated or truncated
+                    self.emulator.reset("start")
+                    if truncated
                     else (next_memory, next_inputs)
                 )
 
@@ -132,7 +132,7 @@ class ExperienceWorker:
         return self.emulator.mask_action(action)
 
     def put_to_queue_data(self, terminated: bool, truncated: bool):
-        if terminated or truncated or len(self.buffer) >= self.buffer.maxlen:
+        if self.buffer.maxlen <= len(self.buffer):
             while len(self.buffer):
                 reward, discount = 0.0, 1.0
 
@@ -152,10 +152,10 @@ class ExperienceWorker:
                         )
                     )
                 except Full:
-                    time.sleep(0.001)
+                    time.sleep(0.01)
                     pass
 
-                if terminated or truncated:
+                if truncated:
                     self.buffer.popleft()
                 else:
                     break
