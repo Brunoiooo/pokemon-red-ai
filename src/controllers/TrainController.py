@@ -67,7 +67,7 @@ class TrainController:
     def __run_logs(self):
         try:
             for _ in range(self.__view.int_var_logs_per_run.get()):
-                self.__view.add_log(self.__model.queue_logs.get_nowait(), "INFO")
+                self.__view.add_log(self.__model.queue_logs.get_nowait())
         except queue.Empty:
             pass
 
