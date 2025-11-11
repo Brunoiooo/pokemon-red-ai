@@ -16,6 +16,7 @@ from pokemon.ModelPokemon import ModelPokemon
 
 @dataclass
 class Emulator:
+    id: int = 0
     saves = "saves"
     buttons = [
         [],
@@ -35,9 +36,21 @@ class Emulator:
     ticks_per_step = 32
     ALL_BUTTONS = ["a", "b", "start", "select", "left", "right", "up", "down"]
 
+    def __post_init__(self):
+        path = f"{self.saves}/{self.id}/start"
+
+        if not os.path.exists(f"{path}/checkpoint.state"):
+            os.makedirs(path, exist_ok=True)
+
+            with open(f"{self.saves}/start/checkpoint.state", "rb") as f:
+                data = f.read()
+
+            with open(f"{path}/checkpoint.state", "wb") as f:
+                f.write(data)
+
     @property
     def random_save(self):
-        return random.choice(os.listdir(self.saves))
+        return random.choice(os.listdir(f"{self.saves}/{self.id}"))
 
     __pyboy: None | PyBoy = None
 
@@ -88,7 +101,7 @@ class Emulator:
         else:
             dir = "start"
 
-        with open(f"{self.saves}/{dir}/checkpoint.state", "rb") as f:
+        with open(f"{self.saves}/{self.id}/{dir}/checkpoint.state", "rb") as f:
             self.pyboy.load_state(f)
 
         self.data.clean()
@@ -145,18 +158,15 @@ class Emulator:
         model: ModelPokemon,
         evaluate_greedy_times: int,
         queue_logs: Queue,
-        is_debug: Synchronized,
-        is_evaluation_window: Synchronized,
+        is_debug: bool,
+        is_evaluation_window: bool,
     ):
-        with is_debug.get_lock():
-            if is_debug.value:
-                queue_logs.put_nowait("Started")
+        queue_logs.put_nowait("Start evaluation.")
 
-        with is_evaluation_window.get_lock():
-            if is_evaluation_window.value:
-                self.window = "SDL2"
-            else:
-                self.window = "null"
+        if is_evaluation_window:
+            self.window = "SDL2"
+        else:
+            self.window = "null"
 
         total = 0.0
         for i in range(evaluate_greedy_times):
@@ -177,11 +187,10 @@ class Emulator:
 
                 ep_ret += float(reward)
 
-                with is_debug.get_lock():
-                    if is_debug.value:
-                        queue_logs.put_nowait(
-                            f"Episode: {i + 1}, Action: {action}, Reward: {reward:.2f}, Terminated: {terminated}, Truncated: {truncated}"
-                        )
+                if is_debug:
+                    queue_logs.put_nowait(
+                        f"Episode: {i + 1}, Action: {action}, Reward: {reward:.2f}, Terminated: {terminated}, Truncated: {truncated}"
+                    )
 
                 if truncated:
                     break
@@ -195,12 +204,14 @@ class Emulator:
 
         self.pyboy.stop(False)
 
-        queue_logs.put_nowait("Finished")
+        queue_logs.put_nowait(
+            f"Finished evaluation {total / evaluate_greedy_times:.2f}."
+        )
 
         return total / evaluate_greedy_times
 
     def save(self):
-        path = f"{self.saves}/{self.get_hash()}"
+        path = f"{self.saves}/{self.id}/{self.get_hash()}"
 
         os.makedirs(path, exist_ok=True)
         with open(f"{path}/checkpoint.state", "wb") as f:

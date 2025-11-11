@@ -11,6 +11,7 @@ from workers.TrainWorker import TrainWorker
 class TrainModel:
     process: None | Process = None
     __FILE_SETTINGS = "settings.json"
+    evaluate_process: None | Process = None
 
     def __init__(self):
         self.event_stop = Event()
@@ -66,10 +67,23 @@ class TrainModel:
         self.process.start()
 
     def start_evaluation(self, best_model: bool):
-        return Emulator().evaluate_greedy(
-            model=get_model("cpu", "best" if best_model else "latest"),
-            evaluate_greedy_times=1,
-            queue_logs=self.queue_logs,
-            is_debug=self.is_debug,
-            is_evaluation_window=self.is_evaluation_window,
+        if self.evaluate_process is not None and self.evaluate_process.is_alive():
+            raise RuntimeError(
+                f"Evaluation Worker (pid={self.evaluate_process.pid}) is already running"
+            )
+
+        model = get_model("cpu", "best" if best_model else "latest")
+        model.eval()
+
+        self.evaluate_process = Process(
+            target=Emulator().evaluate_greedy,
+            kwargs={
+                "model": model,
+                "evaluate_greedy_times": 1,
+                "queue_logs": self.queue_logs,
+                "is_debug": self.is_debug,
+                "is_evaluation_window": self.is_evaluation_window,
+            },
         )
+
+        self.evaluate_process.start()

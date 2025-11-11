@@ -15,13 +15,14 @@ from pokemon.ModelPokemon import ModelPokemon
 
 @dataclass
 class ExperienceWorker:
+    id: int
     event_stop: Event
     queue_logs: Queue
     connection_epsilon: Connection
     connection_state_dict: Connection
     queue_data: Queue
     gamma: float
-    epsilon: float = 1.0
+    epsilon: float = 0.2
     td_error_steps = 5
 
     __model: None | ModelPokemon = None
@@ -53,7 +54,7 @@ class ExperienceWorker:
     @property
     def emulator(self):
         if self.__emulator is None:
-            self.__emulator = Emulator()
+            self.__emulator = Emulator(id=self.id)
 
         return self.__emulator
 

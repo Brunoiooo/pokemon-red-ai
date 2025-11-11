@@ -49,8 +49,24 @@ class TrainController:
                 else "normal"
             )
         )
+        self.__view.button_evaluate_greedy_best.config(
+            state=(
+                "disabled"
+                if self.__model.evaluate_process
+                and self.__model.evaluate_process.is_alive()
+                else "normal"
+            )
+        )
+        self.__view.button_evaluate_greedy_latest.config(
+            state=(
+                "disabled"
+                if self.__model.evaluate_process
+                and self.__model.evaluate_process.is_alive()
+                else "normal"
+            )
+        )
 
-        self.__view.after(250, self.__refresh)
+        self.__view.after(100, self.__refresh)
 
     def start(self):
         try:
@@ -104,22 +120,17 @@ class TrainController:
         try:
             self.__view.add_log("Starting evaluation with best model...")
             self.__view.button_evaluate_greedy_best.config(state="disabled")
-            self.__model.queue_logs.put_nowait(
-                self.__model.start_evaluation(best_model=True)
-            )
+            self.__view.button_evaluate_greedy_latest.config(state="disabled")
+            self.__model.start_evaluation(best_model=True)
+
         except Exception as e:
             messagebox.showerror("start_evaluate_greedy_best", e)
-        finally:
-            self.__view.button_evaluate_greedy_best.config(state="normal")
 
     def start_evaluate_greedy_latest(self):
         try:
             self.__view.add_log("Starting evaluation with latest model...")
+            self.__view.button_evaluate_greedy_best.config(state="disabled")
             self.__view.button_evaluate_greedy_latest.config(state="disabled")
-            self.__model.queue_logs.put_nowait(
-                self.__model.start_evaluation(best_model=False)
-            )
+            self.__model.start_evaluation(best_model=False)
         except Exception as e:
             messagebox.showerror("start_evaluate_greedy_latest", e)
-        finally:
-            self.__view.button_evaluate_greedy_latest.config(state="normal")

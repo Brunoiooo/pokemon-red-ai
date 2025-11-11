@@ -198,7 +198,7 @@ class TrainWorker:
 
             for i in range(self.workers):
                 (connection_epsilon, connection_state_dict, process) = (
-                    self.create_process(queue_data=queue_data)
+                    self.create_process(queue_data=queue_data, id=i + 1)
                 )
 
                 connections_epsilon.setdefault(i, connection_epsilon)
@@ -363,7 +363,7 @@ class TrainWorker:
                 "models/best.pth",
             )
 
-    def create_process(self, queue_data: MPQueue):
+    def create_process(self, queue_data: MPQueue, id: int):
         connection_epsilon_parent, connection_epsilon_child = Pipe(duplex=True)
         connection_state_dict_parent, connection_state_dict_child = Pipe(duplex=True)
 
@@ -375,6 +375,7 @@ class TrainWorker:
                 connection_state_dict=connection_state_dict_child,
                 queue_data=queue_data,
                 gamma=self.gamma,
+                id=id,
             ).start,
             daemon=True,
         )
@@ -398,12 +399,16 @@ class TrainWorker:
     def evaluate_greedy(self):
         self.save_latest()
 
+        with self.is_debug.get_lock(), self.is_evaluation_window.get_lock():
+            is_debug = self.is_debug.value
+            is_evaluation_window = self.is_evaluation_window.value
+
         avg_ret = Emulator().evaluate_greedy(
             model=self.model,
             evaluate_greedy_times=self.evaluate_greedy_times,
             queue_logs=self.queue_logs,
-            is_debug=self.is_debug,
-            is_evaluation_window=self.is_evaluation_window,
+            is_debug=is_debug,
+            is_evaluation_window=is_evaluation_window,
         )
 
         if avg_ret > self.best_eval_return:
