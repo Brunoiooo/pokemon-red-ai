@@ -12,6 +12,7 @@ class TrainModel:
     process: None | Process = None
     __FILE_SETTINGS = "settings.json"
     evaluate_process: None | Process = None
+    auto_mode_process: None | Process = None
 
     def __init__(self):
         self.event_stop = Event()
@@ -87,3 +88,16 @@ class TrainModel:
         )
 
         self.evaluate_process.start()
+
+    def start_auto_mode(self):
+        if self.auto_mode_process is not None and self.auto_mode_process.is_alive():
+            raise RuntimeError(
+                f"Auto Mode Worker (pid={self.auto_mode_process.pid}) is already running"
+            )
+
+        self.auto_mode_process = Process(
+            target=Emulator().auto_mode,
+            kwargs={"queue_logs": self.queue_logs},
+        )
+
+        self.auto_mode_process.start()

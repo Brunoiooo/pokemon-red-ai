@@ -11,6 +11,7 @@ class TrainController:
 
         self.__view.button_start.config(command=self.start)
         self.__view.button_stop.config(command=self.stop)
+        self.__view.button_auto_mode.config(command=self.start_auto_mode)
 
         self.__view.button_evaluate_greedy_best.config(
             command=self.start_evaluate_greedy_best
@@ -62,6 +63,14 @@ class TrainController:
                 "disabled"
                 if self.__model.evaluate_process
                 and self.__model.evaluate_process.is_alive()
+                else "normal"
+            )
+        )
+        self.__view.button_auto_mode.config(
+            state=(
+                "disabled"
+                if self.__model.auto_mode_process
+                and self.__model.auto_mode_process.is_alive()
                 else "normal"
             )
         )
@@ -134,3 +143,11 @@ class TrainController:
             self.__model.start_evaluation(best_model=False)
         except Exception as e:
             messagebox.showerror("start_evaluate_greedy_latest", e)
+
+    def start_auto_mode(self):
+        try:
+            self.__view.add_log("Starting Auto Mode...")
+            self.__view.button_auto_mode.config(state="disabled")
+            self.__model.start_auto_mode()
+        except Exception as e:
+            messagebox.showerror("start_auto_mode", e)

@@ -19,8 +19,10 @@ class TrainView(ttk.Frame):
 
         self.button_start = ttk.Button(toolbar, text="Start")
         self.button_stop = ttk.Button(toolbar, text="Stop")
+        self.button_auto_mode = ttk.Button(toolbar, text="Auto Mode")
         self.button_start.grid(row=0, column=0, padx=(0, self.PAD))
         self.button_stop.grid(row=0, column=1)
+        self.button_auto_mode.grid(row=0, column=2, padx=(self.PAD, 0))
 
         mid = ttk.Frame(self)
         mid.grid(row=1, column=0, sticky="ew", padx=self.PAD, pady=(2, 2))

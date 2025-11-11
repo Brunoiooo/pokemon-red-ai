@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 import hashlib
 import io
-from multiprocessing.sharedctypes import Synchronized
 import os
 from queue import Queue
 import random
@@ -12,6 +11,9 @@ import torch
 
 from pokemon.Data import Data
 from pokemon.ModelPokemon import ModelPokemon
+from multiprocessing.synchronize import Event
+import keyboard
+import time
 
 
 @dataclass
@@ -95,11 +97,9 @@ class Emulator:
 
         return self.__data
 
-    def reset(self, random=True):
-        if random:
+    def reset(self, dir: str | None = None):
+        if dir is None:
             dir = self.random_save
-        else:
-            dir = "start"
 
         with open(f"{self.saves}/{self.id}/{dir}/checkpoint.state", "rb") as f:
             self.pyboy.load_state(f)
@@ -126,6 +126,68 @@ class Emulator:
             terminated,
             truncated,
         )
+
+    def auto_mode(self, queue_logs: Queue):
+        self.window = "SDL2"
+
+        self.pyboy.set_emulation_speed(0)
+
+        memory, inputs = self.reset(dir="start")
+
+        while True:
+            action = 0
+
+            key = keyboard.read_key()
+            if key == "up":
+                action = 7
+            elif key == "down":
+                action = 8
+            elif key == "left":
+                action = 5
+            elif key == "right":
+                action = 6
+            elif key == "a":
+                action = 1
+            elif key == "b":
+                action = 2
+            elif key == "space":
+                action = 3
+            elif key == "enter":
+                action = 4
+            elif key == "q":
+                break
+
+            memory, inputs, reward, terminated, truncated = self.step(
+                memory=memory, action=action
+            )
+
+            if truncated:
+                break
+
+            if terminated:
+                self.data.clean()
+
+            queue_logs.put_nowait(f"Reward: {reward:.2f}")
+            queue_logs.put_nowait(f"Terminated: {terminated}")
+            queue_logs.put_nowait(f"Truncated: {truncated}")
+            queue_logs.put_nowait(f"Badges: {self.data.badges(self.pyboy.memory)}")
+            queue_logs.put_nowait(f"Event Flags: {self.data.event_flags_data()}")
+            queue_logs.put_nowait(f"Mode Flags: {self.data.mode_flags()}")
+            queue_logs.put_nowait(f"Battle Count: {self.data.battle_count}")
+            queue_logs.put_nowait(f"Position: {self.data.get_position()}")
+            queue_logs.put_nowait(
+                f"Menu Count: {self.data.menu_count.get(self.data.map_id(memory))}"
+            )
+            queue_logs.put_nowait(
+                f"Visited Dialogs Count: {self.data.visited_dialogs_count.get(self.data.map_id(memory))}"
+            )
+            queue_logs.put_nowait(
+                f"Visited Positions Count: {self.data.visited_positions_count.get(self.data.get_position())}"
+            )
+
+            time.sleep(1)
+
+        self.pyboy.stop(False)
 
     def ticks(self, action: int):
         for button in self.buttons[action]:
@@ -170,7 +232,7 @@ class Emulator:
 
         total = 0.0
         for i in range(evaluate_greedy_times):
-            memory, inputs = self.reset(random=False)
+            memory, inputs = self.reset(dir="start")
 
             ep_ret = 0.0
 
