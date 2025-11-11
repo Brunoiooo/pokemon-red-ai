@@ -94,11 +94,10 @@ class ExperienceWorker:
 
         except Exception as e:
             self.event_stop.set()
-            self.queue_logs.put_nowait(e)
-            print(traceback.format_exc())
+            self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
         finally:
             self.emulator.pyboy.stop(False)
-            print("ExperienceWorker stopped.")
+            self.queue_logs.put_nowait("Worker stopped.")
 
     def sync(self):
         self.load_state_dict(self.connection_state_dict.recv())

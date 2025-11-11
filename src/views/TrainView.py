@@ -1,3 +1,4 @@
+from datetime import datetime
 from tkinter import BooleanVar, IntVar, Misc, Tk
 from tkinter.scrolledtext import ScrolledText
 from tkinter import ttk
@@ -86,8 +87,10 @@ class TrainView(ttk.Frame):
         self.scrolled_logs = ScrolledText(logs_frame, wrap="word", state="disabled")
         self.scrolled_logs.grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
 
-    def add_log(self, log: str, type: str):
+    def add_log(self, log: str):
         self.scrolled_logs.configure(state="normal")
-        self.scrolled_logs.insert("end", f"[{type}] {log}\n")
+        self.scrolled_logs.insert(
+            "end", f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {log}\n"
+        )
         self.scrolled_logs.see("end")
         self.scrolled_logs.configure(state="disabled")

@@ -260,18 +260,22 @@ class TrainWorker:
                         self.evaluate_greedy()
 
         except Exception as e:
-            self.queue_logs.put_nowait(e)
-            print(traceback.print_exc())
+            self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
             self.event_stop.set()
         finally:
-            for i, process in processes.items():
-                print(f"Stopping process {i}...")
-                process.join(timeout=5)
+            with self.is_debug.get_lock():
+                for i, process in processes.items():
+                    if self.is_debug.value:
+                        self.queue_logs.put_nowait(f"Stopping process {i}...")
+                    process.join(timeout=5)
 
-                if process.is_alive():
-                    print(f"⚠️ Process {i} did not exit, terminating...")
-                    process.terminate()
-                    process.join(timeout=2)
+                    if process.is_alive():
+                        if self.is_debug.value:
+                            self.queue_logs.put_nowait(
+                                f"⚠️ Process {i} did not exit, terminating..."
+                            )
+                        process.terminate()
+                        process.join(timeout=2)
 
     def optimize_batch(self, deque_buffer: deque):
         if len(deque_buffer) < self.batch_size:
