@@ -4,14 +4,12 @@ import io
 import os
 from queue import Queue
 import random
-from typing import Literal
 
 from pyboy import PyBoy
 import torch
 
 from pokemon.Data import Data
 from pokemon.ModelPokemon import ModelPokemon
-from multiprocessing.synchronize import Event
 import keyboard
 import time
 
@@ -56,18 +54,19 @@ class Emulator:
 
     __pyboy: None | PyBoy = None
 
-    __window: Literal["null", "SDL2"] = "null"
+    # replace string window selector with boolean use_sdl
+    __use_sdl: bool = False
 
     @property
-    def window(self):
-        return self.__window
+    def use_sdl(self) -> bool:
+        return self.__use_sdl
 
-    @window.setter
-    def window(self, window: Literal["null", "SDL2"]):
-        if window == self.__window:
+    @use_sdl.setter
+    def use_sdl(self, use_sdl: bool):
+        if use_sdl == self.__use_sdl:
             return
 
-        self.__window = window
+        self.__use_sdl = bool(use_sdl)
 
         if self.__pyboy is None:
             return
@@ -82,7 +81,8 @@ class Emulator:
     @property
     def pyboy(self):
         if self.__pyboy is None:
-            self.__pyboy = PyBoy(f"rom.gb", sound_emulated=False, window=self.window)
+            window_str = "SDL2" if self.use_sdl else "null"
+            self.__pyboy = PyBoy(f"rom.gb", sound_emulated=False, window=window_str)
             if self.__data is not None:
                 self.__data.pyboy = self.__pyboy
 
@@ -128,7 +128,7 @@ class Emulator:
         )
 
     def auto_mode(self, queue_logs: Queue):
-        self.window = "SDL2"
+        self.use_sdl = True
 
         self.pyboy.set_emulation_speed(0)
 
@@ -225,10 +225,12 @@ class Emulator:
     ):
         queue_logs.put_nowait("Start evaluation.")
 
-        if is_evaluation_window:
-            self.window = "SDL2"
-        else:
-            self.window = "null"
+        flag = (
+            is_evaluation_window.value
+            if hasattr(is_evaluation_window, "value")
+            else bool(is_evaluation_window)
+        )
+        self.use_sdl = bool(flag)
 
         total = 0.0
         for i in range(evaluate_greedy_times):

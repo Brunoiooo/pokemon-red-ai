@@ -28,6 +28,10 @@ class TrainController:
             "write", self.handle_boolean_var_settings_evaluation_window
         )
 
+        self.__view.boolean_var_train_window.trace_add(
+            "write", self.handle_boolean_var_train_window
+        )
+
         self.__refresh()
         self.__run_logs()
 
@@ -151,3 +155,12 @@ class TrainController:
             self.__model.start_auto_mode()
         except Exception as e:
             messagebox.showerror("start_auto_mode", e)
+
+    def handle_boolean_var_train_window(self, *args):
+        try:
+            with self.__model.train_use_sdl.get_lock():
+                self.__model.train_use_sdl.value = bool(
+                    self.__view.boolean_var_train_window.get()
+                )
+        except Exception as e:
+            messagebox.showerror("handle_boolean_var_train_window", e)

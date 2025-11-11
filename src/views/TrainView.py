@@ -1,5 +1,5 @@
 from datetime import datetime
-from tkinter import BooleanVar, IntVar, Misc, Tk
+from tkinter import BooleanVar, IntVar, Misc
 from tkinter.scrolledtext import ScrolledText
 from tkinter import ttk
 
@@ -63,6 +63,14 @@ class TrainView(ttk.Frame):
             text="Debug Eval",
             variable=self.boolean_var_settings_evaluation_window,
         ).grid(row=1, column=1, sticky="w", padx=2, pady=2)
+
+        ttk.Label(settings, text="Use SDL window:").grid(
+            row=1, column=2, sticky="e", padx=2, pady=2
+        )
+        self.boolean_var_train_window = BooleanVar(value=False)
+        ttk.Checkbutton(
+            settings, text="SDL", variable=self.boolean_var_train_window
+        ).grid(row=1, column=3, sticky="w", pady=2)
 
         actions = ttk.LabelFrame(mid, text="Ewaluacja")
         actions.grid(row=0, column=1, sticky="nsew")

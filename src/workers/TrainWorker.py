@@ -182,6 +182,7 @@ class TrainWorker:
         count: Synchronized,
         is_debug: Synchronized,
         is_evaluation_window: Synchronized,
+        window: Synchronized,
     ):
         try:
             self.event_stop = event_stop
@@ -189,6 +190,7 @@ class TrainWorker:
             self.count = count
             self.is_debug = is_debug
             self.is_evaluation_window = is_evaluation_window
+            self.window = window
 
             queue_data = Queue(maxsize=self.queue_data_maxsize)
 
@@ -376,6 +378,7 @@ class TrainWorker:
                 queue_data=queue_data,
                 gamma=self.gamma,
                 id=id,
+                window=self.window,
             ).start,
             daemon=True,
         )

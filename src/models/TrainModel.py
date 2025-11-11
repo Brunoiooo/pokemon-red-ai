@@ -21,6 +21,7 @@ class TrainModel:
         self.count = Value("i", 0)
         self.is_debug = Value("b", False)
         self.is_evaluation_window = Value("b", False)
+        self.train_use_sdl = Value("b", False)
 
     @property
     def settings(self) -> dict[str, Any]:
@@ -62,6 +63,7 @@ class TrainModel:
                 "count": self.count,
                 "is_debug": self.is_debug,
                 "is_evaluation_window": self.is_evaluation_window,
+                "window": self.train_use_sdl,
             },
             daemon=False,
         )

@@ -3,6 +3,7 @@ from dataclasses import dataclass
 import io
 from multiprocessing import Queue
 from multiprocessing.connection import Connection
+from multiprocessing.sharedctypes import Synchronized
 from multiprocessing.synchronize import Event
 from queue import Full
 import random
@@ -21,6 +22,7 @@ class ExperienceWorker:
     connection_epsilon: Connection
     connection_state_dict: Connection
     queue_data: Queue
+    window: Synchronized
     gamma: float
     epsilon: float = 1
     td_error_steps = 5
@@ -92,6 +94,9 @@ class ExperienceWorker:
                     if truncated
                     else (next_memory, next_inputs)
                 )
+
+                with self.window.get_lock():
+                    self.emulator.use_sdl = bool(self.window.value)
 
         except Exception as e:
             self.event_stop.set()
