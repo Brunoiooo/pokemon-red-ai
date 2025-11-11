@@ -280,7 +280,7 @@ class Data:
         return reward
 
     def terminated(self, memory: bytes):
-        return True if self.reward_milestones(memory) else False
+        return True if 0 < self.reward_milestones(memory) else False
 
     def truncated(self):
         return (
@@ -1294,8 +1294,8 @@ class Data:
     def reward_badges(self, memory: bytes):
         reward = 0
 
-        for i, (bit_before, bit_after) in enumerate(
-            zip(self.badges(memory), self.badges(self.pyboy.memory))
+        for bit_before, bit_after in zip(
+            self.badges(memory), self.badges(self.pyboy.memory)
         ):
             if bit_before == 0 and bit_after == 1:
                 reward += 2

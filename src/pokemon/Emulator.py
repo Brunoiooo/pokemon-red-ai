@@ -254,11 +254,11 @@ class Emulator:
                         f"Episode: {i + 1}, Action: {action}, Reward: {reward:.2f}, Terminated: {terminated}, Truncated: {truncated}"
                     )
 
+                if terminated or truncated:
+                    self.data.clean()
+
                 if truncated:
                     break
-
-                if terminated:
-                    self.data.clean()
 
                 next_memory, inputs = (next_memory, next_inputs)
 
