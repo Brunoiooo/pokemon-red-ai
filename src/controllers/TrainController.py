@@ -12,6 +12,13 @@ class TrainController:
         self.__view.button_start.config(command=self.start)
         self.__view.button_stop.config(command=self.stop)
 
+        self.__view.button_evaluate_greedy_best.config(
+            command=self.start_evaluate_greedy_best
+        )
+        self.__view.button_evaluate_greedy_latest.config(
+            command=self.start_evaluate_greedy_latest
+        )
+
         self.__view.boolean_var_settings_debug.trace_add(
             "write", self.handle_boolean_var_settings_debug
         )
@@ -43,7 +50,7 @@ class TrainController:
             )
         )
 
-        self.__view.after(1000, self.__refresh)
+        self.__view.after(250, self.__refresh)
 
     def start(self):
         try:
@@ -83,8 +90,6 @@ class TrainController:
                 )
         except Exception as e:
             messagebox.showerror("handle_boolean_var_settings_debug", e)
-        finally:
-            self.__refresh()
 
     def handle_boolean_var_settings_evaluation_window(self, *args):
         try:
@@ -94,5 +99,27 @@ class TrainController:
                 )
         except Exception as e:
             messagebox.showerror("handle_boolean_var_settings_evaluation_window", e)
+
+    def start_evaluate_greedy_best(self):
+        try:
+            self.__view.add_log("Starting evaluation with best model...")
+            self.__view.button_evaluate_greedy_best.config(state="disabled")
+            self.__model.queue_logs.put_nowait(
+                self.__model.start_evaluation(best_model=True)
+            )
+        except Exception as e:
+            messagebox.showerror("start_evaluate_greedy_best", e)
         finally:
-            self.__refresh()
+            self.__view.button_evaluate_greedy_best.config(state="normal")
+
+    def start_evaluate_greedy_latest(self):
+        try:
+            self.__view.add_log("Starting evaluation with latest model...")
+            self.__view.button_evaluate_greedy_latest.config(state="disabled")
+            self.__model.queue_logs.put_nowait(
+                self.__model.start_evaluation(best_model=False)
+            )
+        except Exception as e:
+            messagebox.showerror("start_evaluate_greedy_latest", e)
+        finally:
+            self.__view.button_evaluate_greedy_latest.config(state="normal")
