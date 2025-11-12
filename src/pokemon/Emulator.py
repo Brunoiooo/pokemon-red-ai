@@ -167,9 +167,6 @@ class Emulator:
             if truncated:
                 break
 
-            if terminated:
-                self.data.clean()
-
             queue_logs.put_nowait(f"Reward: {reward:.2f}")
             queue_logs.put_nowait(f"Terminated: {terminated}")
             queue_logs.put_nowait(f"Truncated: {truncated}")
