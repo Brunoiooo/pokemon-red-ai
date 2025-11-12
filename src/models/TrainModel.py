@@ -78,16 +78,17 @@ class TrainModel:
         model = get_model("cpu", "best" if best_model else "latest")
         model.eval()
 
-        self.evaluate_process = Process(
-            target=Emulator().evaluate_greedy,
-            kwargs={
-                "model": model,
-                "evaluate_greedy_times": 1,
-                "queue_logs": self.queue_logs,
-                "is_debug": self.is_debug,
-                "is_evaluation_window": self.is_evaluation_window,
-            },
-        )
+        with self.is_debug.get_lock():
+            self.evaluate_process = Process(
+                target=Emulator().evaluate_greedy,
+                kwargs={
+                    "model": model,
+                    "evaluate_greedy_times": 1,
+                    "queue_logs": self.queue_logs,
+                    "is_debug": self.is_debug.value,
+                    "is_evaluation_window": self.is_evaluation_window,
+                },
+            )
 
         self.evaluate_process.start()
 
