@@ -171,6 +171,17 @@ class TrainWorker:
 
         return self.__best_eval_return
 
+    evaluate_greedy_process: None | Process = None
+
+    @property
+    def evaluate_greedy_process(self):
+        if self.__evaluate_greedy_process is None:
+            self.__evaluate_greedy_process = Process(
+                target=self.evaluate_greedy, daemon=True
+            )
+
+        return self.__evaluate_greedy_process
+
     @best_eval_return.setter
     def best_eval_return(self, best_eval_return: float):
         self.__best_eval_return = best_eval_return
@@ -241,8 +252,11 @@ class TrainWorker:
                             connections_state_dict=connections_state_dict,
                         )
 
-                    if self.count.value % self.ckpt_every == 0:
-                        self.evaluate_greedy()
+                    if (
+                        self.count.value % self.ckpt_every == 0
+                        and self.evaluate_greedy_process.is_alive() is False
+                    ):
+                        self.evaluate_greedy_process.start()
 
         except Exception as e:
             self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
@@ -400,19 +414,29 @@ class TrainWorker:
             connections_state_dict[i].send(buffer.getvalue())
 
     def evaluate_greedy(self):
-        self.save_latest()
+        try:
+            with self.count.get_lock():
+                self.queue_logs.put_nowait(
+                    f"Starting evaluation at step {self.count.value}..."
+                )
 
-        with self.is_debug.get_lock(), self.is_evaluation_window.get_lock():
-            is_debug = self.is_debug.value
-            is_evaluation_window = self.is_evaluation_window.value
+            self.save_latest()
 
-        avg_ret = Emulator().evaluate_greedy(
-            model=self.model,
-            evaluate_greedy_times=self.evaluate_greedy_times,
-            queue_logs=self.queue_logs,
-            is_debug=is_debug,
-            is_evaluation_window=is_evaluation_window,
-        )
+            with self.is_debug.get_lock(), self.is_evaluation_window.get_lock():
+                is_debug = self.is_debug.value
+                is_evaluation_window = self.is_evaluation_window.value
 
-        if avg_ret > self.best_eval_return:
-            self.save_best(avg_ret)
+            avg_ret = Emulator().evaluate_greedy(
+                model=self.model,
+                evaluate_greedy_times=self.evaluate_greedy_times,
+                queue_logs=self.queue_logs,
+                is_debug=is_debug,
+                is_evaluation_window=is_evaluation_window,
+            )
+
+            if self.best_eval_return < avg_ret:
+                self.save_best(avg_ret)
+
+            self.queue_logs.put_nowait(f"Finished evaluation {avg_ret:.2f}.")
+        except Exception as e:
+            self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")

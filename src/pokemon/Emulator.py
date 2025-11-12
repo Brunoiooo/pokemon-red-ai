@@ -222,15 +222,12 @@ class Emulator:
         is_debug: bool,
         is_evaluation_window: bool,
     ):
-        queue_logs.put_nowait("Start evaluation.")
 
         self.use_sdl = is_evaluation_window
 
-        total = 0.0
+        total_episodes = 0
         for i in range(evaluate_greedy_times):
             memory, inputs = self.reset(dir="start")
-
-            ep_ret = 0.0
 
             while True:
                 with torch.inference_mode():
@@ -243,8 +240,6 @@ class Emulator:
                     memory=memory, action=action
                 )
 
-                ep_ret += float(reward)
-
                 if is_debug:
                     queue_logs.put_nowait(
                         f"Episode: {i + 1}, Action: {action}, Reward: {reward:.2f}, Terminated: {terminated}, Truncated: {truncated}"
@@ -255,15 +250,13 @@ class Emulator:
 
                 memory, inputs = (next_memory, next_inputs)
 
-            total += ep_ret
+            total_episodes += self.data.badges(self.pyboy.memory).count(
+                1
+            ) + self.data.event_flags_data(self.pyboy.memory).count(1)
 
         self.pyboy.stop(False)
 
-        queue_logs.put_nowait(
-            f"Finished evaluation {total / evaluate_greedy_times:.2f}."
-        )
-
-        return total / evaluate_greedy_times
+        return ((total_episodes / evaluate_greedy_times),)
 
     def save(self):
         path = f"{self.saves}/{self.id}/{self.get_hash()}"
