@@ -629,7 +629,7 @@ class Data:
         return memory[0xCFE5]
 
     def enemy_hp(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xCFE6] << 8 | memory[0xCFE7]
+        return memory[0xCFE6] | memory[0xCFE7] << 8
 
     def enemy_level1(self, memory: PyBoyMemoryView | bytes):
         return memory[0xCFE8]
@@ -900,44 +900,44 @@ class Data:
 
     def player_pokemons_experiences(self, memory: PyBoyMemoryView | bytes = None):
         return [
-            memory[0xD179 + self.__player_pokemon_size * i] << 16
+            memory[0xD179 + self.__player_pokemon_size * i]
             | memory[0xD17A + self.__player_pokemon_size * i] << 8
-            | memory[0xD17B + self.__player_pokemon_size * i]
+            | memory[0xD17B + self.__player_pokemon_size * i] << 16
             for i in range(self.__pokemon_count)
         ]
 
     def player_pokemons_hp_evs(self, memory: PyBoyMemoryView | bytes = None):
         return [
-            memory[0xD17C + self.__player_pokemon_size * i] << 8
-            | memory[0xD17D + self.__player_pokemon_size * i]
+            memory[0xD17C + self.__player_pokemon_size * i]
+            | memory[0xD17D + self.__player_pokemon_size * i] << 8
             for i in range(self.__pokemon_count)
         ]
 
     def player_pokemons_attack_evs(self, memory: PyBoyMemoryView | bytes = None):
         return [
-            memory[0xD17E + self.__player_pokemon_size * i] << 8
-            | memory[0xD17F + self.__player_pokemon_size * i]
+            memory[0xD17E + self.__player_pokemon_size * i]
+            | memory[0xD17F + self.__player_pokemon_size * i] << 8
             for i in range(self.__pokemon_count)
         ]
 
     def player_pokemons_defense_evs(self, memory: PyBoyMemoryView | bytes = None):
         return [
-            memory[0xD180 + self.__player_pokemon_size * i] << 8
-            | memory[0xD181 + self.__player_pokemon_size * i]
+            memory[0xD180 + self.__player_pokemon_size * i]
+            | memory[0xD181 + self.__player_pokemon_size * i] << 8
             for i in range(self.__pokemon_count)
         ]
 
     def player_pokemons_speed_evs(self, memory: PyBoyMemoryView | bytes = None):
         return [
-            memory[0xD182 + self.__player_pokemon_size * i] << 8
-            | memory[0xD183 + self.__player_pokemon_size * i]
+            memory[0xD182 + self.__player_pokemon_size * i]
+            | memory[0xD183 + self.__player_pokemon_size * i] << 8
             for i in range(self.__pokemon_count)
         ]
 
     def player_pokemons_special_evs(self, memory: PyBoyMemoryView | bytes = None):
         return [
-            memory[0xD184 + self.__player_pokemon_size * i] << 8
-            | memory[0xD185 + self.__player_pokemon_size * i]
+            memory[0xD184 + self.__player_pokemon_size * i]
+            | memory[0xD185 + self.__player_pokemon_size * i] << 8
             for i in range(self.__pokemon_count)
         ]
 
@@ -946,36 +946,36 @@ class Data:
 
     def player_pokemons_max_hps(self, memory: PyBoyMemoryView | bytes = None):
         return [
-            memory[0xD18D + self.__player_pokemon_size * i] << 8
-            | memory[0xD18E + self.__player_pokemon_size * i]
+            memory[0xD18D + self.__player_pokemon_size * i]
+            | memory[0xD18E + self.__player_pokemon_size * i] << 8
             for i in range(self.__pokemon_count)
         ]
 
     def player_pokemons_attacks(self, memory: PyBoyMemoryView | bytes = None):
         return [
-            memory[0xD18F + self.__player_pokemon_size * i] << 8
-            | memory[0xD190 + self.__player_pokemon_size * i]
+            memory[0xD18F + self.__player_pokemon_size * i]
+            | memory[0xD190 + self.__player_pokemon_size * i] << 8
             for i in range(self.__pokemon_count)
         ]
 
     def player_pokemons_defenses(self, memory: PyBoyMemoryView | bytes = None):
         return [
-            memory[0xD191 + self.__player_pokemon_size * i] << 8
-            | memory[0xD192 + self.__player_pokemon_size * i]
+            memory[0xD191 + self.__player_pokemon_size * i]
+            | memory[0xD192 + self.__player_pokemon_size * i] << 8
             for i in range(self.__pokemon_count)
         ]
 
     def player_pokemons_speeds(self, memory: PyBoyMemoryView | bytes = None):
         return [
-            memory[0xD193 + self.__player_pokemon_size * i] << 8
-            | memory[0xD194 + self.__player_pokemon_size * i]
+            memory[0xD193 + self.__player_pokemon_size * i]
+            | memory[0xD194 + self.__player_pokemon_size * i] << 8
             for i in range(self.__pokemon_count)
         ]
 
     def player_pokemons_specials(self, memory: PyBoyMemoryView | bytes = None):
         return [
-            memory[0xD195 + self.__player_pokemon_size * i] << 8
-            | memory[0xD196 + self.__player_pokemon_size * i]
+            memory[0xD195 + self.__player_pokemon_size * i]
+            | memory[0xD196 + self.__player_pokemon_size * i] << 8
             for i in range(self.__pokemon_count)
         ]
 
@@ -1019,7 +1019,7 @@ class Data:
         )
 
     def player_money(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xD347] + (memory[0xD348] << 8) + (memory[0xD349] << 16)
+        return memory[0xD347] | (memory[0xD348] << 8) | (memory[0xD349] << 16)
 
     def badges(self, memory: PyBoyMemoryView | bytes):
         return self.bits_extractor(memory[0xD356])
@@ -1044,7 +1044,7 @@ class Data:
         )
 
     def game_coins(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xD5A4] + (memory[0xD5A5] << 8)
+        return memory[0xD5A4] | (memory[0xD5A5] << 8)
 
     def event_flags_data(self, memory: PyBoyMemoryView | bytes):
         return (
