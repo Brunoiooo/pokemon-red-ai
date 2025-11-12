@@ -1,6 +1,7 @@
 from collections import deque
 from dataclasses import dataclass
 import io
+import math
 from multiprocessing import Queue
 from multiprocessing.connection import Connection
 from multiprocessing.sharedctypes import Synchronized
@@ -144,16 +145,21 @@ class ExperienceWorker:
                     discount *= self.gamma
 
                 try:
-                    self.queue_data.put_nowait(
-                        (
-                            self.detach_to_cpu(self.buffer[0]["inputs"]),
-                            self.buffer[0]["action"],
-                            self.detach_to_cpu(self.buffer[-1]["next_inputs"]),
-                            reward,
-                            terminated,
-                            len(self.buffer),
+                    if (
+                        terminated
+                        or truncated
+                        or random.random() * len(self.buffer) <= math.fabs(reward)
+                    ):
+                        self.queue_data.put_nowait(
+                            (
+                                self.detach_to_cpu(self.buffer[0]["inputs"]),
+                                self.buffer[0]["action"],
+                                self.detach_to_cpu(self.buffer[-1]["next_inputs"]),
+                                reward,
+                                terminated,
+                                len(self.buffer),
+                            )
                         )
-                    )
                 except Full:
                     time.sleep(0.01)
                     pass
