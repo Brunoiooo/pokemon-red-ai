@@ -10,15 +10,15 @@ class Data:
 
     visited_dialogs_count: dict[str, int] = field(default_factory=dict)
     visited_positions_count: dict[str, int] = field(default_factory=dict)
-    menu_count: dict[int, int] = field(default_factory=dict)
-    battle_count = 0
+    menu_count: int = 0
+    battle_count: int = 0
     __player_pokemon_size = 0x2C
     __pokemon_count = 6
 
     def clean(self):
         self.visited_dialogs_count = {}
         self.visited_positions_count = {}
-        self.menu_count = {}
+        self.menu_count = 0
         self.battle_count = 0
 
     def count(self, memory: bytes):
@@ -38,8 +38,7 @@ class Data:
             self.visited_positions_count[self.get_position()] += 1
 
         if self.is_menu():
-            self.menu_count.setdefault(self.map_id(self.pyboy.memory), 0)
-            self.menu_count[self.map_id(self.pyboy.memory)] += 1
+            self.menu_count += 1
 
     def inputs(self):
         return {
@@ -277,7 +276,7 @@ class Data:
             <= self.visited_dialogs_count.get(self.dialog_id(self.pyboy.memory), 0)
             or 255 <= self.battle_count
             or 255 <= self.visited_positions_count.get(self.get_position(), 0)
-            or 255 <= self.menu_count.get(self.map_id(self.pyboy.memory), 0)
+            or 255 <= self.menu_count
             else False
         )
 
@@ -424,9 +423,7 @@ class Data:
         return self.data_normalizer(data) if self.is_world() else [0] * len(data)
 
     def menu_data(self):
-        data = [self.pyboy.memory[i] for i in range(0xCC24, 0xCC36)] + [
-            self.menu_count.get(self.get_position(), 0)
-        ]
+        data = [self.pyboy.memory[i] for i in range(0xCC24, 0xCC36)] + [self.menu_count]
 
         return (
             self.data_normalizer(data)
@@ -1194,7 +1191,7 @@ class Data:
         return 0.2 - 0.005 * self.visited_positions_count.get(self.get_position(), 0)
 
     def reward_menu(self):
-        return 0.2 - 0.005 * self.menu_count.get(self.map_id(self.pyboy.memory), 0)
+        return 0.2 - 0.005 * self.menu_count
 
     def reward_players_substitute_hp(self, memory: bytes):
         return (
