@@ -42,20 +42,8 @@ class Data:
             self.menu_count[self.map_id(self.pyboy.memory)] += 1
 
     def inputs(self):
-        continuous = torch.tensor(self.data(), dtype=torch.float32)
-        mode = torch.tensor([self.mode_flags()], dtype=torch.long)
-        map_id = torch.tensor([self.map_id(self.pyboy.memory)], dtype=torch.long)
-        pos_x = torch.tensor([self.position_x(self.pyboy.memory)], dtype=torch.long)
-        pos_y = torch.tensor([self.position_y(self.pyboy.memory)], dtype=torch.long)
-        dialog_id = torch.tensor([self.dialog_id(self.pyboy.memory)], dtype=torch.long)
-
         return {
-            "continuous": continuous,
-            "mode": mode,
-            "map_id": map_id,
-            "pos_x": pos_x,
-            "pos_y": pos_y,
-            "dialog_id": dialog_id,
+            "continuous": torch.tensor(self.data(), dtype=torch.float32),
         }
 
     def reward(self, memory: bytes):
@@ -310,6 +298,10 @@ class Data:
     def data(self):
         data = []
 
+        data += self.game_mode_flags_data()
+
+        data += self.position_data()
+
         data += self.dialog_data()
 
         data += self.map_data()
@@ -344,12 +336,30 @@ class Data:
 
         return data
 
+    def game_mode_flags_data(self):
+        return [
+            int(self.is_battle()),
+            int(self.is_dialog()),
+            int(self.is_menu()),
+            int(self.is_world()),
+        ]
+
     def data_normalizer(self, values: list[int], max=0xFF):
         return [x / max for x in values]
+
+    def position_data(self):
+        return self.data_normalizer(
+            [
+                self.map_id(self.pyboy.memory),
+                self.position_x(self.pyboy.memory),
+                self.position_y(self.pyboy.memory),
+            ]
+        )
 
     def dialog_data(self):
         data = [
             self.visited_dialogs_count.get(self.map_id(self.pyboy.memory), 0),
+            self.dialog_id(self.pyboy.memory),
         ]
 
         return self.data_normalizer(data) if self.is_dialog() else [0] * len(data)

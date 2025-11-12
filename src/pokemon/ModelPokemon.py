@@ -35,17 +35,9 @@ class ModelPokemon(nn.Module):
     def __init__(self, continuous_dim: int, outputs: int):
         super().__init__()
 
-        self.map_emb = nn.Embedding(256, 32)
-        self.dialog_emb = nn.Embedding(256, 32)
-        self.pos_emb_x = nn.Embedding(256, 32)
-        self.pos_emb_y = nn.Embedding(256, 32)
-        self.mode_emb = nn.Embedding(5, 8)
-
-        total_emb_dim = 32 + 32 + 32 + 32 + 8
-
         self.fc = nn.Sequential(
-            nn.LayerNorm(continuous_dim + total_emb_dim),
-            nn.Linear(continuous_dim + total_emb_dim, 1024),
+            nn.LayerNorm(continuous_dim),
+            nn.Linear(continuous_dim, 1024),
             nn.SiLU(),
             nn.Dropout(0.1),
             nn.Linear(1024, 512),
@@ -74,26 +66,6 @@ class ModelPokemon(nn.Module):
         return t.float()
 
     def forward(self, x):
-        device = next(self.parameters()).device
-
-        map_id = self._as_long_batch(x["map_id"], device)
-        dialog_id = self._as_long_batch(x["dialog_id"], device)
-        pos_x = self._as_long_batch(x["pos_x"], device)
-        pos_y = self._as_long_batch(x["pos_y"], device)
-        mode = self._as_long_batch(x["mode"], device)
-
-        cont = self._as_float_batch(x["continuous"], device)
-
-        emb = torch.cat(
-            [
-                self.map_emb(map_id),
-                self.dialog_emb(dialog_id),
-                self.pos_emb_x(pos_x),
-                self.pos_emb_y(pos_y),
-                self.mode_emb(mode),
-            ],
-            dim=-1,
+        return self.fc(
+            self._as_float_batch(x["continuous"], next(self.parameters()).device)
         )
-
-        z = torch.cat([cont, emb], dim=-1)
-        return self.fc(z)
