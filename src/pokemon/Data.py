@@ -1303,7 +1303,7 @@ class Data:
         return reward
 
     def reward_event_flag(self, flag_x: int, flag_y: int):
-        if flag_x & 1 == 0 and flag_y == 1:
+        if flag_x & 1 == 0 and flag_y & 1 == 1:
             return 10
 
         return 0

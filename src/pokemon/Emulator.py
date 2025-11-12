@@ -262,7 +262,7 @@ class Emulator:
                 if truncated:
                     break
 
-                next_memory, inputs = (next_memory, next_inputs)
+                memory, inputs = (next_memory, next_inputs)
 
             total += ep_ret
 
