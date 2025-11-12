@@ -1260,7 +1260,7 @@ class Data:
         return (
             0.1
             if self.one_hit_ko_flag(memory) == 0
-            and self.one_hit_ko_flag(self.pyboy.memory) == 0
+            and self.one_hit_ko_flag(self.pyboy.memory) == 1
             else 0.0
         )
 
