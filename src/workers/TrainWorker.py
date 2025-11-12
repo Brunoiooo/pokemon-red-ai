@@ -171,7 +171,7 @@ class TrainWorker:
 
         return self.__best_eval_return
 
-    evaluate_greedy_process: None | Process = None
+    __evaluate_greedy_process: None | Process = None
 
     @property
     def evaluate_greedy_process(self):
@@ -228,29 +228,32 @@ class TrainWorker:
 
             deque_buffer = deque(maxlen=self.deque_buffer_maxlen)
 
+            count = 0
+
             while not self.event_stop.is_set():
-                with self.count.get_lock():
-                    if self.count.value % 1000 == 0:
-                        self.queue_logs.put_nowait(
-                            f"Count: {self.count.value} | Epsilon: {self.current_epsilon:.2f} | Progress: {(self.count.value / self.epsilon_decay_count * 100):.2f}% | queue_data: {queue_data.qsize()}"
-                        )
+                if count % 1000 == 0:
+                    with self.count.get_lock():
+                        self.count.value += count
+                    self.queue_logs.put_nowait(
+                        f"Count: {count} | Epsilon: {self.current_epsilon:.2f} | Progress: {(count / self.epsilon_decay_count * 100):.2f}% | queue_data: {queue_data.qsize()}"
+                    )
 
-                    try:
-                        deque_buffer.append(queue_data.get_nowait())
-                    except Empty as e:
-                        self.event_stop.wait(0.001)
-                    finally:
-                        self.count.value += 1
+                try:
+                    deque_buffer.append(queue_data.get_nowait())
+                except Empty as e:
+                    self.event_stop.wait(0.001)
+                finally:
+                    count += 1
 
-                    if self.count.value % self.optimize_every == 0:
-                        for _ in range(self.updates_per_optimize):
-                            self.optimize_batch(deque_buffer=deque_buffer)
+                if count % self.optimize_every == 0:
+                    for _ in range(self.updates_per_optimize):
+                        self.optimize_batch(deque_buffer=deque_buffer)
 
-                    if self.count.value % self.sync_interval == 0:
-                        self.setup_experience_workers(
-                            connections_epsilon=connections_epsilon,
-                            connections_state_dict=connections_state_dict,
-                        )
+                if count % self.sync_interval == 0:
+                    self.setup_experience_workers(
+                        connections_epsilon=connections_epsilon,
+                        connections_state_dict=connections_state_dict,
+                    )
 
                     if (
                         self.count.value % self.ckpt_every == 0
@@ -262,16 +265,12 @@ class TrainWorker:
             self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
             self.event_stop.set()
         finally:
-            for i, process in processes.items():
-                self.queue_logs.put_nowait(f"Stopping process {i}...")
-                process.join(timeout=5)
+            for i in processes:
+                if processes[i].is_alive():
+                    processes[i].terminate()
 
-                if process.is_alive():
-                    self.queue_logs.put_nowait(
-                        f"⚠️ Process {i} did not exit, terminating..."
-                    )
-                    process.terminate()
-                    process.join(timeout=2)
+            if self.evaluate_greedy_process.is_alive():
+                self.evaluate_greedy_process.terminate()
 
     def optimize_batch(self, deque_buffer: deque):
         if len(deque_buffer) < self.batch_size:
@@ -342,8 +341,7 @@ class TrainWorker:
                 t = torch.from_numpy(np.stack(vals, axis=0)).float()
                 batch[k] = t.to(self.device, non_blocking=True)
             else:
-                t = torch.tensor(vals, dtype=torch.long)
-                batch[k] = t.to(self.device, non_blocking=True)
+                batch[k] = torch.tensor(vals, dtype=torch.long, device=self.device)
 
         return batch
 
