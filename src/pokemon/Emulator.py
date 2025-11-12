@@ -167,6 +167,9 @@ class Emulator:
                 break
 
             queue_logs.put_nowait("==================================")
+            queue_logs.put_nowait(
+                f"Dialog ID: {self.data.dialog_id(self.pyboy.memory)}"
+            )
             queue_logs.put_nowait(f"Reward: {reward:.2f}")
             queue_logs.put_nowait(f"Terminated: {terminated}")
             queue_logs.put_nowait(f"Truncated: {truncated}")
