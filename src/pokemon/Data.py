@@ -1252,7 +1252,7 @@ class Data:
         return (
             0.05
             if self.critical_hit_flag(memory) == 0
-            and self.critical_hit_flag(self.pyboy.memory) == 0
+            and self.critical_hit_flag(self.pyboy.memory) == 1
             else 0.0
         )
 
