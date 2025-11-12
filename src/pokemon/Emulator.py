@@ -170,18 +170,19 @@ class Emulator:
             queue_logs.put_nowait(f"Terminated: {terminated}")
             queue_logs.put_nowait(f"Truncated: {truncated}")
             queue_logs.put_nowait(f"Badges: {self.data.badges(self.pyboy.memory)}")
-            queue_logs.put_nowait(f"Event Flags: {self.data.event_flags_data()}")
-            queue_logs.put_nowait(f"Mode Flags: {self.data.mode_flags()}")
+            queue_logs.put_nowait(
+                f"Event Flags: {self.data.event_flags_data(self.pyboy.memory)}"
+            )
             queue_logs.put_nowait(f"Battle Count: {self.data.battle_count}")
             queue_logs.put_nowait(f"Position: {self.data.get_position()}")
             queue_logs.put_nowait(
-                f"Menu Count: {self.data.menu_count.get(self.data.map_id(memory))}"
+                f"Menu Count: {self.data.menu_count.get(self.data.map_id(self.pyboy.memory), 0)}"
             )
             queue_logs.put_nowait(
-                f"Visited Dialogs Count: {self.data.visited_dialogs_count.get(self.data.map_id(memory))}"
+                f"Visited Dialogs Count: {self.data.visited_dialogs_count.get(self.data.map_id(self.pyboy.memory), 0)}"
             )
             queue_logs.put_nowait(
-                f"Visited Positions Count: {self.data.visited_positions_count.get(self.data.get_position())}"
+                f"Visited Positions Count: {self.data.visited_positions_count.get(self.data.get_position(), 0)}"
             )
 
             time.sleep(1)

@@ -283,18 +283,6 @@ class Data:
     def number_of_turns_in_current_battle(self, memory: bytes):
         return memory[0xCCD5]
 
-    def mode_flags(self):
-        if self.is_battle():
-            return 1
-        elif self.is_dialog():
-            return 2
-        elif self.is_menu():
-            return 3
-        elif self.is_world():
-            return 4
-        else:
-            return 0
-
     def data(self):
         data = []
 
