@@ -54,7 +54,6 @@ class Emulator:
 
     __pyboy: None | PyBoy = None
 
-    # replace string window selector with boolean use_sdl
     __use_sdl: bool = False
 
     @property
@@ -225,12 +224,7 @@ class Emulator:
     ):
         queue_logs.put_nowait("Start evaluation.")
 
-        flag = (
-            is_evaluation_window.value
-            if hasattr(is_evaluation_window, "value")
-            else bool(is_evaluation_window)
-        )
-        self.use_sdl = bool(flag)
+        self.use_sdl = is_evaluation_window
 
         total = 0.0
         for i in range(evaluate_greedy_times):
