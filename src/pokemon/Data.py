@@ -8,9 +8,9 @@ import torch
 class Data:
     pyboy: PyBoy
 
-    visited_dialogs_count: dict[int, int] = field(default_factory=dict)
+    visited_dialogs_count: dict[str, int] = field(default_factory=dict)
     visited_positions_count: dict[str, int] = field(default_factory=dict)
-    menu_count: dict[int, int] = field(default_factory=dict)
+    menu_count: dict[str, int] = field(default_factory=dict)
     battle_count = 0
     __player_pokemon_size = 0x2C
     __pokemon_count = 6
@@ -30,16 +30,16 @@ class Data:
             self.battle_count += 1
 
         if self.is_dialog():
-            self.visited_dialogs_count.setdefault(self.map_id(self.pyboy.memory), 0)
-            self.visited_dialogs_count[self.map_id(self.pyboy.memory)] += 1
+            self.visited_dialogs_count.setdefault(self.dialog_id(self.pyboy.memory), 0)
+            self.visited_dialogs_count[self.dialog_id(self.pyboy.memory)] += 1
 
         if self.is_world():
             self.visited_positions_count.setdefault(self.get_position(), 0)
             self.visited_positions_count[self.get_position()] += 1
 
         if self.is_menu():
-            self.menu_count.setdefault(self.map_id(self.pyboy.memory), 0)
-            self.menu_count[self.map_id(self.pyboy.memory)] += 1
+            self.menu_count.setdefault(self.get_position(), 0)
+            self.menu_count[self.get_position()] += 1
 
     def inputs(self):
         return {
@@ -273,10 +273,11 @@ class Data:
     def truncated(self):
         return (
             True
-            if 255 <= self.visited_dialogs_count.get(self.map_id(self.pyboy.memory), 0)
+            if 255
+            <= self.visited_dialogs_count.get(self.dialog_id(self.pyboy.memory), 0)
             or 255 <= self.battle_count
             or 255 <= self.visited_positions_count.get(self.get_position(), 0)
-            or 255 <= self.menu_count.get(self.map_id(self.pyboy.memory), 0)
+            or 255 <= self.menu_count.get(self.get_position(), 0)
             else False
         )
 
@@ -346,7 +347,7 @@ class Data:
 
     def dialog_data(self):
         data = [
-            self.visited_dialogs_count.get(self.map_id(self.pyboy.memory), 0),
+            self.visited_dialogs_count.get(self.dialog_id(self.pyboy.memory), 0),
             self.dialog_id(self.pyboy.memory),
         ]
 
@@ -424,7 +425,7 @@ class Data:
 
     def menu_data(self):
         data = [self.pyboy.memory[i] for i in range(0xCC24, 0xCC36)] + [
-            self.menu_count.get(self.map_id(self.pyboy.memory), 0)
+            self.menu_count.get(self.get_position(), 0)
         ]
 
         return (
@@ -1172,7 +1173,7 @@ class Data:
 
     def reward_dialog(self):
         return 0.2 - 0.0025 * self.visited_dialogs_count.get(
-            self.map_id(self.pyboy.memory), 0
+            self.dialog_id(self.pyboy.memory), 0
         )
 
     def reward_battle(self, memory: bytes):
@@ -1193,7 +1194,7 @@ class Data:
         return 0.2 - 0.0025 * self.visited_positions_count.get(self.get_position(), 0)
 
     def reward_menu(self):
-        return 0.2 - 0.0025 * self.menu_count.get(self.map_id(self.pyboy.memory), 0)
+        return 0.2 - 0.0025 * self.menu_count.get(self.get_position(), 0)
 
     def reward_players_substitute_hp(self, memory: bytes):
         return (
