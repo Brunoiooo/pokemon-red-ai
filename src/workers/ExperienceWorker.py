@@ -90,9 +90,7 @@ class ExperienceWorker:
                     self.emulator.save()
 
                 memory, inputs = (
-                    self.emulator.reset("start")
-                    if truncated
-                    else (next_memory, next_inputs)
+                    self.emulator.reset() if truncated else (next_memory, next_inputs)
                 )
 
                 with self.window.get_lock():

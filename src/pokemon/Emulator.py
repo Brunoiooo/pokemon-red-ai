@@ -274,5 +274,8 @@ class Emulator:
 
     def get_hash(self):
         return hashlib.sha256(
-            bytes(self.data.badges(self.pyboy.memory) + self.data.event_flags_data())
+            bytes(
+                self.data.badges(self.pyboy.memory)
+                + self.data.event_flags_data(self.pyboy.memory)
+            )
         ).hexdigest()

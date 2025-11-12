@@ -336,7 +336,7 @@ class Data:
 
         data += self.game_coins_data()
 
-        data += self.event_flags_data()
+        data += self.event_flags_data(self.pyboy.memory)
 
         data += self.opponent_trainers_pokemon_data()
 
@@ -381,6 +381,7 @@ class Data:
     def map_data(self):
         data = [
             self.visited_positions_count.get(self.get_position(), 0),
+            self.bike_speed(self.pyboy.memory),
         ]
 
         return self.data_normalizer(data) if self.is_world() else [0] * len(data)
@@ -1046,37 +1047,36 @@ class Data:
     def game_coins(self, memory: PyBoyMemoryView | bytes):
         return memory[0xD5A4] + (memory[0xD5A5] << 8)
 
-    def event_flags_data(self):
+    def event_flags_data(self, memory: PyBoyMemoryView | bytes):
         return (
             [
-                self.starters_back(self.pyboy.memory),
-                self.pyboy.memory[0xD5C0] & 1,
-                self.have_town_map(self.pyboy.memory),
-                self.have_oaks_parcel(self.pyboy.memory),
-                self.bike_speed(self.pyboy.memory),
+                self.starters_back(memory),
+                memory[0xD5C0] & 1,
+                self.have_town_map(memory),
+                self.have_oaks_parcel(memory),
             ]
-            + self.fly_anywhere(self.pyboy.memory)
+            + self.fly_anywhere(memory)
             + [
-                self.safari_zone_time(self.pyboy.memory),
-                self.fossilized_pokemon(self.pyboy.memory),
-                self.position_in_air(self.pyboy.memory),
-                self.did_you_get_lapras_yet(self.pyboy.memory),
-                self.debug_new_game(self.pyboy.memory),
-                self.fought_giovanni_yet(self.pyboy.memory),
-                self.fought_brock_yet(self.pyboy.memory),
-                self.fought_misty_yet(self.pyboy.memory),
-                self.fought_lt_surge_yet(self.pyboy.memory),
-                self.fought_erika_yet(self.pyboy.memory),
-                self.fought_articuno_yet(self.pyboy.memory),
-                self.fought_koga_yet(self.pyboy.memory),
-                self.fought_blaine_yet(self.pyboy.memory),
-                self.fought_sabrina_yet(self.pyboy.memory),
-                self.fought_zapdos_yet(self.pyboy.memory),
-                self.fought_snorlax_yet_vermilion(self.pyboy.memory),
-                self.fought_snorlax_yet_celadon(self.pyboy.memory),
-                self.fought_moltres_yet(self.pyboy.memory),
-                self.is_ss_anne_here(self.pyboy.memory),
-                self.mewtwo_can_be_caught(self.pyboy.memory),
+                self.safari_zone_time(memory),
+                self.fossilized_pokemon(memory),
+                self.position_in_air(memory),
+                self.did_you_get_lapras_yet(memory),
+                self.debug_new_game(memory),
+                self.fought_giovanni_yet(memory),
+                self.fought_brock_yet(memory),
+                self.fought_misty_yet(memory),
+                self.fought_lt_surge_yet(memory),
+                self.fought_erika_yet(memory),
+                self.fought_articuno_yet(memory),
+                self.fought_koga_yet(memory),
+                self.fought_blaine_yet(memory),
+                self.fought_sabrina_yet(memory),
+                self.fought_zapdos_yet(memory),
+                self.fought_snorlax_yet_vermilion(memory),
+                self.fought_snorlax_yet_celadon(memory),
+                self.fought_moltres_yet(memory),
+                self.is_ss_anne_here(memory),
+                self.mewtwo_can_be_caught(memory),
             ]
         )
 
@@ -1302,110 +1302,22 @@ class Data:
 
         return reward
 
-    def reward_event_flag(self, flag_x: int, flag_y: int):
-        if flag_x & 1 == 0 and flag_y & 1 == 1:
-            return 10
+    def reward_event_flags(self, memory: bytes):
+        reward = 0
 
-        return 0
+        for flag_x, flag_y in zip(
+            self.event_flags_data(memory), self.event_flags_data(self.pyboy.memory)
+        ):
+            if flag_x == 0 and flag_y == 1:
+                reward += 5
+
+        return reward
 
     def reward_milestones(self, memory: bytes):
         reward = 0.0
 
         reward += self.reward_badges(memory)
 
-        reward += self.reward_event_flag(
-            self.starters_back(memory), self.starters_back(self.pyboy.memory)
-        )
-
-        reward += self.reward_event_flag(
-            self.have_town_map(memory), self.have_town_map(self.pyboy.memory)
-        )
-
-        reward += self.reward_event_flag(
-            self.have_oaks_parcel(memory), self.have_oaks_parcel(self.pyboy.memory)
-        )
-
-        reward += self.reward_event_flag(
-            self.fossilized_pokemon(memory),
-            self.fossilized_pokemon(self.pyboy.memory),
-        )
-
-        reward += self.reward_event_flag(
-            self.position_in_air(memory), self.position_in_air(self.pyboy.memory)
-        )
-
-        reward += self.reward_event_flag(
-            self.did_you_get_lapras_yet(memory),
-            self.did_you_get_lapras_yet(self.pyboy.memory),
-        )
-
-        reward += self.reward_event_flag(
-            self.debug_new_game(memory), self.debug_new_game(self.pyboy.memory)
-        )
-
-        reward += self.reward_event_flag(
-            self.fought_giovanni_yet(memory),
-            self.fought_giovanni_yet(self.pyboy.memory),
-        )
-
-        reward += self.reward_event_flag(
-            self.fought_brock_yet(memory), self.fought_brock_yet(self.pyboy.memory)
-        )
-
-        reward += self.reward_event_flag(
-            self.fought_misty_yet(memory), self.fought_misty_yet(self.pyboy.memory)
-        )
-
-        reward += self.reward_event_flag(
-            self.fought_lt_surge_yet(memory),
-            self.fought_lt_surge_yet(self.pyboy.memory),
-        )
-
-        reward += self.reward_event_flag(
-            self.fought_erika_yet(memory), self.fought_erika_yet(self.pyboy.memory)
-        )
-
-        reward += self.reward_event_flag(
-            self.fought_articuno_yet(memory),
-            self.fought_articuno_yet(self.pyboy.memory),
-        )
-
-        reward += self.reward_event_flag(
-            self.fought_koga_yet(memory), self.fought_koga_yet(self.pyboy.memory)
-        )
-
-        reward += self.reward_event_flag(
-            self.fought_blaine_yet(memory),
-            self.fought_blaine_yet(self.pyboy.memory),
-        )
-
-        reward += self.reward_event_flag(
-            self.fought_sabrina_yet(memory),
-            self.fought_sabrina_yet(self.pyboy.memory),
-        )
-
-        reward += self.reward_event_flag(
-            self.fought_zapdos_yet(memory),
-            self.fought_zapdos_yet(self.pyboy.memory),
-        )
-
-        reward += self.reward_event_flag(
-            self.fought_snorlax_yet_vermilion(memory),
-            self.fought_snorlax_yet_vermilion(self.pyboy.memory),
-        )
-
-        reward += self.reward_event_flag(
-            self.fought_snorlax_yet_celadon(memory),
-            self.fought_snorlax_yet_celadon(self.pyboy.memory),
-        )
-
-        reward += self.reward_event_flag(
-            self.fought_moltres_yet(memory),
-            self.fought_moltres_yet(self.pyboy.memory),
-        )
-
-        reward += self.reward_event_flag(
-            self.is_ss_anne_here(memory), self.is_ss_anne_here(self.pyboy.memory)
-        )
+        reward += self.reward_event_flags(memory)
 
         return reward
