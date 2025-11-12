@@ -115,6 +115,9 @@ class Emulator:
 
         terminated = self.data.terminated(memory)
 
+        if terminated:
+            self.data.clean()
+
         truncated = self.data.truncated()
 
         self.data.count(memory)
