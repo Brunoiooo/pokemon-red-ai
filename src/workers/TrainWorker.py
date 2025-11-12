@@ -38,7 +38,7 @@ class TrainWorker:
     criterion: torch.nn.SmoothL1Loss = field(default_factory=torch.nn.SmoothL1Loss)
     tau = 0.005
     sync_interval = 2000
-    epsilon: float = 1
+    epsilon: float = 0.2
     epsilon_burn = 100000
     epsilon_end = 0.05
     epsilon_decay_count = 2000000
@@ -233,7 +233,7 @@ class TrainWorker:
             while not self.event_stop.is_set():
                 if count % 1000 == 0:
                     with self.count.get_lock():
-                        self.count.value += count
+                        self.count.value = count
                     self.queue_logs.put_nowait(
                         f"Count: {count} | Epsilon: {self.current_epsilon:.2f} | Progress: {(count / self.epsilon_decay_count * 100):.2f}% | queue_data: {queue_data.qsize()}"
                     )
