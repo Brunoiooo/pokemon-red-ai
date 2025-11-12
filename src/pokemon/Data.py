@@ -10,7 +10,7 @@ class Data:
 
     visited_dialogs_count: dict[str, int] = field(default_factory=dict)
     visited_positions_count: dict[str, int] = field(default_factory=dict)
-    menu_count: int = 0
+    menu_count: dict[int, int] = field(default_factory=dict)
     battle_count: int = 0
     __player_pokemon_size = 0x2C
     __pokemon_count = 6
@@ -18,7 +18,7 @@ class Data:
     def clean(self):
         self.visited_dialogs_count = {}
         self.visited_positions_count = {}
-        self.menu_count = 0
+        self.menu_count = {}
         self.battle_count = 0
 
     def count(self, memory: bytes):
@@ -38,7 +38,8 @@ class Data:
             self.visited_positions_count[self.get_position()] += 1
 
         if self.is_menu():
-            self.menu_count += 1
+            self.menu_count.setdefault(self.map_id(self.pyboy.memory), 0)
+            self.menu_count[self.map_id(self.pyboy.memory)] += 1
 
     def inputs(self):
         return {
@@ -56,7 +57,6 @@ class Data:
         reward += self.reward_player_pokemons_hp_evs(memory)
         reward += self.reward_player_pokemons_attack_evs(memory)
         reward += self.reward_player_pokemons_defense_evs(memory)
-        reward += self.reward_player_pokemons_speed_evs(memory)
         reward += self.reward_player_pokemons_speed_evs(memory)
         reward += self.reward_player_pokemons_max_hps(memory)
         reward += self.reward_player_pokemons_attacks(memory)
@@ -276,7 +276,7 @@ class Data:
             <= self.visited_dialogs_count.get(self.dialog_id(self.pyboy.memory), 0)
             or 255 <= self.battle_count
             or 255 <= self.visited_positions_count.get(self.get_position(), 0)
-            or 255 <= self.menu_count
+            or 255 <= self.menu_count.get(self.map_id(self.pyboy.memory), 0)
             else False
         )
 
@@ -423,7 +423,9 @@ class Data:
         return self.data_normalizer(data) if self.is_world() else [0] * len(data)
 
     def menu_data(self):
-        data = [self.pyboy.memory[i] for i in range(0xCC24, 0xCC36)] + [self.menu_count]
+        data = [self.pyboy.memory[i] for i in range(0xCC24, 0xCC36)] + [
+            self.menu_count.get(self.map_id(self.pyboy.memory), 0)
+        ]
 
         return (
             self.data_normalizer(data)
@@ -1191,7 +1193,7 @@ class Data:
         return 0.2 - 0.005 * self.visited_positions_count.get(self.get_position(), 0)
 
     def reward_menu(self):
-        return 0.2 - 0.005 * self.menu_count
+        return 0.2 - 0.01 * self.menu_count.get(self.map_id(self.pyboy.memory), 0)
 
     def reward_players_substitute_hp(self, memory: bytes):
         return (
@@ -1220,7 +1222,7 @@ class Data:
             self.enemy_status(memory), self.enemy_status(self.pyboy.memory)
         ):
             if bit_before == 0 and bit_after == 1:
-                reward += 1
+                reward += 0.2
 
         return reward
 
@@ -1242,13 +1244,13 @@ class Data:
             self.pokemon_status1(memory), self.pokemon_status1(self.pyboy.memory)
         ):
             if bit_before == 0 and bit_after == 1:
-                reward += 1
+                reward -= 0.2
 
         return reward
 
     def reward_critical_hit_flag(self, memory: bytes):
         return (
-            0.05
+            0.3
             if self.critical_hit_flag(memory) == 0
             and self.critical_hit_flag(self.pyboy.memory) == 1
             else 0.0
@@ -1256,7 +1258,7 @@ class Data:
 
     def reward_one_hit_ko_flag(self, memory: bytes):
         return (
-            0.1
+            0.4
             if self.one_hit_ko_flag(memory) == 0
             and self.one_hit_ko_flag(self.pyboy.memory) == 1
             else 0.0
@@ -1272,7 +1274,7 @@ class Data:
             self.pokedex_own(memory), self.pokedex_own(self.pyboy.memory)
         ):
             if bit_before == 0 and bit_after == 1:
-                reward += 1
+                reward += 0.8
 
         return reward
 
@@ -1294,7 +1296,7 @@ class Data:
             self.badges(memory), self.badges(self.pyboy.memory)
         ):
             if bit_before == 0 and bit_after == 1:
-                reward += 10
+                reward += 1
 
         return reward
 
@@ -1305,7 +1307,7 @@ class Data:
             self.event_flags_data(memory), self.event_flags_data(self.pyboy.memory)
         ):
             if flag_x == 0 and flag_y == 1:
-                reward += 5
+                reward += 0.9
 
         return reward
 

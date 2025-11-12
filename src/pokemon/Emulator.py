@@ -182,7 +182,9 @@ class Emulator:
             )
             queue_logs.put_nowait(f"Battle Count: {self.data.battle_count}")
             queue_logs.put_nowait(f"Position: {self.data.get_position()}")
-            queue_logs.put_nowait(f"Menu Count: {self.data.menu_count}")
+            queue_logs.put_nowait(
+                f"Menu Count: {self.data.menu_count.get(self.data.map_id(self.pyboy.memory), 0)}"
+            )
             queue_logs.put_nowait(
                 f"Visited Dialogs Count: {self.data.visited_dialogs_count.get(self.data.dialog_id(self.pyboy.memory), 0)}"
             )
