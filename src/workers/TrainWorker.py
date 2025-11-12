@@ -261,6 +261,7 @@ class TrainWorker:
 
                     if self.ckpt_every <= evaluate_greedy_count:
                         evaluate_greedy_count = 0
+                        self.__evaluate_greedy_process = None
                         self.evaluate_greedy_process.start()
 
         except Exception as e:
