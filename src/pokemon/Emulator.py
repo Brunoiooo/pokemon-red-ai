@@ -256,7 +256,7 @@ class Emulator:
 
         self.pyboy.stop(False)
 
-        return ((total_episodes / evaluate_greedy_times),)
+        return total_episodes / evaluate_greedy_times
 
     def save(self):
         path = f"{self.saves}/{self.id}/{self.get_hash()}"

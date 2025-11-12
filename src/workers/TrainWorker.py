@@ -229,6 +229,7 @@ class TrainWorker:
             deque_buffer = deque(maxlen=self.deque_buffer_maxlen)
 
             count = 0
+            evaluate_greedy_count = 0
 
             while not self.event_stop.is_set():
                 if count % 1000 == 0:
@@ -255,10 +256,11 @@ class TrainWorker:
                         connections_state_dict=connections_state_dict,
                     )
 
-                    if (
-                        self.count.value % self.ckpt_every == 0
-                        and self.evaluate_greedy_process.is_alive() is False
-                    ):
+                if self.evaluate_greedy_process.is_alive() is False:
+                    evaluate_greedy_count += 1
+
+                    if self.ckpt_every <= evaluate_greedy_count:
+                        evaluate_greedy_count = 0
                         self.evaluate_greedy_process.start()
 
         except Exception as e:
