@@ -166,9 +166,13 @@ class Emulator:
             if truncated:
                 break
 
+            queue_logs.put_nowait("==================================")
             queue_logs.put_nowait(f"Reward: {reward:.2f}")
             queue_logs.put_nowait(f"Terminated: {terminated}")
             queue_logs.put_nowait(f"Truncated: {truncated}")
+            queue_logs.put_nowait(
+                f"is_battle: {self.data.is_battle()} is_dialog: {self.data.is_dialog()} is_menu: {self.data.is_menu()} is_blocked: {self.data.is_blocked()}"
+            )
             queue_logs.put_nowait(f"Badges: {self.data.badges(self.pyboy.memory)}")
             queue_logs.put_nowait(
                 f"Event Flags: {self.data.event_flags_data(self.pyboy.memory)}"
