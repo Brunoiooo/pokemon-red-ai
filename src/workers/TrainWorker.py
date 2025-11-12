@@ -28,8 +28,8 @@ class TrainWorker:
     )
     queue_data_maxsize = 1000
     deque_buffer_maxlen = 50000
-    optimize_every = 4
-    updates_per_optimize = 2
+    optimize_every = 2
+    updates_per_optimize = 1
     batch_size = 512
     grad_accum_steps = 1
     lr = 0.0001
