@@ -10,7 +10,7 @@ class Data:
 
     visited_dialogs_count: dict[str, int] = field(default_factory=dict)
     visited_positions_count: dict[str, int] = field(default_factory=dict)
-    menu_count: dict[str, int] = field(default_factory=dict)
+    menu_count: dict[int, int] = field(default_factory=dict)
     battle_count = 0
     __player_pokemon_size = 0x2C
     __pokemon_count = 6
@@ -38,8 +38,8 @@ class Data:
             self.visited_positions_count[self.get_position()] += 1
 
         if self.is_menu():
-            self.menu_count.setdefault(self.get_position(), 0)
-            self.menu_count[self.get_position()] += 1
+            self.menu_count.setdefault(self.map_id(self.pyboy.memory), 0)
+            self.menu_count[self.map_id(self.pyboy.memory)] += 1
 
     def inputs(self):
         return {
@@ -277,7 +277,7 @@ class Data:
             <= self.visited_dialogs_count.get(self.dialog_id(self.pyboy.memory), 0)
             or 255 <= self.battle_count
             or 255 <= self.visited_positions_count.get(self.get_position(), 0)
-            or 255 <= self.menu_count.get(self.get_position(), 0)
+            or 255 <= self.menu_count.get(self.map_id(self.pyboy.memory), 0)
             else False
         )
 
@@ -797,8 +797,8 @@ class Data:
 
         data += self.data_normalizer(
             [
-                self.pyboy.memory[0xD177 + self.__player_pokemon_size * i] << 8
-                | self.pyboy.memory[0xD178 + self.__player_pokemon_size * i]
+                self.pyboy.memory[0xD177 + self.__player_pokemon_size * i]
+                | self.pyboy.memory[0xD178 + self.__player_pokemon_size * i] << 8
                 for i in range(self.__pokemon_count)
             ],
             max=0xFFFF,
@@ -884,8 +884,8 @@ class Data:
 
     def player_pokemons_current_hps(self, memory: PyBoyMemoryView | bytes = None):
         return [
-            memory[0xD16C + self.__player_pokemon_size * x] << 8
-            | memory[0xD16D + self.__player_pokemon_size * x]
+            memory[0xD16C + self.__player_pokemon_size * x]
+            | memory[0xD16D + self.__player_pokemon_size * x] << 8
             for x in range(self.__pokemon_count)
         ]
 
@@ -1194,7 +1194,7 @@ class Data:
         return 0.2 - 0.0025 * self.visited_positions_count.get(self.get_position(), 0)
 
     def reward_menu(self):
-        return 0.2 - 0.0025 * self.menu_count.get(self.get_position(), 0)
+        return 0.2 - 0.0025 * self.menu_count.get(self.map_id(self.pyboy.memory), 0)
 
     def reward_players_substitute_hp(self, memory: bytes):
         return (
