@@ -984,7 +984,7 @@ class Data:
         )
 
     def pokedex_own(self, memory: PyBoyMemoryView | bytes):
-        data = memory[0xD2F7:0xD30A]
+        data = bytes([memory[0xD2F7] & 0b10110100]) + bytes(memory[0xD2F8:0xD30A])
 
         bits = []
         for byte in data:
