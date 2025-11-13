@@ -105,10 +105,10 @@ class Data:
         for id_x, id_y, status_x, status_y in zip(ids_x, ids_y, statuses_x, statuses_y):
             if id_x == id_y and id_x != 0:
                 for status_x_bit, status_y_bit in zip(status_x, status_y):
-                    if status_x_bit != status_y_bit and status_x_bit == 1:
-                        reward += 0.05
-                    elif status_x_bit != status_y_bit and status_x_bit == 0:
-                        reward -= 0.05
+                    if status_x_bit == 1 and status_y_bit == 0:
+                        reward += 0.1
+                    elif status_x_bit == 0 and status_y_bit == 1:
+                        reward -= 0.1
 
         return reward
 
@@ -1171,12 +1171,12 @@ class Data:
         )
 
     def reward_dialog(self):
-        return -0.00125 * self.visited_dialogs_count.get(
+        return -0.001 * self.visited_dialogs_count.get(
             self.dialog_id(self.pyboy.memory), 0
         )
 
     def reward_battle(self, memory: bytes):
-        reward = -0.00125 * self.battle_count
+        reward = -0.001 * self.battle_count
 
         reward += self.reward_players_substitute_hp(memory)
         reward += self.reward_enemy_substitute_hp(memory)
@@ -1190,10 +1190,10 @@ class Data:
         return reward
 
     def reward_position(self):
-        return -0.00125 * self.visited_positions_count.get(self.get_position(), 0)
+        return -0.001 * self.visited_positions_count.get(self.get_position(), 0)
 
     def reward_menu(self):
-        return -0.00125 * self.menu_count.get(self.map_id(self.pyboy.memory), 0)
+        return -0.001 * self.menu_count.get(self.map_id(self.pyboy.memory), 0)
 
     def reward_players_substitute_hp(self, memory: bytes):
         return (
@@ -1222,7 +1222,9 @@ class Data:
             self.enemy_status(memory), self.enemy_status(self.pyboy.memory)
         ):
             if bit_before == 0 and bit_after == 1:
-                reward += 0.2
+                reward += 0.1
+            elif bit_before == 1 and bit_after == 0:
+                reward -= 0.1
 
         return reward
 
@@ -1244,13 +1246,15 @@ class Data:
             self.pokemon_status1(memory), self.pokemon_status1(self.pyboy.memory)
         ):
             if bit_before == 0 and bit_after == 1:
-                reward -= 0.2
+                reward -= 0.1
+            elif bit_before == 1 and bit_after == 0:
+                reward += 0.1
 
         return reward
 
     def reward_critical_hit_flag(self, memory: bytes):
         return (
-            0.3
+            0.1
             if self.critical_hit_flag(memory) == 0
             and self.critical_hit_flag(self.pyboy.memory) == 1
             else 0.0
@@ -1258,7 +1262,7 @@ class Data:
 
     def reward_one_hit_ko_flag(self, memory: bytes):
         return (
-            0.4
+            0.1
             if self.one_hit_ko_flag(memory) == 0
             and self.one_hit_ko_flag(self.pyboy.memory) == 1
             else 0.0
@@ -1274,7 +1278,7 @@ class Data:
             self.pokedex_own(memory), self.pokedex_own(self.pyboy.memory)
         ):
             if bit_before == 0 and bit_after == 1:
-                reward += 0.8
+                reward += 0.1
 
         return reward
 
@@ -1285,7 +1289,7 @@ class Data:
             self.pokedex_seen(memory), self.pokedex_seen(self.pyboy.memory)
         ):
             if bit_before == 0 and bit_after == 1:
-                reward += 0.5
+                reward += 0.1
 
         return reward
 
@@ -1307,7 +1311,7 @@ class Data:
             self.event_flags_data(memory), self.event_flags_data(self.pyboy.memory)
         ):
             if flag_x == 0 and flag_y == 1:
-                reward += 0.9
+                reward += 1
 
         return reward
 
