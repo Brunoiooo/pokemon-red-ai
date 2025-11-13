@@ -145,21 +145,16 @@ class ExperienceWorker:
                     discount *= self.gamma
 
                 try:
-                    if (
-                        terminated
-                        or truncated
-                        or random.random() * len(self.buffer) <= math.fabs(reward)
-                    ):
-                        self.queue_data.put_nowait(
-                            (
-                                self.detach_to_cpu(self.buffer[0]["inputs"]),
-                                self.buffer[0]["action"],
-                                self.detach_to_cpu(self.buffer[-1]["next_inputs"]),
-                                reward,
-                                terminated,
-                                len(self.buffer),
-                            )
+                    self.queue_data.put_nowait(
+                        (
+                            self.detach_to_cpu(self.buffer[0]["inputs"]),
+                            self.buffer[0]["action"],
+                            self.detach_to_cpu(self.buffer[-1]["next_inputs"]),
+                            reward,
+                            terminated,
+                            len(self.buffer),
                         )
+                    )
                 except Full:
                     time.sleep(0.1)
                     pass
