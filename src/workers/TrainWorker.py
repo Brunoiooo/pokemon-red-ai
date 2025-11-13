@@ -38,7 +38,7 @@ class TrainWorker:
     criterion: torch.nn.SmoothL1Loss = field(default_factory=torch.nn.SmoothL1Loss)
     tau = 0.005
     sync_interval = 2000
-    epsilon: float = 0.3
+    epsilon: float = 0.0
     epsilon_burn = 100000
     epsilon_end = 0.05
     epsilon_decay_count = 2000000
