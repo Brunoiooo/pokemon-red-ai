@@ -273,7 +273,7 @@ class TrainWorker:
                     processes[i].terminate()
 
             if self.evaluate_greedy_process.is_alive():
-                self.evaluate_greedy_process.terminate()
+                self.evaluate_greedy_process.join()
 
     def optimize_batch(self, deque_buffer: deque):
         if len(deque_buffer) < self.batch_size:
