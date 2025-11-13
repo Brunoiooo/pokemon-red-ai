@@ -167,33 +167,12 @@ class Emulator:
                 break
 
             queue_logs.put_nowait("==================================")
-            queue_logs.put_nowait(
-                f"Dialog ID: {self.data.dialog_id(self.pyboy.memory)}"
-            )
             queue_logs.put_nowait(f"Reward: {reward:.2f}")
             queue_logs.put_nowait(f"Terminated: {terminated}")
             queue_logs.put_nowait(f"Truncated: {truncated}")
-            queue_logs.put_nowait(
-                f"is_world: {int(self.data.is_world())} is_battle: {int(self.data.is_battle())} is_dialog: {int(self.data.is_dialog())} is_menu: {int(self.data.is_menu())} is_blocked: {int(self.data.is_blocked())}"
-            )
-            queue_logs.put_nowait(f"Badges: {self.data.badges(self.pyboy.memory)}")
-            queue_logs.put_nowait(
-                f"Event Flags: {self.data.event_flags_data(self.pyboy.memory)}"
-            )
-            queue_logs.put_nowait(f"Battle Count: {self.data.battle_count}")
-            queue_logs.put_nowait(f"Position: {self.data.get_position()}")
-            queue_logs.put_nowait(
-                f"Menu Count: {self.data.menu_count.get(self.data.map_id(self.pyboy.memory), 0)}"
-            )
-            queue_logs.put_nowait(
-                f"Visited Dialogs Count: {self.data.visited_dialogs_count.get(self.data.dialog_id(self.pyboy.memory), 0)}"
-            )
-            queue_logs.put_nowait(
-                f"Visited Positions Count: {self.data.visited_positions_count.get(self.data.get_position(), 0)}"
-            )
             queue_logs.put_nowait("==================================")
 
-            time.sleep(0.01)
+            time.sleep(0.1)
 
         self.pyboy.stop(False)
 

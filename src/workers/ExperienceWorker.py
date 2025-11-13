@@ -156,7 +156,7 @@ class ExperienceWorker:
                         )
                     )
                 except Full:
-                    time.sleep(0.1)
+                    time.sleep(0.01)
                     pass
 
                 if truncated:
