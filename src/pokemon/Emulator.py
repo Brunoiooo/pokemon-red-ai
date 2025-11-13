@@ -193,7 +193,7 @@ class Emulator:
             )
             queue_logs.put_nowait("==================================")
 
-            time.sleep(0.25)
+            time.sleep(0.01)
 
         self.pyboy.stop(False)
 
