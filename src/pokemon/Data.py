@@ -47,7 +47,7 @@ class Data:
         }
 
     def reward(self, memory: bytes):
-        reward = -0.01
+        reward = 0.0
 
         reward += self.reward_milestones(memory)
         reward += self.reward_pokedex(memory)
