@@ -428,7 +428,7 @@ class Data:
     def map_data(self):
         data = [
             0 if self.visited_positions_count.get(self.get_position(), 0) == 0 else 1,
-        ] + self.data_normalizer(self.bike_speed(self.pyboy.memory))
+        ] + self.data_normalizer([self.bike_speed(self.pyboy.memory)])
 
         return data if self.is_world() else [0] * len(data)
 
