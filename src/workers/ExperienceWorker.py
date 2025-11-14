@@ -27,6 +27,7 @@ class ExperienceWorker:
     gamma: float
     epsilon: float = 1
     td_error_steps = 5
+    check_saves_every: int = 10000
 
     __model: None | ModelPokemon = None
 
@@ -63,6 +64,8 @@ class ExperienceWorker:
 
     def start(self):
         try:
+            checker_count = 0
+
             self.sync()
 
             memory, inputs = self.emulator.reset()
@@ -93,6 +96,16 @@ class ExperienceWorker:
                 memory, inputs = (
                     self.emulator.reset() if truncated else (next_memory, next_inputs)
                 )
+
+                checker_count += 1
+                if truncated or self.check_saves_every <= checker_count:
+                    checker_count = 0
+                    Emulator(id=self.id).checker(
+                        model=self.model,
+                        queue_logs=self.queue_logs,
+                        is_debug=False,
+                        is_evaluation_window=False,
+                    )
 
                 with self.window.get_lock():
                     self.emulator.use_sdl = bool(self.window.value)

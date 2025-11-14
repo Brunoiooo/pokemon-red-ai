@@ -4,6 +4,7 @@ import io
 import os
 from queue import Queue
 import random
+import traceback
 
 from pyboy import PyBoy
 import torch
@@ -18,6 +19,8 @@ import time
 class Emulator:
     id: int = 0
     saves = "saves"
+    truncated_count_file_name = "truncated_count"
+    terminated_count_file_name = "terminated_count"
     buttons = [
         [],
         ["a"],
@@ -49,8 +52,39 @@ class Emulator:
                 f.write(data)
 
     @property
+    def home_dir(self):
+        return f"{self.saves}/{self.id}"
+
+    @property
+    def pure_save(self):
+        scores: list[tuple[int, str]] = []
+        for dir in os.listdir(self.home_dir):
+            terminated_path = f"{self.home_dir}/{dir}/{self.terminated_count_file_name}"
+            truncated_path = f"{self.home_dir}/{dir}/{self.truncated_count_file_name}"
+
+            if not os.path.exists(terminated_path):
+                with open(terminated_path, "w") as f:
+                    f.write("0")
+
+            if not os.path.exists(truncated_path):
+                with open(truncated_path, "w") as f:
+                    f.write("0")
+
+            with open(terminated_path, "r") as f:
+                terminated_count = int(f.read().strip() or 0)
+
+            with open(truncated_path, "r") as f:
+                truncated_count = int(f.read().strip() or 0)
+
+            scores.append((truncated_count - terminated_count, dir))
+
+        scores.sort()
+
+        return scores[-1]
+
+    @property
     def random_save(self):
-        return random.choice(os.listdir(f"{self.saves}/{self.id}"))
+        return random.choice(os.listdir(self.home_dir))
 
     __pyboy: None | PyBoy = None
 
@@ -98,7 +132,7 @@ class Emulator:
 
     def reset(self, dir: str | None = None):
         if dir is None:
-            dir = self.random_save
+            dir = self.pure_save[1]
 
         with open(f"{self.saves}/{self.id}/{dir}/checkpoint.state", "rb") as f:
             self.pyboy.load_state(f)
@@ -260,3 +294,82 @@ class Emulator:
                 + self.data.event_flags_data(self.pyboy.memory)
             )
         ).hexdigest()
+
+    def increment_counter(self, path: str):
+        if not os.path.exists(path):
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("0")
+
+        with open(path, "r+", encoding="utf-8") as f:
+            text = f.read().strip() or "0"
+            try:
+                value = int(text)
+            except ValueError:
+                value = 0
+
+            value += 1
+
+            f.seek(0)
+            f.write(str(value))
+            f.truncate()
+
+    def checker(
+        self,
+        model: ModelPokemon,
+        queue_logs: Queue,
+        is_debug: bool,
+        is_evaluation_window: bool,
+    ):
+        try:
+            for dir in os.listdir(self.home_dir):
+                terminated, truncated = self.run_episode(
+                    dir=dir,
+                    model=model,
+                    queue_logs=queue_logs,
+                    is_debug=is_debug,
+                    is_evaluation_window=is_evaluation_window,
+                )
+
+                if terminated:
+                    terminated_count_file_path = (
+                        f"{self.home_dir}/{dir}/{self.terminated_count_file_name}"
+                    )
+                    self.increment_counter(terminated_count_file_path)
+
+                if truncated:
+                    truncated_count_file_path = (
+                        f"{self.home_dir}/{dir}/{self.truncated_count_file_name}"
+                    )
+                    self.increment_counter(truncated_count_file_path)
+
+        except Exception as e:
+            print("Exception in checker:")
+            queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
+        finally:
+            self.pyboy.stop(False)
+
+    def run_episode(
+        self,
+        dir: str,
+        model: ModelPokemon,
+        queue_logs: Queue,
+        is_debug: bool,
+        is_evaluation_window: bool,
+    ):
+        queue_logs.put_nowait(f"Running checker on save: {dir}")
+
+        self.use_sdl = is_evaluation_window
+
+        memory, inputs = self.reset(dir=dir)
+
+        while True:
+            action = int(torch.argmax(model(inputs).squeeze(0)).item())
+
+            next_memory, next_inputs, reward, terminated, truncated = self.step(
+                memory=memory, action=action
+            )
+
+            if terminated or truncated:
+                return (terminated, truncated)
+
+            memory, inputs = (next_memory, next_inputs)
