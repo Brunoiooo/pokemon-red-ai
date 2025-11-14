@@ -233,10 +233,9 @@ class Emulator:
         is_debug: bool,
         is_evaluation_window: bool,
     ):
-
         self.use_sdl = is_evaluation_window
 
-        total_episodes = 0
+        total_reward = 0.0
         for i in range(evaluate_greedy_times):
             memory, inputs = self.reset(dir="start")
 
@@ -251,6 +250,8 @@ class Emulator:
                     memory=memory, action=action
                 )
 
+                total_reward += reward
+
                 if is_debug:
                     queue_logs.put_nowait(
                         f"Episode: {i + 1}, Action: {action}, Reward: {reward:.2f}, Terminated: {terminated}, Truncated: {truncated}"
@@ -261,13 +262,9 @@ class Emulator:
 
                 memory, inputs = (next_memory, next_inputs)
 
-            total_episodes += self.data.badges(self.pyboy.memory).count(
-                1
-            ) + self.data.event_flags_data(self.pyboy.memory).count(1)
-
         self.pyboy.stop(False)
 
-        return total_episodes / evaluate_greedy_times
+        return total_reward / evaluate_greedy_times
 
     def save(self):
         path = f"{self.saves}/{self.id}/{self.get_hash()}"
