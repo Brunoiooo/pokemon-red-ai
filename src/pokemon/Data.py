@@ -387,11 +387,19 @@ class Data:
 
     def dialog_data(self):
         data = [
-            self.visited_dialogs_count.get(self.dialog_id(self.pyboy.memory), 0),
-            self.dialog_id(self.pyboy.memory),
-        ]
+            (
+                0
+                if self.visited_dialogs_count.get(self.dialog_id(self.pyboy.memory), 0)
+                == 0
+                else 1
+            )
+        ] + self.data_normalizer(
+            [
+                self.dialog_id(self.pyboy.memory),
+            ]
+        )
 
-        return self.data_normalizer(data) if self.is_dialog() else [0] * len(data)
+        return data if self.is_dialog() else [0] * len(data)
 
     def map_id(self, memory: PyBoyMemoryView | bytes):
         return memory[0xD35E]
@@ -419,11 +427,10 @@ class Data:
 
     def map_data(self):
         data = [
-            self.visited_positions_count.get(self.get_position(), 0),
-            self.bike_speed(self.pyboy.memory),
-        ]
+            0 if self.visited_positions_count.get(self.get_position(), 0) == 0 else 1,
+        ] + self.data_normalizer(self.bike_speed(self.pyboy.memory))
 
-        return self.data_normalizer(data) if self.is_world() else [0] * len(data)
+        return data if self.is_world() else [0] * len(data)
 
     def get_position(self):
         return f"{self.position_x(self.pyboy.memory)}x{self.position_y(self.pyboy.memory)}x{self.map_id(self.pyboy.memory)}"
@@ -464,12 +471,14 @@ class Data:
         return self.data_normalizer(data) if self.is_world() else [0] * len(data)
 
     def menu_data(self):
-        data = [self.pyboy.memory[i] for i in range(0xCC24, 0xCC36)] + [
-            self.menu_count.get(self.map_id(self.pyboy.memory), 0)
+        data = self.data_normalizer(
+            [self.pyboy.memory[i] for i in range(0xCC24, 0xCC36)]
+        ) + [
+            0 if self.menu_count.get(self.map_id(self.pyboy.memory), 0) == 0 else 1,
         ]
 
         return (
-            self.data_normalizer(data)
+            data
             if self.is_menu() or self.is_battle() or self.is_dialog()
             else [0] * len(data)
         )
@@ -485,6 +494,7 @@ class Data:
                 self.critical_hit_flag(self.pyboy.memory),
                 self.one_hit_ko_flag(self.pyboy.memory),
                 self.hooked_pokemon_flag(self.pyboy.memory),
+                0 if self.battle_count == 0 else 1,
             ]
         )
         data_byte = self.data_normalizer(
@@ -543,7 +553,6 @@ class Data:
                 self.pokemon_pp_fourth_slot1(self.pyboy.memory),
                 self.type_of_battle(self.pyboy.memory),
                 self.battle_type(self.pyboy.memory),
-                self.battle_count,
             ]
         )
         data_2bytes = self.data_normalizer(
