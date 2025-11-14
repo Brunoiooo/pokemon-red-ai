@@ -51,12 +51,13 @@ class Data:
         if path is not None:
             self.load_data(path)
         else:
-            self.visited_dialogs_count = {}
-            self.visited_positions_count = {}
-            self.menu_count = {}
-            self.battle_count = 0
             self.__visited_pokedex_own = None
             self.__visited_pokedex_seen = None
+
+        self.visited_dialogs_count = {}
+        self.visited_positions_count = {}
+        self.menu_count = {}
+        self.battle_count = 0
 
     def count(self, memory: bytes):
         if not self.is_battle() or self.number_of_turns_in_current_battle(
@@ -1383,10 +1384,6 @@ class Data:
         with open(f"{path}/data", "wb") as f:
             pickle.dump(
                 {
-                    "visited_positions_count": self.visited_positions_count,
-                    "menu_count": self.menu_count,
-                    "visited_dialogs_count": self.visited_dialogs_count,
-                    "battle_count": self.battle_count,
                     "visited_pokedex_own": self.pokedex_own(self.pyboy.memory),
                     "visited_pokedex_seen": self.pokedex_seen(self.pyboy.memory),
                 },
@@ -1397,16 +1394,8 @@ class Data:
         try:
             with open(f"{path}/data", "rb") as f:
                 data = pickle.load(f)
-                self.visited_positions_count = data.get("visited_positions_count", {})
-                self.menu_count = data.get("menu_count", {})
-                self.visited_dialogs_count = data.get("visited_dialogs_count", {})
-                self.battle_count = data.get("battle_count", 0)
                 self.__visited_pokedex_own = data.get("visited_pokedex_own", None)
                 self.__visited_pokedex_seen = data.get("visited_pokedex_seen", None)
         except FileNotFoundError:
-            self.visited_positions_count = {}
-            self.menu_count = {}
-            self.visited_dialogs_count = {}
-            self.battle_count = 0
             self.__visited_pokedex_own = None
             self.__visited_pokedex_seen = None
