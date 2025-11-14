@@ -43,7 +43,7 @@ class TrainWorker:
     epsilon_end = 0.05
     epsilon_decay_count = 2000000
     ckpt_every = 10000
-    evaluate_greedy_times = 1
+    evaluate_greedy_times = 20
 
     __event_stop: None | Event = None
 
