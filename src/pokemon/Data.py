@@ -14,6 +14,7 @@ class Data:
     visited_positions_count: dict[str, int] = field(default_factory=dict)
     menu_count: dict[int, int] = field(default_factory=dict)
     battle_count: int = 0
+    useless_count: int = 0
     __player_pokemon_size = 0x2C
     __pokemon_count = 6
 
@@ -58,6 +59,7 @@ class Data:
         self.visited_positions_count = {}
         self.menu_count = {}
         self.battle_count = 0
+        self.useless_count = 0
 
     def count(self, memory: bytes):
         if not self.is_battle() or self.number_of_turns_in_current_battle(
@@ -65,18 +67,27 @@ class Data:
         ) < self.number_of_turns_in_current_battle(self.pyboy.memory):
             self.battle_count = 0
         else:
+            self.useless_count += 1
             self.battle_count += 1
 
         if self.is_dialog():
-            self.visited_dialogs_count.setdefault(self.dialog_id(self.pyboy.memory), 0)
+            if 0 < self.visited_dialogs_count.setdefault(
+                self.dialog_id(self.pyboy.memory), 0
+            ):
+                self.useless_count += 1
+
             self.visited_dialogs_count[self.dialog_id(self.pyboy.memory)] += 1
 
         if self.is_world():
-            self.visited_positions_count.setdefault(self.get_position(), 0)
+            if 0 < self.visited_positions_count.setdefault(self.get_position(), 0):
+                self.useless_count += 1
+
             self.visited_positions_count[self.get_position()] += 1
 
         if self.is_menu():
-            self.menu_count.setdefault(self.map_id(self.pyboy.memory), 0)
+            if 0 < self.menu_count.setdefault(self.map_id(self.pyboy.memory), 0):
+                self.useless_count += 1
+
             self.menu_count[self.map_id(self.pyboy.memory)] += 1
 
         self.visited_pokedex_own = self.pokedex_own(self.pyboy.memory)
@@ -313,7 +324,8 @@ class Data:
     def truncated(self):
         return (
             True
-            if 255
+            if 64 <= self.useless_count
+            or 255
             <= self.visited_dialogs_count.get(self.dialog_id(self.pyboy.memory), 0)
             or 255 <= self.battle_count
             or 255 <= self.visited_positions_count.get(self.get_position(), 0)

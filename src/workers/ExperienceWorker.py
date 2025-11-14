@@ -78,8 +78,6 @@ class ExperienceWorker:
 
             memory, inputs = self.emulator.reset(dir=self.last_save_path)
 
-            count = 0
-
             while not self.event_stop.is_set():
                 self.event_wait.wait()
 
@@ -90,12 +88,6 @@ class ExperienceWorker:
                 next_memory, next_inputs, reward, terminated, truncated = (
                     self.emulator.step(memory=memory, action=action)
                 )
-
-                if 255 <= count:
-                    count = 0
-                    truncated = True
-                else:
-                    count += 1
 
                 self.buffer.append(
                     {
