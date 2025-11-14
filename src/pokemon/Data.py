@@ -1,4 +1,6 @@
 from dataclasses import dataclass, field
+import os
+import pickle
 
 from pyboy import PyBoy, PyBoyMemoryView
 import torch
@@ -45,13 +47,16 @@ class Data:
             x | y for x, y in zip(value, self.visited_pokedex_seen)
         ]
 
-    def clean(self):
-        self.visited_dialogs_count = {}
-        self.visited_positions_count = {}
-        self.menu_count = {}
-        self.battle_count = 0
-        self.__visited_pokedex_own = None
-        self.__visited_pokedex_seen = None
+    def clean(self, path: str | None = None):
+        if path is not None:
+            self.load_data(path)
+        else:
+            self.visited_dialogs_count = {}
+            self.visited_positions_count = {}
+            self.menu_count = {}
+            self.battle_count = 0
+            self.__visited_pokedex_own = None
+            self.__visited_pokedex_seen = None
 
     def count(self, memory: bytes):
         if not self.is_battle() or self.number_of_turns_in_current_battle(
@@ -1372,3 +1377,36 @@ class Data:
         reward += self.reward_event_flags(memory)
 
         return reward
+
+    def save_data(self, path: str):
+        os.makedirs(path, exist_ok=True)
+        with open(f"{path}/data", "wb") as f:
+            pickle.dump(
+                {
+                    "visited_positions_count": self.visited_positions_count,
+                    "menu_count": self.menu_count,
+                    "visited_dialogs_count": self.visited_dialogs_count,
+                    "battle_count": self.battle_count,
+                    "visited_pokedex_own": self.pokedex_own(self.pyboy.memory),
+                    "visited_pokedex_seen": self.pokedex_seen(self.pyboy.memory),
+                },
+                f,
+            )
+
+    def load_data(self, path: str):
+        try:
+            with open(f"{path}/data", "rb") as f:
+                data = pickle.load(f)
+                self.visited_positions_count = data.get("visited_positions_count", {})
+                self.menu_count = data.get("menu_count", {})
+                self.visited_dialogs_count = data.get("visited_dialogs_count", {})
+                self.battle_count = data.get("battle_count", 0)
+                self.__visited_pokedex_own = data.get("visited_pokedex_own", None)
+                self.__visited_pokedex_seen = data.get("visited_pokedex_seen", None)
+        except FileNotFoundError:
+            self.visited_positions_count = {}
+            self.menu_count = {}
+            self.visited_dialogs_count = {}
+            self.battle_count = 0
+            self.__visited_pokedex_own = None
+            self.__visited_pokedex_seen = None

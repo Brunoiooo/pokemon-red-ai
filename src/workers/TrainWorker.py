@@ -1,7 +1,7 @@
 from collections import deque
 from dataclasses import dataclass, field
 import io
-from multiprocessing import Pipe, Process, Queue
+from multiprocessing import Pipe, Process, Queue, Event as MPEvent
 from multiprocessing.queues import Queue as MPQueue
 from multiprocessing.connection import Connection
 from multiprocessing.sharedctypes import Synchronized
@@ -26,6 +26,7 @@ class TrainWorker:
     device: str = field(
         default_factory=lambda: "cuda" if torch.cuda.is_available() else "cpu"
     )
+    event_wait: Event = field(default_factory=lambda: MPEvent())
     queue_data_maxsize = 1000
     deque_buffer_maxlen = 50000
     optimize_every = 2
@@ -43,7 +44,7 @@ class TrainWorker:
     epsilon_end = 0.05
     epsilon_decay_count = 2000000
     ckpt_every = 10000
-    evaluate_greedy_times = 20
+    evaluate_greedy_times = 1
 
     __event_stop: None | Event = None
 
@@ -196,6 +197,7 @@ class TrainWorker:
         window: Synchronized,
     ):
         try:
+            self.event_wait.set()
             self.event_stop = event_stop
             self.queue_logs = queue_logs
             self.count = count
@@ -256,13 +258,13 @@ class TrainWorker:
                         connections_state_dict=connections_state_dict,
                     )
 
-                if self.evaluate_greedy_process.is_alive() is False:
-                    evaluate_greedy_count += 1
+                if self.ckpt_every <= evaluate_greedy_count:
+                    evaluate_greedy_count = 0
+                    self.event_wait.clear()
+                    self.evaluate_greedy()
+                    self.event_wait.set()
 
-                    if self.ckpt_every <= evaluate_greedy_count:
-                        evaluate_greedy_count = 0
-                        self.__evaluate_greedy_process = None
-                        self.evaluate_greedy_process.start()
+                evaluate_greedy_count += 1
 
         except Exception as e:
             self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
@@ -394,6 +396,7 @@ class TrainWorker:
                 gamma=self.gamma,
                 id=id,
                 window=self.window,
+                event_wait=self.event_wait,
             ).start,
             daemon=True,
         )
@@ -415,29 +418,26 @@ class TrainWorker:
             connections_state_dict[i].send(buffer.getvalue())
 
     def evaluate_greedy(self):
-        try:
-            with self.count.get_lock():
-                self.queue_logs.put_nowait(
-                    f"Starting evaluation at step {self.count.value}..."
-                )
-
-            self.save_latest()
-
-            with self.is_debug.get_lock(), self.is_evaluation_window.get_lock():
-                is_debug = self.is_debug.value
-                is_evaluation_window = self.is_evaluation_window.value
-
-            avg_ret = Emulator().evaluate_greedy(
-                model=self.model,
-                evaluate_greedy_times=self.evaluate_greedy_times,
-                queue_logs=self.queue_logs,
-                is_debug=is_debug,
-                is_evaluation_window=is_evaluation_window,
+        with self.count.get_lock():
+            self.queue_logs.put_nowait(
+                f"Starting evaluation at step {self.count.value}..."
             )
 
-            if self.best_eval_return < avg_ret:
-                self.save_best(avg_ret)
+        self.save_latest()
 
-            self.queue_logs.put_nowait(f"Finished evaluation {avg_ret:.2f}.")
-        except Exception as e:
-            self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
+        with self.is_debug.get_lock(), self.is_evaluation_window.get_lock():
+            is_debug = self.is_debug.value
+            is_evaluation_window = self.is_evaluation_window.value
+
+        avg_ret = Emulator().evaluate_greedy(
+            model=self.model,
+            evaluate_greedy_times=self.evaluate_greedy_times,
+            queue_logs=self.queue_logs,
+            is_debug=is_debug,
+            is_evaluation_window=is_evaluation_window,
+        )
+
+        if self.best_eval_return < avg_ret:
+            self.save_best(avg_ret)
+
+        self.queue_logs.put_nowait(f"Finished evaluation {avg_ret:.2f}.")

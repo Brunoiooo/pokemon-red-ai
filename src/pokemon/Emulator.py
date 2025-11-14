@@ -39,18 +39,6 @@ class Emulator:
     ticks_per_step = 32
     ALL_BUTTONS = ["a", "b", "start", "select", "left", "right", "up", "down"]
 
-    def __post_init__(self):
-        path = f"{self.saves}/{self.id}/start"
-
-        if not os.path.exists(f"{path}/checkpoint.state"):
-            os.makedirs(path, exist_ok=True)
-
-            with open(f"{self.saves}/start/checkpoint.state", "rb") as f:
-                data = f.read()
-
-            with open(f"{path}/checkpoint.state", "wb") as f:
-                f.write(data)
-
     @property
     def home_dir(self):
         return f"{self.saves}/{self.id}"
@@ -131,13 +119,12 @@ class Emulator:
         return self.__data
 
     def reset(self, dir: str | None = None):
-        if dir is None:
-            dir = self.pure_save[1]
+        path = f"{self.saves}/{dir}"
 
-        with open(f"{self.saves}/{self.id}/{dir}/checkpoint.state", "rb") as f:
+        with open(f"{path}/checkpoint.state", "rb") as f:
             self.pyboy.load_state(f)
 
-        self.data.clean()
+        self.data.clean(path=path)
 
         return (bytes(self.pyboy.memory[0:0x10000]), self.data.inputs())
 
@@ -262,100 +249,15 @@ class Emulator:
 
                 memory, inputs = (next_memory, next_inputs)
 
+        self.save_last_checkpoint("saves/last")
+
         self.pyboy.stop(False)
 
         return total_reward / evaluate_greedy_times
 
-    def save(self):
-        path = f"{self.saves}/{self.id}/{self.get_hash()}"
-
+    def save_last_checkpoint(self, path: str):
         os.makedirs(path, exist_ok=True)
         with open(f"{path}/checkpoint.state", "wb") as f:
             self.pyboy.save_state(f)
 
-    def get_hash(self):
-        return hashlib.sha256(
-            bytes(
-                self.data.badges(self.pyboy.memory)
-                + self.data.event_flags_data(self.pyboy.memory)
-            )
-        ).hexdigest()
-
-    def increment_counter(self, path: str):
-        if not os.path.exists(path):
-            with open(path, "w", encoding="utf-8") as f:
-                f.write("0")
-
-        with open(path, "r+", encoding="utf-8") as f:
-            text = f.read().strip() or "0"
-            try:
-                value = int(text)
-            except ValueError:
-                value = 0
-
-            value += 1
-
-            f.seek(0)
-            f.write(str(value))
-            f.truncate()
-
-    def checker(
-        self,
-        model: ModelPokemon,
-        queue_logs: Queue,
-        is_debug: bool,
-        is_evaluation_window: bool,
-    ):
-        try:
-            for dir in os.listdir(self.home_dir):
-                terminated, truncated = self.run_episode(
-                    dir=dir,
-                    model=model,
-                    queue_logs=queue_logs,
-                    is_debug=is_debug,
-                    is_evaluation_window=is_evaluation_window,
-                )
-
-                if terminated:
-                    terminated_count_file_path = (
-                        f"{self.home_dir}/{dir}/{self.terminated_count_file_name}"
-                    )
-                    self.increment_counter(terminated_count_file_path)
-
-                if truncated:
-                    truncated_count_file_path = (
-                        f"{self.home_dir}/{dir}/{self.truncated_count_file_name}"
-                    )
-                    self.increment_counter(truncated_count_file_path)
-
-        except Exception as e:
-            print("Exception in checker:")
-            queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
-        finally:
-            self.pyboy.stop(False)
-
-    def run_episode(
-        self,
-        dir: str,
-        model: ModelPokemon,
-        queue_logs: Queue,
-        is_debug: bool,
-        is_evaluation_window: bool,
-    ):
-        queue_logs.put_nowait(f"Running checker on save: {dir}")
-
-        self.use_sdl = is_evaluation_window
-
-        memory, inputs = self.reset(dir=dir)
-
-        while True:
-            action = int(torch.argmax(model(inputs).squeeze(0)).item())
-
-            next_memory, next_inputs, reward, terminated, truncated = self.step(
-                memory=memory, action=action
-            )
-
-            if terminated or truncated:
-                return (terminated, truncated)
-
-            memory, inputs = (next_memory, next_inputs)
+        self.data.save_data(path)

@@ -1,11 +1,11 @@
 from collections import deque
 from dataclasses import dataclass
 import io
-import math
 from multiprocessing import Queue
 from multiprocessing.connection import Connection
 from multiprocessing.sharedctypes import Synchronized
 from multiprocessing.synchronize import Event
+import os
 from queue import Full
 import random
 import time
@@ -19,6 +19,7 @@ from pokemon.ModelPokemon import ModelPokemon
 class ExperienceWorker:
     id: int
     event_stop: Event
+    event_wait: Event
     queue_logs: Queue
     connection_epsilon: Connection
     connection_state_dict: Connection
@@ -27,7 +28,16 @@ class ExperienceWorker:
     gamma: float
     epsilon: float = 1
     td_error_steps = 5
-    check_saves_every: int = 10
+
+    __last_save_path = "last"
+
+    @property
+    def last_save_path(self):
+        return (
+            self.__last_save_path
+            if os.path.exists(f"saves/{self.__last_save_path}")
+            else "start"
+        )
 
     __model: None | ModelPokemon = None
 
@@ -64,13 +74,15 @@ class ExperienceWorker:
 
     def start(self):
         try:
-            checker_count = 0
-
             self.sync()
 
-            memory, inputs = self.emulator.reset()
+            memory, inputs = self.emulator.reset(dir=self.last_save_path)
+
+            count = 0
 
             while not self.event_stop.is_set():
+                self.event_wait.wait()
+
                 self.poll()
 
                 action = self.get_action(inputs)
@@ -78,6 +90,12 @@ class ExperienceWorker:
                 next_memory, next_inputs, reward, terminated, truncated = (
                     self.emulator.step(memory=memory, action=action)
                 )
+
+                if 255 <= count:
+                    count = 0
+                    truncated = True
+                else:
+                    count += 1
 
                 self.buffer.append(
                     {
@@ -90,24 +108,11 @@ class ExperienceWorker:
 
                 self.put_to_queue_data(terminated=terminated, truncated=truncated)
 
-                if terminated:
-                    self.emulator.save()
-
                 memory, inputs = (
-                    self.emulator.reset() if truncated else (next_memory, next_inputs)
+                    self.emulator.reset(dir=self.last_save_path)
+                    if truncated
+                    else (next_memory, next_inputs)
                 )
-
-                if terminated:
-                    checker_count += 1
-
-                if self.check_saves_every <= checker_count:
-                    checker_count = 0
-                    Emulator(id=self.id).checker(
-                        model=self.model,
-                        queue_logs=self.queue_logs,
-                        is_debug=False,
-                        is_evaluation_window=False,
-                    )
 
                 with self.window.get_lock():
                     self.emulator.use_sdl = bool(self.window.value)
