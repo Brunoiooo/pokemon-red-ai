@@ -222,17 +222,6 @@ class Emulator:
         self.pyboy.tick(self.ticks_per_step / 2)
 
     def mask_action(self, action: int) -> int:
-        if self.data.is_battle():
-            return action
-
-        if self.data.is_dialog():
-            return 2 if action not in {0, 1, 2} else action
-
-        if self.data.is_menu():
-            return 2 if action not in {0, 1, 2, 5, 6, 7, 8} else action
-
-        if self.data.is_blocked():
-            return 0
 
         return action
 

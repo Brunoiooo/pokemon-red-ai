@@ -15,11 +15,43 @@ class Data:
     __player_pokemon_size = 0x2C
     __pokemon_count = 6
 
+    __visited_pokedex_own: list[int] | None = None
+
+    @property
+    def visited_pokedex_own(self):
+        if self.__visited_pokedex_own is None:
+            self.__visited_pokedex_own = self.pokedex_own(self.pyboy.memory)
+
+        return self.__visited_pokedex_own
+
+    @visited_pokedex_own.setter
+    def visited_pokedex_own(self, value: list[int]):
+        self.__visited_pokedex_own = [
+            x | y for x, y in zip(value, self.visited_pokedex_own)
+        ]
+
+    __visited_pokedex_seen: list[int] | None = None
+
+    @property
+    def visited_pokedex_seen(self):
+        if self.__visited_pokedex_seen is None:
+            self.__visited_pokedex_seen = self.pokedex_seen(self.pyboy.memory)
+
+        return self.__visited_pokedex_seen
+
+    @visited_pokedex_seen.setter
+    def visited_pokedex_seen(self, value: list[int]):
+        self.__visited_pokedex_seen = [
+            x | y for x, y in zip(value, self.visited_pokedex_seen)
+        ]
+
     def clean(self):
         self.visited_dialogs_count = {}
         self.visited_positions_count = {}
         self.menu_count = {}
         self.battle_count = 0
+        self.__visited_pokedex_own = None
+        self.__visited_pokedex_seen = None
 
     def count(self, memory: bytes):
         if not self.is_battle() or self.number_of_turns_in_current_battle(
@@ -40,6 +72,9 @@ class Data:
         if self.is_menu():
             self.menu_count.setdefault(self.map_id(self.pyboy.memory), 0)
             self.menu_count[self.map_id(self.pyboy.memory)] += 1
+
+        self.visited_pokedex_own = self.pokedex_own(self.pyboy.memory)
+        self.visited_pokedex_seen = self.pokedex_seen(self.pyboy.memory)
 
     def inputs(self):
         return {
@@ -984,9 +1019,9 @@ class Data:
         )
 
     def pokedex_own(self, memory: PyBoyMemoryView | bytes):
-        data = bytes([memory[0xD2F7] & 0b10110100]) + bytes(memory[0xD2F8:0xD30A])
+        data = bytes(memory[0xD2F7:0xD30A])
 
-        bits = []
+        bits: list[int] = []
         for byte in data:
             bits.extend(self.bits_extractor(byte))
 
@@ -995,7 +1030,7 @@ class Data:
     def pokedex_seen(self, memory: PyBoyMemoryView | bytes):
         data = memory[0xD30A:0xD31D]
 
-        bits = []
+        bits: list[int] = []
         for byte in data:
             bits.extend(self.bits_extractor(byte))
 
@@ -1284,10 +1319,12 @@ class Data:
     def reward_pokedex_own(self, memory: bytes):
         reward = 0
 
-        for bit_before, bit_after in zip(
-            self.pokedex_own(memory), self.pokedex_own(self.pyboy.memory)
+        for bit_before, bit_after, visited in zip(
+            self.pokedex_own(memory),
+            self.pokedex_own(self.pyboy.memory),
+            self.visited_pokedex_own,
         ):
-            if bit_before == 0 and bit_after == 1:
+            if bit_before == 0 and bit_after == 1 and visited == 0:
                 reward += 0.5
 
         return reward
@@ -1295,10 +1332,12 @@ class Data:
     def reward_pokedex_seen(self, memory: bytes):
         reward = 0
 
-        for bit_before, bit_after in zip(
-            self.pokedex_seen(memory), self.pokedex_seen(self.pyboy.memory)
+        for bit_before, bit_after, visited in zip(
+            self.pokedex_seen(memory),
+            self.pokedex_seen(self.pyboy.memory),
+            self.visited_pokedex_seen,
         ):
-            if bit_before == 0 and bit_after == 1:
+            if bit_before == 0 and bit_after == 1 and visited == 0:
                 reward += 0.3
 
         return reward
