@@ -27,7 +27,7 @@ class ExperienceWorker:
     gamma: float
     epsilon: float = 1
     td_error_steps = 5
-    check_saves_every: int = 10000
+    check_saves_every: int = 10
 
     __model: None | ModelPokemon = None
 
@@ -97,8 +97,10 @@ class ExperienceWorker:
                     self.emulator.reset() if truncated else (next_memory, next_inputs)
                 )
 
-                checker_count += 1
-                if truncated or self.check_saves_every <= checker_count:
+                if terminated:
+                    checker_count += 1
+
+                if self.check_saves_every <= checker_count:
                     checker_count = 0
                     Emulator(id=self.id).checker(
                         model=self.model,

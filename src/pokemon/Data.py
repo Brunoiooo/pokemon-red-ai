@@ -1173,12 +1173,12 @@ class Data:
     def reward_dialog(self):
         return (
             0.05
-            if self.visited_dialogs_count.get(self.dialog_id(self.pyboy.memory), 0) < 5
+            if self.visited_dialogs_count.get(self.dialog_id(self.pyboy.memory), 0) == 0
             else -0.01
         )
 
     def reward_battle(self, memory: bytes):
-        reward = 0.05 if self.battle_count < 5 else -0.01
+        reward = 0.05 if self.battle_count == 0 else -0.01
 
         reward += self.reward_players_substitute_hp(memory)
         reward += self.reward_enemy_substitute_hp(memory)
@@ -1194,14 +1194,14 @@ class Data:
     def reward_position(self):
         return (
             0.05
-            if self.visited_positions_count.get(self.get_position(), 0) < 5
+            if self.visited_positions_count.get(self.get_position(), 0) == 0
             else -0.01
         )
 
     def reward_menu(self):
         return (
             0.05
-            if self.menu_count.get(self.map_id(self.pyboy.memory), 0) < 5
+            if self.menu_count.get(self.map_id(self.pyboy.memory), 0) == 0
             else -0.01
         )
 
