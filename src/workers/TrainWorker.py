@@ -29,9 +29,9 @@ class TrainWorker:
     event_wait: Event = field(default_factory=lambda: MPEvent())
     queue_data_maxsize = 1000
     deque_buffer_maxlen = 100000
-    optimize_every = 2
-    updates_per_optimize = 1
-    batch_size = 1024
+    optimize_every = 8
+    updates_per_optimize = 2
+    batch_size = 512
     grad_accum_steps = 1
     lr = 0.00001
     weight_decay = 1e-5
@@ -234,7 +234,7 @@ class TrainWorker:
             evaluate_greedy_count = 0
 
             while not self.event_stop.is_set():
-                if count % 1000 == 0:
+                if count % 100 == 0:
                     with self.count.get_lock():
                         self.count.value = count
                     self.queue_logs.put_nowait(

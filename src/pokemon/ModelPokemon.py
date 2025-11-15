@@ -51,10 +51,21 @@ class ModelPokemon(nn.Module):
             nn.Linear(128, outputs),
         )
 
-    def _as_float_batch(self, t):
+    def _as_long_batch(self, t, device):
+        t = t.to(device)
+        if t.dtype != torch.long:
+            t = t.long()
+        if t.dim() == 0:
+            t = t.unsqueeze(0)
+        return t
+
+    def _as_float_batch(self, t, device):
+        t = t.to(device)
         if t.dim() == 1:
             t = t.unsqueeze(0)
         return t.float()
 
     def forward(self, x):
-        return self.fc(self._as_float_batch(x["continuous"]))
+        return self.fc(
+            self._as_float_batch(x["continuous"], next(self.parameters()).device)
+        )
