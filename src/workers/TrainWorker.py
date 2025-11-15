@@ -22,7 +22,7 @@ from math import inf
 
 @dataclass
 class TrainWorker:
-    workers: int = field(default_factory=lambda: os.cpu_count() or 1)
+    workers: int = field(default_factory=lambda: max(1, os.cpu_count() - 1 or 1))
     device: str = field(
         default_factory=lambda: "cuda" if torch.cuda.is_available() else "cpu"
     )
@@ -31,7 +31,7 @@ class TrainWorker:
     deque_buffer_maxlen = 100000
     optimize_every = 8
     updates_per_optimize = 2
-    batch_size = 512
+    batch_size = 2048
     grad_accum_steps = 1
     lr = 0.00001
     weight_decay = 1e-5
