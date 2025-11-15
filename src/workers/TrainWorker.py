@@ -38,9 +38,9 @@ class TrainWorker:
     gamma = 0.99
     criterion: torch.nn.SmoothL1Loss = field(default_factory=torch.nn.SmoothL1Loss)
     tau = 0.005
-    sync_interval = 1000
-    ckpt_every = 10000
-    evaluate_greedy_times = 25
+    sync_interval = 100
+    ckpt_every = 5000
+    evaluate_greedy_times = 1
 
     __event_stop: None | Event = None
 
@@ -241,7 +241,7 @@ class TrainWorker:
                     for _ in range(self.updates_per_optimize):
                         self.optimize_batch(deque_buffer=deque_buffer)
 
-                if count % self.sync_interval == 0:
+                if evaluate_greedy_count % (self.ckpt_every // 100) == 0:
                     self.setup_experience_workers(
                         connections_epsilon=connections_epsilon,
                         connections_state_dict=connections_state_dict,
