@@ -244,12 +244,13 @@ class Emulator:
                         f"Episode: {i + 1}, Action: {action}, Reward: {reward:.2f}, Terminated: {terminated}, Truncated: {truncated}"
                     )
 
+                if terminated:
+                    self.save_last_checkpoint("saves/last")
+
                 if truncated:
                     break
 
                 memory, inputs = (next_memory, next_inputs)
-
-        self.save_last_checkpoint("saves/last")
 
         self.pyboy.stop(False)
 
