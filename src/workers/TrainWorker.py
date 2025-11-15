@@ -28,12 +28,12 @@ class TrainWorker:
     )
     event_wait: Event = field(default_factory=lambda: MPEvent())
     queue_data_maxsize = 1000
-    deque_buffer_maxlen = 50000
+    deque_buffer_maxlen = 100000
     optimize_every = 2
     updates_per_optimize = 1
-    batch_size = 512
+    batch_size = 1024
     grad_accum_steps = 1
-    lr = 0.0001
+    lr = 0.00001
     weight_decay = 1e-5
     gamma = 0.99
     criterion: torch.nn.SmoothL1Loss = field(default_factory=torch.nn.SmoothL1Loss)
@@ -43,7 +43,7 @@ class TrainWorker:
     epsilon_burn = 100000
     epsilon_end = 0.05
     epsilon_decay_count = 2000000
-    ckpt_every = 25000
+    ckpt_every = 10000
     evaluate_greedy_times = 25
 
     __event_stop: None | Event = None
