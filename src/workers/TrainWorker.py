@@ -29,7 +29,7 @@ class TrainWorker:
     event_wait: Event = field(default_factory=lambda: MPEvent())
     queue_data_maxsize = 1000
     deque_buffer_maxlen = 100000
-    optimize_every = 8
+    optimize_every = 4
     updates_per_optimize = 2
     batch_size = 2048
     grad_accum_steps = 1
@@ -38,11 +38,7 @@ class TrainWorker:
     gamma = 0.99
     criterion: torch.nn.SmoothL1Loss = field(default_factory=torch.nn.SmoothL1Loss)
     tau = 0.005
-    sync_interval = 2000
-    epsilon: float = 0.25
-    epsilon_burn = 100000
-    epsilon_end = 0.05
-    epsilon_decay_count = 2000000
+    sync_interval = 1000
     ckpt_every = 10000
     evaluate_greedy_times = 25
 
@@ -141,15 +137,6 @@ class TrainWorker:
 
         return self.__gamma_tensor
 
-    @property
-    def current_epsilon(self):
-        with self.count.get_lock():
-            if self.count.value < self.epsilon_burn:
-                return self.epsilon
-            t = min(self.count.value - self.epsilon_burn, self.epsilon_decay_count)
-            frac = 1.0 - (t / self.epsilon_decay_count)
-            return self.epsilon_end + (self.epsilon - self.epsilon_end) * max(frac, 0.0)
-
     __best_eval_return: float | None = None
 
     @property
@@ -223,22 +210,24 @@ class TrainWorker:
             for i in processes:
                 processes[i].start()
 
+            evaluate_greedy_count = 0
+
             self.setup_experience_workers(
                 connections_epsilon=connections_epsilon,
                 connections_state_dict=connections_state_dict,
+                evaluate_greedy_count=evaluate_greedy_count,
             )
 
             deque_buffer = deque(maxlen=self.deque_buffer_maxlen)
 
             count = 0
-            evaluate_greedy_count = 0
 
             while not self.event_stop.is_set():
                 if count % 100 == 0:
                     with self.count.get_lock():
                         self.count.value = count
                     self.queue_logs.put_nowait(
-                        f"Count: {count} | Epsilon: {self.current_epsilon:.2f} | Progress: {(count / self.epsilon_decay_count * 100):.2f}% | queue_data: {queue_data.qsize()}"
+                        f"Count: {count} | Epsilon: {abs(evaluate_greedy_count / self.ckpt_every - 1):.2f}"
                     )
 
                 try:
@@ -256,6 +245,7 @@ class TrainWorker:
                     self.setup_experience_workers(
                         connections_epsilon=connections_epsilon,
                         connections_state_dict=connections_state_dict,
+                        evaluate_greedy_count=evaluate_greedy_count,
                     )
 
                 if self.ckpt_every <= evaluate_greedy_count:
@@ -407,9 +397,12 @@ class TrainWorker:
         self,
         connections_epsilon: dict[int, Connection],
         connections_state_dict: dict[int, Connection],
+        evaluate_greedy_count: int = 0,
     ):
         for i in connections_epsilon:
-            connections_epsilon[i].send(self.current_epsilon)
+            connections_epsilon[i].send(
+                abs(evaluate_greedy_count / self.ckpt_every - 1)
+            )
 
         buffer = io.BytesIO()
         torch.save(self.model.state_dict(), buffer)
