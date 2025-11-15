@@ -14,15 +14,8 @@ def main():
     torch.backends.cudnn.benchmark = True
     torch.set_float32_matmul_precision("high")
 
-    if os.name == "nt":
-        set_start_method("spawn", force=True)
-    elif os.name == "posix":
-        set_start_method("fork", force=True)
-    else:
-        set_start_method("spawn", force=True)
+    set_start_method("spawn", force=True)
 
-    os.environ.setdefault("OMP_NUM_THREADS", str(os.cpu_count()))
-    os.environ.setdefault("MKL_NUM_THREADS", str(os.cpu_count()))
     os.environ.setdefault("CUDA_DEVICE_MAX_CONNECTIONS", "32")
 
     Router().mainloop()
