@@ -140,7 +140,7 @@ class Emulator:
 
         truncated = self.data.truncated()
 
-        self.data.count(memory)
+        self.data.count(memory, reward)
 
         return (
             bytes(self.pyboy.memory[0:0x10000]),
