@@ -18,6 +18,9 @@ class Data:
     __player_pokemon_size = 0x2C
     __pokemon_count = 6
 
+    __stored_pokemon_size = 0x21
+    __stored_pokemon_count = 20
+
     __visited_pokedex_own: list[int] | None = None
 
     @property
@@ -62,7 +65,7 @@ class Data:
         self.useless_count = 0
 
     def count(self, memory: bytes, reward: float):
-        if self.is_battle():
+        if self.is_battle(self.pyboy.memory):
             if self.number_of_turns_in_current_battle(
                 memory
             ) != self.number_of_turns_in_current_battle(self.pyboy.memory):
@@ -70,17 +73,17 @@ class Data:
             else:
                 self.battle_count += 1
 
-        if self.is_dialog():
+        if self.is_dialog(self.pyboy.memory):
             self.visited_dialogs_count.setdefault(self.dialog_id(self.pyboy.memory), 0)
 
             self.visited_dialogs_count[self.dialog_id(self.pyboy.memory)] += 1
 
-        if self.is_world():
+        if self.is_world(self.pyboy.memory):
             self.visited_positions_count.setdefault(self.get_position(), 0)
 
             self.visited_positions_count[self.get_position()] += 1
 
-        if self.is_menu():
+        if self.is_menu(self.pyboy.memory):
             self.menu_count.setdefault(self.map_id(self.pyboy.memory), 0)
 
             self.menu_count[self.map_id(self.pyboy.memory)] += 1
@@ -96,9 +99,152 @@ class Data:
     def inputs(self):
         return {
             "continuous": torch.tensor(self.data(), dtype=torch.float32),
+            "map_id": torch.tensor(self.map_id(self.pyboy.memory), dtype=torch.long),
+            "dialog_id": torch.tensor(
+                self.dialog_id(self.pyboy.memory), dtype=torch.long
+            ),
+            "index_of_current_pokemon_send_out": torch.tensor(
+                self.index_of_current_pokemon_send_out(self.pyboy.memory),
+                dtype=torch.long,
+            ),
+            "move_menu_type": torch.tensor(
+                self.move_menu_type(self.pyboy.memory),
+                dtype=torch.long,
+            ),
+            "your_move_type": torch.tensor(
+                self.your_move_type(self.pyboy.memory),
+                dtype=torch.long,
+            ),
+            "player_selected_move": torch.tensor(
+                self.player_selected_move(self.pyboy.memory),
+                dtype=torch.long,
+            ),
+            "enemy_selected_move": torch.tensor(
+                self.enemy_selected_move(self.pyboy.memory),
+                dtype=torch.long,
+            ),
+            "enemy_move_id": torch.tensor(
+                self.enemy_move_id(self.pyboy.memory),
+                dtype=torch.long,
+            ),
+            "enemy_move_type": torch.tensor(
+                self.enemy_move_type(self.pyboy.memory),
+                dtype=torch.long,
+            ),
+            "player_move_id": torch.tensor(
+                self.player_move_id(self.pyboy.memory),
+                dtype=torch.long,
+            ),
+            "enemy_type1": torch.tensor(
+                self.enemy_type1(self.pyboy.memory),
+                dtype=torch.long,
+            ),
+            "enemy_type2": torch.tensor(
+                self.enemy_type2(self.pyboy.memory),
+                dtype=torch.long,
+            ),
+            "enemy_move1": torch.tensor(
+                self.enemy_move1(self.pyboy.memory),
+                dtype=torch.long,
+            ),
+            "enemy_move2": torch.tensor(
+                self.enemy_move2(self.pyboy.memory),
+                dtype=torch.long,
+            ),
+            "enemy_move3": torch.tensor(
+                self.enemy_move3(self.pyboy.memory),
+                dtype=torch.long,
+            ),
+            "enemy_move4": torch.tensor(
+                self.enemy_move4(self.pyboy.memory),
+                dtype=torch.long,
+            ),
+            "pokemon_type1": torch.tensor(
+                self.pokemon_type1(self.pyboy.memory),
+                dtype=torch.long,
+            ),
+            "pokemon_type2": torch.tensor(
+                self.pokemon_type2(self.pyboy.memory),
+                dtype=torch.long,
+            ),
+            "pokemon_move_first_slot": torch.tensor(
+                self.pokemon_move_first_slot(self.pyboy.memory),
+                dtype=torch.long,
+            ),
+            "pokemon_move_second_slot": torch.tensor(
+                self.pokemon_move_second_slot(self.pyboy.memory),
+                dtype=torch.long,
+            ),
+            "pokemon_move_third_slot": torch.tensor(
+                self.pokemon_move_third_slot(self.pyboy.memory),
+                dtype=torch.long,
+            ),
+            "pokemon_move_fourth_slot": torch.tensor(
+                self.pokemon_move_fourth_slot(self.pyboy.memory),
+                dtype=torch.long,
+            ),
+            "type_of_battle": torch.tensor(
+                self.type_of_battle(self.pyboy.memory),
+                dtype=torch.long,
+            ),
+            "sprite_data_ids": torch.tensor(
+                self.sprite_data_ids(self.pyboy.memory),
+                dtype=torch.long,
+            ),
+            "poke_mart_items": torch.tensor(
+                self.poke_mart_items(self.pyboy.memory),
+                dtype=torch.long,
+            ),
+            "player_pokemons_ids": torch.tensor(
+                self.player_pokemons_ids(self.pyboy.memory),
+                dtype=torch.long,
+            ),
+            "player_pokemon_types": torch.tensor(
+                self.player_pokemon_types(self.pyboy.memory),
+                dtype=torch.long,
+            ),
+            "items_ids": torch.tensor(
+                self.items_ids(self.pyboy.memory),
+                dtype=torch.long,
+            ),
+            "stored_items_ids": torch.tensor(
+                self.stored_items_ids(self.pyboy.memory),
+                dtype=torch.long,
+            ),
+            "stored_pokemon_ids": torch.tensor(
+                self.stored_pokemon_ids(self.pyboy.memory),
+                dtype=torch.long,
+            ),
+            "stored_pokemon_types": torch.tensor(
+                self.stored_pokemon_types(self.pyboy.memory),
+                dtype=torch.long,
+            ),
+            "stored_pokemon_moves": torch.tensor(
+                self.stored_pokemon_moves(self.pyboy.memory),
+                dtype=torch.long,
+            ),
         }
 
     def reward(self, memory: bytes):
+        reward = 0.0
+
+        reward += self.reward_core(memory)
+
+        if self.is_battle(self.pyboy.memory):
+            reward += self.reward_battle(memory)
+
+        if self.is_dialog(self.pyboy.memory):
+            reward += self.reward_dialog()
+
+        if self.is_world(self.pyboy.memory):
+            reward += self.reward_position()
+
+        if self.is_menu(self.pyboy.memory):
+            reward += self.reward_menu()
+
+        return reward
+
+    def reward_core(self, memory: bytes):
         reward = 0.0
 
         reward += self.reward_milestones(memory)
@@ -106,27 +252,11 @@ class Data:
         reward += self.reward_player_pokemons_current_hps(memory)
         reward += self.reward_player_pokemons_statuses(memory)
         reward += self.reward_player_pokemons_experiences(memory)
-        reward += self.reward_player_pokemons_hp_evs(memory)
-        reward += self.reward_player_pokemons_attack_evs(memory)
-        reward += self.reward_player_pokemons_defense_evs(memory)
-        reward += self.reward_player_pokemons_speed_evs(memory)
         reward += self.reward_player_pokemons_max_hps(memory)
         reward += self.reward_player_pokemons_attacks(memory)
         reward += self.reward_player_pokemons_defenses(memory)
         reward += self.reward_player_pokemons_speeds(memory)
-        reward += self.reward_player_pokemons_specials(memory)
-
-        if self.is_battle():
-            reward += self.reward_battle(memory)
-
-        if self.is_dialog():
-            reward += self.reward_dialog()
-
-        if self.is_world():
-            reward += self.reward_position()
-
-        if self.is_menu():
-            reward += self.reward_menu()
+        reward += self.reward_player_pokemons_pps(memory)
 
         return reward
 
@@ -175,76 +305,6 @@ class Data:
         ):
             if id_x == id_y and id_x != 0:
                 reward += (experience_y - experience_x) / 0xFFFFFF
-
-        return reward
-
-    def reward_player_pokemons_hp_evs(self, memory: bytes):
-        reward = 0.0
-
-        for id_x, id_y, hp_ev_x, hp_ev_y in zip(
-            self.player_pokemons_ids(memory),
-            self.player_pokemons_ids(self.pyboy.memory),
-            self.player_pokemons_hp_evs(memory),
-            self.player_pokemons_hp_evs(self.pyboy.memory),
-        ):
-            if id_x == id_y and id_x != 0:
-                reward += (hp_ev_y - hp_ev_x) / 0xFFFF
-
-        return reward
-
-    def reward_player_pokemons_attack_evs(self, memory: bytes):
-        reward = 0.0
-
-        for id_x, id_y, attack_ev_x, attack_ev_y in zip(
-            self.player_pokemons_ids(memory),
-            self.player_pokemons_ids(self.pyboy.memory),
-            self.player_pokemons_attack_evs(memory),
-            self.player_pokemons_attack_evs(self.pyboy.memory),
-        ):
-            if id_x == id_y and id_x != 0:
-                reward += (attack_ev_y - attack_ev_x) / 0xFFFF
-
-        return reward
-
-    def reward_player_pokemons_defense_evs(self, memory: bytes):
-        reward = 0.0
-
-        for id_x, id_y, defense_ev_x, defense_ev_y in zip(
-            self.player_pokemons_ids(memory),
-            self.player_pokemons_ids(self.pyboy.memory),
-            self.player_pokemons_defense_evs(memory),
-            self.player_pokemons_defense_evs(self.pyboy.memory),
-        ):
-            if id_x == id_y and id_x != 0:
-                reward += (defense_ev_y - defense_ev_x) / 0xFFFF
-
-        return reward
-
-    def reward_player_pokemons_speed_evs(self, memory: bytes):
-        reward = 0.0
-
-        for id_x, id_y, speed_ev_x, speed_ev_y in zip(
-            self.player_pokemons_ids(memory),
-            self.player_pokemons_ids(self.pyboy.memory),
-            self.player_pokemons_speed_evs(memory),
-            self.player_pokemons_speed_evs(self.pyboy.memory),
-        ):
-            if id_x == id_y and id_x != 0:
-                reward += (speed_ev_y - speed_ev_x) / 0xFFFF
-
-        return reward
-
-    def reward_player_pokemons_speed_evs(self, memory: bytes):
-        reward = 0.0
-
-        for id_x, id_y, special_ev_x, special_ev_y in zip(
-            self.player_pokemons_ids(memory),
-            self.player_pokemons_ids(self.pyboy.memory),
-            self.player_pokemons_special_evs(memory),
-            self.player_pokemons_special_evs(self.pyboy.memory),
-        ):
-            if id_x == id_y and id_x != 0:
-                reward += (special_ev_y - special_ev_x) / 0xFFFF
 
         return reward
 
@@ -318,6 +378,20 @@ class Data:
 
         return reward
 
+    def reward_player_pokemons_pps(self, memory: bytes):
+        reward = 0.0
+
+        for id_x, id_y, pp_x, pp_y in zip(
+            self.player_pokemons_ids(memory),
+            self.player_pokemons_ids(self.pyboy.memory),
+            self.player_pokemons_pps(memory),
+            self.player_pokemons_pps(self.pyboy.memory),
+        ):
+            if id_x == id_y and id_x != 0:
+                reward += (pp_y - pp_x) / 0xFF
+
+        return reward
+
     def terminated(self, memory: bytes):
         return True if 0 < self.reward_milestones(memory) else False
 
@@ -339,63 +413,61 @@ class Data:
     def data(self):
         data = []
 
-        data += self.game_mode_flags_data()
-
-        data += self.position_data()
-
+        data += self.core_data()
         data += self.dialog_data()
-
-        data += self.map_data()
-
-        data += self.sprite_data()
-
         data += self.menu_data()
-
         data += self.battle_data()
-
-        data += self.poke_mart_data()
-
-        data += self.player_data()
-
-        data += self.pokedex_data()
-
-        data += self.items_data()
-
-        data += self.money_data()
-
-        data += self.badges(self.pyboy.memory)
-
-        data += self.stored_items_data()
-
-        data += self.game_coins_data()
-
-        data += self.event_flags_data(self.pyboy.memory)
-
-        data += self.opponent_trainers_pokemon_data()
-
-        data += self.stored_pokemon_data()
+        data += self.menu_battle_dialog_data()
 
         return data
 
     def game_mode_flags_data(self):
         return [
-            int(self.is_battle()),
-            int(self.is_dialog()),
-            int(self.is_menu()),
-            int(self.is_world()),
+            int(self.is_battle(self.pyboy.memory)),
+            int(self.is_dialog(self.pyboy.memory)),
+            int(self.is_menu(self.pyboy.memory)),
+            int(self.is_world(self.pyboy.memory)),
         ]
 
     def data_normalizer(self, values: list[int], max=0xFF):
         return [x / max for x in values]
 
-    def position_data(self):
-        return self.data_normalizer(
+    def core_data(self):
+        data = []
+        data += self.data_normalizer(
             [
-                self.map_id(self.pyboy.memory),
                 self.position_x(self.pyboy.memory),
                 self.position_y(self.pyboy.memory),
+                self.bike_speed(self.pyboy.memory),
             ]
         )
+        data += self.data_normalizer(
+            self.sprite_data_movement_statuses(self.pyboy.memory),
+            max=3,
+        )
+        data += self.data_normalizer(
+            self.sprite_data_facing_directions(self.pyboy.memory),
+            max=0xC,
+        )
+        data += self.data_normalizer(self.sprite_data_y_positions(self.pyboy.memory))
+        data += self.data_normalizer(self.sprite_data_x_positions(self.pyboy.memory))
+        data += [
+            0 if self.visited_positions_count.get(self.get_position(), 0) == 0 else 1
+        ]
+        data += self.game_mode_flags_data()
+        data += self.player_data()
+        data += self.pokedex_data()
+        data += self.data_normalizer(self.items_quantities(self.pyboy.memory))
+        data += self.data_normalizer(
+            [self.player_money(self.pyboy.memory)], max=0xFFFFFF
+        )
+        data += self.badges(self.pyboy.memory)
+        data += self.data_normalizer(self.stored_items_quantities(self.pyboy.memory))
+        data += self.data_normalizer([self.game_coins(self.pyboy.memory)], max=0xFFFF)
+        data += self.event_flags_data(self.pyboy.memory)
+        data += self.stored_pokemon_data(self.pyboy.memory)
+
+        return data
 
     def dialog_data(self):
         data = [
@@ -405,52 +477,43 @@ class Data:
                 == 0
                 else 1
             )
-        ] + self.data_normalizer(
-            [
-                self.dialog_id(self.pyboy.memory),
-            ]
-        )
+        ]
 
-        return data if self.is_dialog() else [0] * len(data)
+        return data if self.is_dialog(self.pyboy.memory) else [0] * len(data)
 
     def map_id(self, memory: PyBoyMemoryView | bytes):
         return memory[0xD35E]
 
-    def is_dialog(self):
+    def is_dialog(self, memory: PyBoyMemoryView | bytes):
         return (
             True
-            if self.is_blocked()
-            and self.dialog_id(self.pyboy.memory) != 0
-            and not self.is_battle()
+            if self.is_blocked(memory)
+            and self.dialog_id(memory) != 0
+            and not self.is_battle(memory)
             else False
         )
 
-    def is_blocked(self):
-        return True if self.pyboy.memory[0xCFC4] else False
+    def is_blocked(self, memory: PyBoyMemoryView | bytes):
+        return True if memory[0xCFC4] else False
 
     def dialog_id(self, memory: PyBoyMemoryView | bytes):
         return memory[0xCF13]
 
-    def is_battle(self):
-        return True if self.type_of_battle(self.pyboy.memory) else False
+    def is_battle(self, memory: PyBoyMemoryView | bytes):
+        return True if self.type_of_battle(memory) else False
 
     def type_of_battle(self, memory: PyBoyMemoryView | bytes):
         return memory[0xD057]
 
-    def map_data(self):
-        data = [
-            0 if self.visited_positions_count.get(self.get_position(), 0) == 0 else 1,
-        ] + self.data_normalizer([self.bike_speed(self.pyboy.memory)])
-
-        return data if self.is_world() else [0] * len(data)
-
     def get_position(self):
         return f"{self.position_x(self.pyboy.memory)}x{self.position_y(self.pyboy.memory)}x{self.map_id(self.pyboy.memory)}"
 
-    def is_world(self):
+    def is_world(self, memory: PyBoyMemoryView | bytes):
         return (
             True
-            if not self.is_blocked() and not self.is_battle() and not self.is_menu()
+            if not self.is_blocked(memory)
+            and not self.is_battle(memory)
+            and not self.is_menu(memory)
             else False
         )
 
@@ -460,46 +523,71 @@ class Data:
     def position_y(self, memory: PyBoyMemoryView | bytes):
         return memory[0xD362]
 
-    def is_menu(self):
+    def is_menu(self, memory: PyBoyMemoryView | bytes):
         return (
             True
-            if self.is_blocked()
-            and self.dialog_id(self.pyboy.memory) == 0
-            and not self.is_battle()
+            if self.is_blocked(memory)
+            and self.dialog_id(memory) == 0
+            and not self.is_battle(memory)
             else False
         )
 
-    def sprite_data(self):
-        data = [
-            self.pyboy.memory[i]
-            for x in range(16)
-            for i in range(0xC100 + 0x10 * x, 0xC10A + 0x10 * x)
-        ] + [
-            self.pyboy.memory[i]
-            for x in range(16)
-            for i in range(0xC200 + 0x10 * x, 0xC209 + 0x10 * x)
-        ]
+    def sprite_data_ids(self, memory: PyBoyMemoryView | bytes):
+        return [memory[0xC100 + 0x10 * x] for x in range(16)]
 
-        return self.data_normalizer(data) if self.is_world() else [0] * len(data)
+    def sprite_data_movement_statuses(self, memory: PyBoyMemoryView | bytes):
+        return [memory[0xC101 + 0x10 * x] for x in range(16)]
 
-    def menu_data(self):
+    def sprite_data_facing_directions(self, memory: PyBoyMemoryView | bytes):
+        return [memory[0xC109 + 0x10 * x] for x in range(16)]
+
+    def sprite_data_y_positions(self, memory: PyBoyMemoryView | bytes):
+        return [memory[0xC204 + 0x10 * x] for x in range(16)]
+
+    def sprite_data_x_positions(self, memory: PyBoyMemoryView | bytes):
+        return [memory[0xC205 + 0x10 * x] for x in range(16)]
+
+    def menu_battle_dialog_data(self):
         data = self.data_normalizer(
-            [self.pyboy.memory[i] for i in range(0xCC24, 0xCC36)]
-        ) + [
-            0 if self.menu_count.get(self.map_id(self.pyboy.memory), 0) == 0 else 1,
-        ]
+            [
+                self.menu_position_x(self.pyboy.memory),
+                self.menu_position_y(self.pyboy.memory),
+                self.current_menu_selected_item(self.pyboy.memory),
+            ]
+        )
 
         return (
             data
-            if self.is_menu() or self.is_battle() or self.is_dialog()
+            if self.is_menu(self.pyboy.memory)
+            or self.is_battle(self.pyboy.memory)
+            or self.is_dialog(self.pyboy.memory)
             else [0] * len(data)
         )
+
+    def menu_position_x(self, memory: PyBoyMemoryView | bytes):
+        return memory[0xCC24]
+
+    def menu_position_y(self, memory: PyBoyMemoryView | bytes):
+        return memory[0xCC25]
+
+    def current_menu_selected_item(self, memory: PyBoyMemoryView | bytes):
+        return memory[0xCC26]
+
+    def index_of_current_pokemon_send_out(self, memory: PyBoyMemoryView | bytes):
+        return memory[0xCC2F] + 1 if self.is_battle(memory) else 0
+
+    def menu_data(self):
+        data = [
+            0 if self.menu_count.get(self.map_id(self.pyboy.memory), 0) == 0 else 1,
+        ]
+
+        return data if self.is_menu(self.pyboy.memory) else [0] * len(data)
 
     def battle_data(self):
         data_bit = (
             self.enemy_status(self.pyboy.memory)
             + self.enemy_base_stats(self.pyboy.memory)
-            + self.pokemon_status1(self.pyboy.memory)
+            + self.pokemon_status(self.pyboy.memory)
             + self.battle_status_player(self.pyboy.memory)
             + [
                 self.is_gym_leader_battle_music_playing(self.pyboy.memory),
@@ -514,80 +602,41 @@ class Data:
                 self.number_of_turns_in_current_battle(self.pyboy.memory),
                 self.players_substitute_hp(self.pyboy.memory),
                 self.enemy_substitute_hp(self.pyboy.memory),
-                self.move_menu_type(self.pyboy.memory),
-                self.player_selected_move(self.pyboy.memory),
-                self.enemy_selected_move(self.pyboy.memory),
-                self.your_move_used(self.pyboy.memory),
-                self.your_move_type(self.pyboy.memory),
-                self.your_move_effect(self.pyboy.memory),
-                self.enemy_move_id(self.pyboy.memory),
-                self.enemy_move_effect(self.pyboy.memory),
                 self.enemy_move_power(self.pyboy.memory),
-                self.enemy_move_type(self.pyboy.memory),
                 self.enemy_move_accuracy(self.pyboy.memory),
-                self.enemy_move_max_pp(self.pyboy.memory),
-                self.player_move_id(self.pyboy.memory),
                 self.player_move_power(self.pyboy.memory),
                 self.player_move_accuracy(self.pyboy.memory),
-                self.player_move_max_pp(self.pyboy.memory),
-                self.enemy_pokemon_internal_id1(self.pyboy.memory),
-                self.player_pokemon_interna2_id(self.pyboy.memory),
-                self.enemy_pokemon_internal_id2(self.pyboy.memory),
-                self.enemy_level1(self.pyboy.memory),
-                self.enemy_type1(self.pyboy.memory),
-                self.enemy_type2(self.pyboy.memory),
-                self.enemy_move1(self.pyboy.memory),
-                self.enemy_move2(self.pyboy.memory),
-                self.enemy_move3(self.pyboy.memory),
-                self.enemy_move4(self.pyboy.memory),
-                self.enemy_attack_and_defense_ivs(self.pyboy.memory),
-                self.enemy_attack_and_special_ivs(self.pyboy.memory),
-                self.enemy_level2(self.pyboy.memory),
+                self.enemy_level(self.pyboy.memory),
+                self.pokemon_level(self.pyboy.memory),
                 self.enemy_pp_first_slot(self.pyboy.memory),
                 self.enemy_pp_second_slot(self.pyboy.memory),
                 self.enemy_pp_third_slot(self.pyboy.memory),
                 self.enemy_pp_fourth_slot(self.pyboy.memory),
-                self.enemy_catch_rate(self.pyboy.memory),
-                self.enemy_base_experience(self.pyboy.memory),
-                self.pokemon_number1(self.pyboy.memory),
-                self.pokemon_type11(self.pyboy.memory),
-                self.pokemon_type21(self.pyboy.memory),
-                self.pokemon_move_first_slot1(self.pyboy.memory),
-                self.pokemon_move_second_slot1(self.pyboy.memory),
-                self.pokemon_move_third_slot1(self.pyboy.memory),
-                self.pokemon_move_fourth_slot1(self.pyboy.memory),
-                self.pokemon_attack_and_defense_ivs1(self.pyboy.memory),
-                self.pokemon_speed_and_special_ivs1(self.pyboy.memory),
-                self.pokemon_level1(self.pyboy.memory),
-                self.pokemon_pp_first_slot1(self.pyboy.memory),
-                self.pokemon_pp_second_slot1(self.pyboy.memory),
-                self.pokemon_pp_third_slot1(self.pyboy.memory),
-                self.pokemon_pp_fourth_slot1(self.pyboy.memory),
-                self.type_of_battle(self.pyboy.memory),
-                self.battle_type(self.pyboy.memory),
+                self.pokemon_pp_first_slot(self.pyboy.memory),
+                self.pokemon_pp_second_slot(self.pyboy.memory),
+                self.pokemon_pp_third_slot(self.pyboy.memory),
+                self.pokemon_pp_fourth_slot(self.pyboy.memory),
             ]
         )
         data_2bytes = self.data_normalizer(
             [
                 self.enemy_hp(self.pyboy.memory),
-                self.enemy_max_hp(self.pyboy.memory),
                 self.enemy_attack(self.pyboy.memory),
                 self.enemy_defense(self.pyboy.memory),
                 self.enemy_speed(self.pyboy.memory),
                 self.enemy_special(self.pyboy.memory),
-                self.pokemon_current_hp1(self.pyboy.memory),
-                self.pokemon_max_hp1(self.pyboy.memory),
-                self.pokemon_attack1(self.pyboy.memory),
-                self.pokemon_defense1(self.pyboy.memory),
-                self.pokemon_speed1(self.pyboy.memory),
-                self.pokemon_special1(self.pyboy.memory),
+                self.pokemon_current_hp(self.pyboy.memory),
+                self.pokemon_attack(self.pyboy.memory),
+                self.pokemon_defense(self.pyboy.memory),
+                self.pokemon_speed(self.pyboy.memory),
+                self.pokemon_special(self.pyboy.memory),
             ],
             max=65535,
         )
 
         data = data_bit + data_byte + data_2bytes
 
-        return data if self.is_battle() else [0] * len(data)
+        return data if self.is_battle(self.pyboy.memory) else [0] * len(data)
 
     def enemy_status(self, memory: PyBoyMemoryView | bytes):
         return self.bits_extractor(memory[0xCFE9], end_bit=6)
@@ -600,9 +649,6 @@ class Data:
 
     def enemy_base_stats(self, memory: PyBoyMemoryView | bytes):
         return [memory[0xD002 + i] for i in range(5)]
-
-    def pokemon_status1(self, memory: PyBoyMemoryView | bytes):
-        return self.bits_extractor(memory[0xD018], end_bit=6)
 
     def battle_status_player(self, memory: PyBoyMemoryView | bytes):
         return (
@@ -633,43 +679,35 @@ class Data:
         return memory[0xCCD8]
 
     def move_menu_type(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xCCDB]
+        return (
+            memory[0xCCDB]
+            if self.is_battle(memory) or self.is_dialog(memory) or self.is_menu(memory)
+            else 0
+        )
 
     def player_selected_move(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xCCDC]
+        return memory[0xCCDC] if self.is_battle(memory) else 0
 
     def enemy_selected_move(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xCCDD]
-
-    def your_move_used(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xCCDC]
+        return memory[0xCCDD] if self.is_battle(memory) else 0
 
     def your_move_type(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xCFD5]
-
-    def your_move_effect(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xCFD3]
+        return memory[0xCFD5] if self.is_battle(memory) else 0
 
     def enemy_move_id(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xCFCC]
-
-    def enemy_move_effect(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xCFCD]
+        return memory[0xCFCC] if self.is_battle(memory) else 0
 
     def enemy_move_power(self, memory: PyBoyMemoryView | bytes):
         return memory[0xCFCE]
 
     def enemy_move_type(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xCFCF]
+        return memory[0xCFCF] if self.is_battle(memory) else 0
 
     def enemy_move_accuracy(self, memory: PyBoyMemoryView | bytes):
         return memory[0xCFD0]
 
-    def enemy_move_max_pp(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xCFD1]
-
     def player_move_id(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xCFD2]
+        return memory[0xCFD2] if self.is_battle(memory) else 0
 
     def player_move_power(self, memory: PyBoyMemoryView | bytes):
         return memory[0xCFD4]
@@ -677,53 +715,32 @@ class Data:
     def player_move_accuracy(self, memory: PyBoyMemoryView | bytes):
         return memory[0xCFD6]
 
-    def player_move_max_pp(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xCFD7]
-
-    def enemy_pokemon_internal_id1(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xCFD8]
-
-    def player_pokemon_interna2_id(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xCFD9]
-
-    def enemy_pokemon_internal_id2(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xCFE5]
-
     def enemy_hp(self, memory: PyBoyMemoryView | bytes):
         return memory[0xCFE6] | memory[0xCFE7] << 8
 
-    def enemy_level1(self, memory: PyBoyMemoryView | bytes):
+    def enemy_level(self, memory: PyBoyMemoryView | bytes):
         return memory[0xCFE8]
 
     def enemy_status(self, memory: PyBoyMemoryView | bytes):
         return self.bits_extractor(memory[0xCFE9], end_bit=6)
 
     def enemy_type1(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xCFEA]
+        return memory[0xCFEA] if self.is_battle(memory) else 0
 
     def enemy_type2(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xCFEB]
+        return memory[0xCFEB] if self.is_battle(memory) else 0
 
     def enemy_move1(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xCFED]
+        return memory[0xCFED] if self.is_battle(memory) else 0
 
     def enemy_move2(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xCFEE]
+        return memory[0xCFEE] if self.is_battle(memory) else 0
 
     def enemy_move3(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xCFEF]
+        return memory[0xCFEF] if self.is_battle(memory) else 0
 
     def enemy_move4(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xCFF0]
-
-    def enemy_attack_and_defense_ivs(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xCFF1]
-
-    def enemy_attack_and_special_ivs(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xCFF2]
-
-    def enemy_level2(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xCFF3]
+        return memory[0xCFF0] if self.is_battle(memory) else 0
 
     def enemy_max_hp(self, memory: PyBoyMemoryView | bytes):
         return memory[0xCFF4] | (memory[0xCFF5] << 8)
@@ -755,90 +772,66 @@ class Data:
     def enemy_base_stats(self, memory: PyBoyMemoryView | bytes):
         return [memory[0xD002 + i] for i in range(5)]
 
-    def enemy_catch_rate(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xD007]
-
-    def enemy_base_experience(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xD008]
-
-    def pokemon_number1(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xD014]
-
-    def pokemon_current_hp1(self, memory: PyBoyMemoryView | bytes):
+    def pokemon_current_hp(self, memory: PyBoyMemoryView | bytes):
         return memory[0xD015] | (memory[0xD016] << 8)
 
-    def pokemon_status1(self, memory: PyBoyMemoryView | bytes):
+    def pokemon_status(self, memory: PyBoyMemoryView | bytes):
         return self.bits_extractor(memory[0xD018], end_bit=6)
 
-    def pokemon_type11(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xD019]
+    def pokemon_type1(self, memory: PyBoyMemoryView | bytes):
+        return memory[0xD019] if self.is_battle(memory) else 0
 
-    def pokemon_type21(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xD01A]
+    def pokemon_type2(self, memory: PyBoyMemoryView | bytes):
+        return memory[0xD01A] if self.is_battle(memory) else 0
 
-    def pokemon_move_first_slot1(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xD01C]
+    def pokemon_move_first_slot(self, memory: PyBoyMemoryView | bytes):
+        return memory[0xD01C] if self.is_battle(memory) else 0
 
-    def pokemon_move_second_slot1(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xD01D]
+    def pokemon_move_second_slot(self, memory: PyBoyMemoryView | bytes):
+        return memory[0xD01D] if self.is_battle(memory) else 0
 
-    def pokemon_move_third_slot1(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xD01E]
+    def pokemon_move_third_slot(self, memory: PyBoyMemoryView | bytes):
+        return memory[0xD01E] if self.is_battle(memory) else 0
 
-    def pokemon_move_fourth_slot1(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xD01F]
+    def pokemon_move_fourth_slot(self, memory: PyBoyMemoryView | bytes):
+        return memory[0xD01F] if self.is_battle(memory) else 0
 
-    def pokemon_attack_and_defense_ivs1(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xD020]
-
-    def pokemon_speed_and_special_ivs1(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xD021]
-
-    def pokemon_level1(self, memory: PyBoyMemoryView | bytes):
+    def pokemon_level(self, memory: PyBoyMemoryView | bytes):
         return memory[0xD022]
 
-    def pokemon_max_hp1(self, memory: PyBoyMemoryView | bytes):
+    def pokemon_max_hp(self, memory: PyBoyMemoryView | bytes):
         return memory[0xD023] | (memory[0xD024] << 8)
 
-    def pokemon_attack1(self, memory: PyBoyMemoryView | bytes):
+    def pokemon_attack(self, memory: PyBoyMemoryView | bytes):
         return memory[0xD025] | (memory[0xD026] << 8)
 
-    def pokemon_defense1(self, memory: PyBoyMemoryView | bytes):
+    def pokemon_defense(self, memory: PyBoyMemoryView | bytes):
         return memory[0xD027] | (memory[0xD028] << 8)
 
-    def pokemon_speed1(self, memory: PyBoyMemoryView | bytes):
+    def pokemon_speed(self, memory: PyBoyMemoryView | bytes):
         return memory[0xD029] | (memory[0xD02A] << 8)
 
-    def pokemon_special1(self, memory: PyBoyMemoryView | bytes):
+    def pokemon_special(self, memory: PyBoyMemoryView | bytes):
         return memory[0xD02B] | (memory[0xD02C] << 8)
 
-    def pokemon_pp_first_slot1(self, memory: PyBoyMemoryView | bytes):
+    def pokemon_pp_first_slot(self, memory: PyBoyMemoryView | bytes):
         return memory[0xD02D]
 
-    def pokemon_pp_second_slot1(self, memory: PyBoyMemoryView | bytes):
+    def pokemon_pp_second_slot(self, memory: PyBoyMemoryView | bytes):
         return memory[0xD02E]
 
-    def pokemon_pp_third_slot1(self, memory: PyBoyMemoryView | bytes):
+    def pokemon_pp_third_slot(self, memory: PyBoyMemoryView | bytes):
         return memory[0xD02F]
 
-    def pokemon_pp_fourth_slot1(self, memory: PyBoyMemoryView | bytes):
+    def pokemon_pp_fourth_slot(self, memory: PyBoyMemoryView | bytes):
         return memory[0xD030]
 
-    def battle_type(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xD05A]
-
-    def poke_mart_data(self):
-        data = [self.pyboy.memory[i] for i in range(0xCF7B, 0xCF86)]
-
-        return self.data_normalizer(data) if self.is_menu() else [0] * len(data)
+    def poke_mart_items(self, memory: PyBoyMemoryView | bytes):
+        data = [memory[i] for i in range(0xCF7C, 0xCF86)]
+        return data if self.is_menu(memory) else [0] * len(data)
 
     def player_data(self):
-
-        data = []
-
-        data += self.data_normalizer(self.player_pokemons_ids(self.pyboy.memory))
-
-        data += self.data_normalizer(
+        data = self.data_normalizer(
             self.player_pokemons_current_hps(self.pyboy.memory),
             max=0xFFFF,
         )
@@ -846,65 +839,13 @@ class Data:
         data += self.player_pokemons_statuses(self.pyboy.memory)
 
         data += self.data_normalizer(
-            [
-                self.pyboy.memory[i]
-                for x in range(self.__pokemon_count)
-                for i in range(
-                    0xD170 + self.__player_pokemon_size * x,
-                    0xD177 + self.__player_pokemon_size * x,
-                )
-            ],
-        )
-
-        data += self.data_normalizer(
-            [
-                self.pyboy.memory[0xD177 + self.__player_pokemon_size * i]
-                | self.pyboy.memory[0xD178 + self.__player_pokemon_size * i] << 8
-                for i in range(self.__pokemon_count)
-            ],
-            max=0xFFFF,
-        )
-
-        data += self.data_normalizer(
             self.player_pokemons_experiences(self.pyboy.memory),
             max=0xFFFFFF,
         )
 
-        data += self.data_normalizer(
-            self.player_pokemons_hp_evs(self.pyboy.memory),
-            max=0xFFFF,
-        )
+        data += self.data_normalizer(self.player_pokemons_ivs(self.pyboy.memory))
 
-        data += self.data_normalizer(
-            self.player_pokemons_attack_evs(self.pyboy.memory),
-            max=0xFFFF,
-        )
-
-        data += self.data_normalizer(
-            self.player_pokemons_defense_evs(self.pyboy.memory),
-            max=0xFFFF,
-        )
-
-        data += self.data_normalizer(
-            self.player_pokemons_special_evs(self.pyboy.memory),
-            max=0xFFFF,
-        )
-
-        data += self.data_normalizer(
-            self.player_pokemons_special_evs(self.pyboy.memory),
-            max=0xFFFF,
-        )
-
-        data += self.data_normalizer(
-            [
-                self.pyboy.memory[i]
-                for x in range(self.__pokemon_count)
-                for i in range(
-                    0xD186 + self.__player_pokemon_size * x,
-                    0xD18C + self.__player_pokemon_size * x,
-                )
-            ],
-        )
+        data += self.data_normalizer(self.player_pokemons_pps(self.pyboy.memory))
 
         data += self.data_normalizer(
             self.player_pokemons_levels(self.pyboy.memory),
@@ -937,6 +878,36 @@ class Data:
 
         return data
 
+    def player_pokemons_pps(self, memory: PyBoyMemoryView | bytes = None):
+        return [
+            memory[i]
+            for x in range(self.__pokemon_count)
+            for i in range(
+                0xD188 + self.__player_pokemon_size * x,
+                0xD18C + self.__player_pokemon_size * x,
+            )
+        ]
+
+    def player_pokemons_ivs(self, memory: PyBoyMemoryView | bytes = None):
+        return [
+            memory[i]
+            for x in range(self.__pokemon_count)
+            for i in range(
+                0xD186 + self.__player_pokemon_size * x,
+                0xD188 + self.__player_pokemon_size * x,
+            )
+        ]
+
+    def player_pokemon_types(self, memory: PyBoyMemoryView | bytes = None):
+        return [
+            memory[i]
+            for x in range(self.__pokemon_count)
+            for i in range(
+                0xD170 + self.__player_pokemon_size * x,
+                0xD172 + self.__player_pokemon_size * x,
+            )
+        ]
+
     def player_pokemons_ids(self, memory: PyBoyMemoryView | bytes = None):
         return [
             memory[0xD16B + self.__player_pokemon_size * x]
@@ -964,41 +935,6 @@ class Data:
             memory[0xD179 + self.__player_pokemon_size * i]
             | memory[0xD17A + self.__player_pokemon_size * i] << 8
             | memory[0xD17B + self.__player_pokemon_size * i] << 16
-            for i in range(self.__pokemon_count)
-        ]
-
-    def player_pokemons_hp_evs(self, memory: PyBoyMemoryView | bytes = None):
-        return [
-            memory[0xD17C + self.__player_pokemon_size * i]
-            | memory[0xD17D + self.__player_pokemon_size * i] << 8
-            for i in range(self.__pokemon_count)
-        ]
-
-    def player_pokemons_attack_evs(self, memory: PyBoyMemoryView | bytes = None):
-        return [
-            memory[0xD17E + self.__player_pokemon_size * i]
-            | memory[0xD17F + self.__player_pokemon_size * i] << 8
-            for i in range(self.__pokemon_count)
-        ]
-
-    def player_pokemons_defense_evs(self, memory: PyBoyMemoryView | bytes = None):
-        return [
-            memory[0xD180 + self.__player_pokemon_size * i]
-            | memory[0xD181 + self.__player_pokemon_size * i] << 8
-            for i in range(self.__pokemon_count)
-        ]
-
-    def player_pokemons_speed_evs(self, memory: PyBoyMemoryView | bytes = None):
-        return [
-            memory[0xD182 + self.__player_pokemon_size * i]
-            | memory[0xD183 + self.__player_pokemon_size * i] << 8
-            for i in range(self.__pokemon_count)
-        ]
-
-    def player_pokemons_special_evs(self, memory: PyBoyMemoryView | bytes = None):
-        return [
-            memory[0xD184 + self.__player_pokemon_size * i]
-            | memory[0xD185 + self.__player_pokemon_size * i] << 8
             for i in range(self.__pokemon_count)
         ]
 
@@ -1063,21 +999,11 @@ class Data:
 
         return bits
 
-    def items_data(self):
-        data = [self.pyboy.memory[i] for i in range(0xD31D, 0xD347)]
+    def items_quantities(self, memory: PyBoyMemoryView | bytes):
+        return [memory[0xD31F + i * 2] for i in range(20)]
 
-        return (
-            self.data_normalizer(data)
-            if self.is_menu() or self.is_battle()
-            else [0] * len(data)
-        )
-
-    def money_data(self):
-        return (
-            self.data_normalizer([self.player_money(self.pyboy.memory)], max=0xFFFFFF)
-            if self.is_menu() or self.is_dialog()
-            else [0]
-        )
+    def items_ids(self, memory: PyBoyMemoryView | bytes):
+        return [memory[0xD31E + i * 2] for i in range(20)]
 
     def player_money(self, memory: PyBoyMemoryView | bytes):
         return memory[0xD347] | (memory[0xD348] << 8) | (memory[0xD349] << 16)
@@ -1085,24 +1011,11 @@ class Data:
     def badges(self, memory: PyBoyMemoryView | bytes):
         return self.bits_extractor(memory[0xD356])
 
-    def stored_items_data(self):
-        data = self.stored_items(self.pyboy.memory)
+    def stored_items_ids(self, memory: PyBoyMemoryView | bytes):
+        return [memory[0xD53B + 2 * i] for i in range(50)]
 
-        return (
-            self.data_normalizer(data)
-            if self.is_menu() or self.is_dialog()
-            else [0] * len(data)
-        )
-
-    def stored_items(self, memory: PyBoyMemoryView | bytes):
-        return [memory[i] for i in range(0xD53A, 0xD5A0)]
-
-    def game_coins_data(self):
-        return (
-            self.data_normalizer([self.game_coins(self.pyboy.memory)], max=0xFFFF)
-            if self.is_menu() or self.is_dialog()
-            else [0]
-        )
+    def stored_items_quantities(self, memory: PyBoyMemoryView | bytes):
+        return [memory[0xD53C + 2 * i] for i in range(50)]
 
     def game_coins(self, memory: PyBoyMemoryView | bytes):
         return memory[0xD5A4] | (memory[0xD5A5] << 8)
@@ -1218,19 +1131,82 @@ class Data:
     def mewtwo_can_be_caught(self, memory: PyBoyMemoryView | bytes):
         return 1 if memory[0xD85F] & 2 else 0
 
-    def opponent_trainers_pokemon_data(self):
-        data = [self.pyboy.memory[i] for i in range(0xD89C, 0xD9AC)]
-
-        return self.data_normalizer(data) if self.is_battle() else [0] * len(data)
-
-    def stored_pokemon_data(self):
-        data = [self.pyboy.memory[i] for i in range(0xDA80, 0xDD2A)]
-
-        return (
-            self.data_normalizer(data)
-            if self.is_menu() or self.is_dialog()
-            else [0] * len(data)
+    def stored_pokemon_data(self, memory: PyBoyMemoryView | bytes):
+        data = []
+        data = self.data_normalizer(self.stored_pokemon_hps(memory), max=0xFFFF)
+        data += self.data_normalizer(self.stored_pokemon_levels(memory))
+        data += self.data_normalizer(self.stored_pokemon_statuses(memory))
+        data += self.data_normalizer(
+            self.stored_pokemon_experiences(memory), max=0xFFFFFF
         )
+        data += self.data_normalizer(self.stored_pokemon_pps(memory))
+
+        return data
+
+    def stored_pokemon_pps(self, memory: PyBoyMemoryView | bytes):
+        return [
+            memory[x + i * self.__stored_pokemon_size]
+            for i in range(self.__stored_pokemon_count)
+            for x in range(0xDAB3, 0xDAB7)
+        ]
+
+    def stored_pokemon_experiences(self, memory: PyBoyMemoryView | bytes):
+        return [
+            memory[0xDAA4 + i * self.__stored_pokemon_size]
+            | (memory[0xDAA5 + i * self.__stored_pokemon_size] << 8)
+            | (memory[0xDAA6 + i * self.__stored_pokemon_size] << 16)
+            for i in range(self.__stored_pokemon_count)
+        ]
+
+    def stored_pokemon_moves(self, memory: PyBoyMemoryView | bytes):
+        return [
+            memory[x + i * self.__stored_pokemon_size]
+            for i in range(self.__stored_pokemon_count)
+            for x in range(0xDA9E, 0xDAA2)
+        ]
+
+    def stored_pokemon_types(self, memory: PyBoyMemoryView | bytes):
+        return [
+            memory[x + i * self.__stored_pokemon_size]
+            for i in range(self.__stored_pokemon_count)
+            for x in range(0xDA9B, 0xDA9D)
+        ]
+
+    def stored_pokemon_statuses(self, memory: PyBoyMemoryView | bytes):
+        return [
+            bit
+            for i in range(self.__stored_pokemon_count)
+            for bit in self.bits_extractor(
+                memory[0xDA9A + i * self.__stored_pokemon_size]
+            )
+        ]
+
+    def stored_pokemon_levels(self, memory: PyBoyMemoryView | bytes):
+        return [
+            memory[0xDA99 + i * self.__stored_pokemon_size]
+            for i in range(self.__stored_pokemon_count)
+        ]
+
+    def stored_pokemon_hps(self, memory: PyBoyMemoryView | bytes):
+        return [
+            x | (y << 8)
+            for x, y in zip(
+                [
+                    memory[0xDA97 + i * self.__stored_pokemon_size]
+                    for i in range(self.__stored_pokemon_count)
+                ],
+                [
+                    memory[0xDA98 + i * self.__stored_pokemon_size]
+                    for i in range(self.__stored_pokemon_count)
+                ],
+            )
+        ]
+
+    def stored_pokemon_ids(self, memory: PyBoyMemoryView | bytes):
+        return [
+            memory[0xDA96 + i * self.__stored_pokemon_size]
+            for i in range(self.__stored_pokemon_count)
+        ]
 
     def reward_dialog(self):
         return (
@@ -1246,8 +1222,8 @@ class Data:
         reward += self.reward_enemy_substitute_hp(memory)
         reward += self.reward_enemy_hp(memory)
         reward += self.reward_enemy_status(memory)
-        reward += self.reward_pokemon_current_hp1(memory)
-        reward += self.reward_pokemon_status1(memory)
+        reward += self.reward_pokemon_current_hp(memory)
+        reward += self.reward_pokemon_status(memory)
         reward += self.reward_critical_hit_flag(memory)
         reward += self.reward_one_hit_ko_flag(memory)
 
@@ -1300,22 +1276,22 @@ class Data:
 
         return reward
 
-    def reward_pokemon_current_hp1(self, memory: bytes):
+    def reward_pokemon_current_hp(self, memory: bytes):
         return (
             (
-                self.pokemon_current_hp1(self.pyboy.memory)
-                - self.pokemon_current_hp1(memory)
+                self.pokemon_current_hp(self.pyboy.memory)
+                - self.pokemon_current_hp(memory)
             )
-            / self.pokemon_max_hp1(self.pyboy.memory)
-            if self.pokemon_max_hp1(self.pyboy.memory) != 0
+            / self.pokemon_max_hp(self.pyboy.memory)
+            if self.pokemon_max_hp(self.pyboy.memory) != 0
             else 0
         )
 
-    def reward_pokemon_status1(self, memory: bytes):
+    def reward_pokemon_status(self, memory: bytes):
         reward = 0
 
         for bit_before, bit_after in zip(
-            self.pokemon_status1(memory), self.pokemon_status1(self.pyboy.memory)
+            self.pokemon_status(memory), self.pokemon_status(self.pyboy.memory)
         ):
             if bit_before == 0 and bit_after == 1:
                 reward -= 0.1

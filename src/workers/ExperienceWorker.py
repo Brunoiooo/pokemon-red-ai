@@ -181,10 +181,15 @@ class ExperienceWorker:
 
         for k, v in inputs.items():
             if torch.is_tensor(v):
+                v = v.detach().cpu()
+
                 if k == "continuous":
-                    out[k] = v.detach().cpu().numpy().copy()
+                    out[k] = v.numpy().copy()
                 else:
-                    out[k] = int(v.item())
+                    if v.numel() == 1:
+                        out[k] = int(v.item())
+                    else:
+                        out[k] = v.tolist()
             else:
                 out[k] = v
 
