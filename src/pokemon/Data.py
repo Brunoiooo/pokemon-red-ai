@@ -107,120 +107,61 @@ class Data:
                 self.index_of_current_pokemon_send_out(self.pyboy.memory),
                 dtype=torch.long,
             ),
-            "move_menu_type": torch.tensor(
-                self.move_menu_type(self.pyboy.memory),
-                dtype=torch.long,
-            ),
-            "your_move_type": torch.tensor(
-                self.your_move_type(self.pyboy.memory),
-                dtype=torch.long,
-            ),
-            "player_selected_move": torch.tensor(
-                self.player_selected_move(self.pyboy.memory),
-                dtype=torch.long,
-            ),
-            "enemy_selected_move": torch.tensor(
-                self.enemy_selected_move(self.pyboy.memory),
-                dtype=torch.long,
-            ),
-            "enemy_move_id": torch.tensor(
-                self.enemy_move_id(self.pyboy.memory),
-                dtype=torch.long,
-            ),
-            "enemy_move_type": torch.tensor(
-                self.enemy_move_type(self.pyboy.memory),
-                dtype=torch.long,
-            ),
-            "player_move_id": torch.tensor(
-                self.player_move_id(self.pyboy.memory),
-                dtype=torch.long,
-            ),
-            "enemy_type1": torch.tensor(
-                self.enemy_type1(self.pyboy.memory),
-                dtype=torch.long,
-            ),
-            "enemy_type2": torch.tensor(
-                self.enemy_type2(self.pyboy.memory),
-                dtype=torch.long,
-            ),
-            "enemy_move1": torch.tensor(
-                self.enemy_move1(self.pyboy.memory),
-                dtype=torch.long,
-            ),
-            "enemy_move2": torch.tensor(
-                self.enemy_move2(self.pyboy.memory),
-                dtype=torch.long,
-            ),
-            "enemy_move3": torch.tensor(
-                self.enemy_move3(self.pyboy.memory),
-                dtype=torch.long,
-            ),
-            "enemy_move4": torch.tensor(
-                self.enemy_move4(self.pyboy.memory),
-                dtype=torch.long,
-            ),
-            "pokemon_type1": torch.tensor(
-                self.pokemon_type1(self.pyboy.memory),
-                dtype=torch.long,
-            ),
-            "pokemon_type2": torch.tensor(
-                self.pokemon_type2(self.pyboy.memory),
-                dtype=torch.long,
-            ),
-            "pokemon_move_first_slot": torch.tensor(
-                self.pokemon_move_first_slot(self.pyboy.memory),
-                dtype=torch.long,
-            ),
-            "pokemon_move_second_slot": torch.tensor(
-                self.pokemon_move_second_slot(self.pyboy.memory),
-                dtype=torch.long,
-            ),
-            "pokemon_move_third_slot": torch.tensor(
-                self.pokemon_move_third_slot(self.pyboy.memory),
-                dtype=torch.long,
-            ),
-            "pokemon_move_fourth_slot": torch.tensor(
-                self.pokemon_move_fourth_slot(self.pyboy.memory),
-                dtype=torch.long,
-            ),
             "type_of_battle": torch.tensor(
                 self.type_of_battle(self.pyboy.memory),
                 dtype=torch.long,
             ),
-            "sprite_data_ids": torch.tensor(
+            "move_menu_type": torch.tensor(
+                self.move_menu_type(self.pyboy.memory),
+                dtype=torch.long,
+            ),
+            "move_id": torch.tensor(
+                [
+                    self.player_selected_move(self.pyboy.memory),
+                    self.enemy_selected_move(self.pyboy.memory),
+                    self.enemy_move1(self.pyboy.memory),
+                    self.enemy_move2(self.pyboy.memory),
+                    self.enemy_move3(self.pyboy.memory),
+                    self.enemy_move4(self.pyboy.memory),
+                ]
+                + self.stored_pokemon_moves(self.pyboy.memory),
+                dtype=torch.long,
+            ),
+            "move_type": torch.tensor(
+                [
+                    self.your_move_type(self.pyboy.memory),
+                    self.enemy_move_type(self.pyboy.memory),
+                    self.pokemon_move_first_slot(self.pyboy.memory),
+                    self.pokemon_move_second_slot(self.pyboy.memory),
+                    self.pokemon_move_third_slot(self.pyboy.memory),
+                    self.pokemon_move_fourth_slot(self.pyboy.memory),
+                ],
+                dtype=torch.long,
+            ),
+            "pokemon_id": torch.tensor(
+                self.player_pokemons_ids(self.pyboy.memory)
+                + self.stored_pokemon_ids(self.pyboy.memory),
+                dtype=torch.long,
+            ),
+            "pokemon_type": torch.tensor(
+                [
+                    self.enemy_type1(self.pyboy.memory),
+                    self.enemy_type2(self.pyboy.memory),
+                    self.pokemon_type1(self.pyboy.memory),
+                    self.pokemon_type2(self.pyboy.memory),
+                ]
+                + self.player_pokemon_types(self.pyboy.memory)
+                + self.stored_pokemon_types(self.pyboy.memory),
+                dtype=torch.long,
+            ),
+            "sprite_id": torch.tensor(
                 self.sprite_data_ids(self.pyboy.memory),
                 dtype=torch.long,
             ),
-            "poke_mart_items": torch.tensor(
-                self.poke_mart_items(self.pyboy.memory),
-                dtype=torch.long,
-            ),
-            "player_pokemons_ids": torch.tensor(
-                self.player_pokemons_ids(self.pyboy.memory),
-                dtype=torch.long,
-            ),
-            "player_pokemon_types": torch.tensor(
-                self.player_pokemon_types(self.pyboy.memory),
-                dtype=torch.long,
-            ),
-            "items_ids": torch.tensor(
-                self.items_ids(self.pyboy.memory),
-                dtype=torch.long,
-            ),
-            "stored_items_ids": torch.tensor(
-                self.stored_items_ids(self.pyboy.memory),
-                dtype=torch.long,
-            ),
-            "stored_pokemon_ids": torch.tensor(
-                self.stored_pokemon_ids(self.pyboy.memory),
-                dtype=torch.long,
-            ),
-            "stored_pokemon_types": torch.tensor(
-                self.stored_pokemon_types(self.pyboy.memory),
-                dtype=torch.long,
-            ),
-            "stored_pokemon_moves": torch.tensor(
-                self.stored_pokemon_moves(self.pyboy.memory),
+            "item_id": torch.tensor(
+                self.poke_mart_items(self.pyboy.memory)
+                + self.items_ids(self.pyboy.memory)
+                + self.stored_items_ids(self.pyboy.memory),
                 dtype=torch.long,
             ),
         }
@@ -694,9 +635,6 @@ class Data:
     def your_move_type(self, memory: PyBoyMemoryView | bytes):
         return memory[0xCFD5] if self.is_battle(memory) else 0
 
-    def enemy_move_id(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xCFCC] if self.is_battle(memory) else 0
-
     def enemy_move_power(self, memory: PyBoyMemoryView | bytes):
         return memory[0xCFCE]
 
@@ -705,9 +643,6 @@ class Data:
 
     def enemy_move_accuracy(self, memory: PyBoyMemoryView | bytes):
         return memory[0xCFD0]
-
-    def player_move_id(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xCFD2] if self.is_battle(memory) else 0
 
     def player_move_power(self, memory: PyBoyMemoryView | bytes):
         return memory[0xCFD4]
