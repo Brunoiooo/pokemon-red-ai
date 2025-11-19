@@ -104,9 +104,7 @@ class TrainWorker:
     def target_model(self):
         if not self.__target_model:
             emulator = Emulator()
-            self.__target_model = ModelPokemon(
-                len(emulator.data.data()), len(emulator.buttons)
-            ).to(self.device)
+            self.__target_model = get_model(self.device)
             emulator.pyboy.stop(False)
 
             self.target_model.load_state_dict(self.model.state_dict())

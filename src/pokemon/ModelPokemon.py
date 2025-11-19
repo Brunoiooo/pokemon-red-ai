@@ -7,7 +7,26 @@ from pokemon import Emulator
 
 def get_model(device: str, name: str | None = None):
     emulator = Emulator.Emulator()
-    model = ModelPokemon(len(emulator.data.data()), len(emulator.buttons)).to(device)
+
+    inputs = emulator.data.inputs()
+
+    continuous_dim = len(inputs["continuous"])
+
+    single_embed_dim = 16 + 16 + 4 + 16 + 16
+
+    multi_embed_dim = (
+        len(inputs["move_id"]) * 16
+        + len(inputs["move_type"]) * 16
+        + len(inputs["pokemon_id"]) * 16
+        + len(inputs["pokemon_type"]) * 16
+        + len(inputs["sprite_id"]) * 16
+        + len(inputs["item_id"]) * 16
+    )
+
+    total_in_dim = continuous_dim + single_embed_dim + multi_embed_dim
+
+    model = ModelPokemon(continuous_dim, total_in_dim, len(emulator.buttons)).to(device)
+
     emulator.pyboy.stop(False)
 
     if name is None:
@@ -32,15 +51,20 @@ def get_model(device: str, name: str | None = None):
 
 
 class ModelPokemon(nn.Module):
-    def __init__(self, continuous_dim: int, outputs: int):
+    def __init__(self, continuous_dim: int, in_dim: int, outputs: int):
         super().__init__()
 
+        self.continuous_dim = continuous_dim
+        self.in_dim = in_dim
+
+        # pojedyncze ID
         self.map_id = nn.Embedding(256, 16)
         self.dialog_id = nn.Embedding(256, 16)
         self.index_of_current_pokemon_send_out = nn.Embedding(7, 4, padding_idx=0)
         self.type_of_battle = nn.Embedding(256, 16)
         self.move_menu_type = nn.Embedding(256, 16)
 
+        # sekwencje ID
         self.move_id = nn.Embedding(256, 16)
         self.move_type = nn.Embedding(256, 16)
         self.pokemon_id = nn.Embedding(256, 16)
@@ -49,8 +73,8 @@ class ModelPokemon(nn.Module):
         self.item_id = nn.Embedding(256, 16)
 
         self.fc = nn.Sequential(
-            nn.LayerNorm(continuous_dim),
-            nn.Linear(continuous_dim, 1024),
+            nn.LayerNorm(in_dim),
+            nn.Linear(in_dim, 1024),
             nn.SiLU(),
             nn.Dropout(0.1),
             nn.Linear(1024, 512),
@@ -64,7 +88,13 @@ class ModelPokemon(nn.Module):
             nn.Linear(128, outputs),
         )
 
-    def _as_long_batch(self, t, device):
+    def _as_float_batch(self, t, device):
+        t = t.to(device)
+        if t.dim() == 1:
+            t = t.unsqueeze(0)
+        return t.float()
+
+    def _as_long_scalar_batch(self, t, device):
         t = t.to(device)
         if t.dtype != torch.long:
             t = t.long()
@@ -72,13 +102,72 @@ class ModelPokemon(nn.Module):
             t = t.unsqueeze(0)
         return t
 
-    def _as_float_batch(self, t, device):
+    def _as_long_seq_batch(self, t, device):
         t = t.to(device)
+        if t.dtype != torch.long:
+            t = t.long()
         if t.dim() == 1:
             t = t.unsqueeze(0)
-        return t.float()
+        return t
 
     def forward(self, x):
-        return self.fc(
-            self._as_float_batch(x["continuous"], next(self.parameters()).device)
+        device = next(self.parameters()).device
+
+        cont = self._as_float_batch(x["continuous"], device)
+
+        map_id_emb = self.map_id(self._as_long_scalar_batch(x["map_id"], device))
+        dialog_id_emb = self.dialog_id(
+            self._as_long_scalar_batch(x["dialog_id"], device)
         )
+        index_emb = self.index_of_current_pokemon_send_out(
+            self._as_long_scalar_batch(x["index_of_current_pokemon_send_out"], device)
+        )
+        type_battle_emb = self.type_of_battle(
+            self._as_long_scalar_batch(x["type_of_battle"], device)
+        )
+        move_menu_emb = self.move_menu_type(
+            self._as_long_scalar_batch(x["move_menu_type"], device)
+        )
+
+        # 3) sekwencje embeddingów -> [B, L, 16] -> [B, L*16]
+        move_id_full = self.move_id(self._as_long_seq_batch(x["move_id"], device))
+        move_id_emb = move_id_full.reshape(move_id_full.size(0), -1)
+
+        move_type_full = self.move_type(self._as_long_seq_batch(x["move_type"], device))
+        move_type_emb = move_type_full.reshape(move_type_full.size(0), -1)
+
+        pokemon_id_full = self.pokemon_id(
+            self._as_long_seq_batch(x["pokemon_id"], device)
+        )
+        pokemon_id_emb = pokemon_id_full.reshape(pokemon_id_full.size(0), -1)
+
+        pokemon_type_full = self.pokemon_type(
+            self._as_long_seq_batch(x["pokemon_type"], device)
+        )
+        pokemon_type_emb = pokemon_type_full.reshape(pokemon_type_full.size(0), -1)
+
+        sprite_id_full = self.sprite_id(self._as_long_seq_batch(x["sprite_id"], device))
+        sprite_id_emb = sprite_id_full.reshape(sprite_id_full.size(0), -1)
+
+        item_id_full = self.item_id(self._as_long_seq_batch(x["item_id"], device))
+        item_id_emb = item_id_full.reshape(item_id_full.size(0), -1)
+
+        h = torch.cat(
+            [
+                cont,
+                map_id_emb,
+                dialog_id_emb,
+                index_emb,
+                type_battle_emb,
+                move_menu_emb,
+                move_id_emb,
+                move_type_emb,
+                pokemon_id_emb,
+                pokemon_type_emb,
+                sprite_id_emb,
+                item_id_emb,
+            ],
+            dim=1,
+        )
+
+        return self.fc(h)

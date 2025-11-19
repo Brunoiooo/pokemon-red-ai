@@ -12,7 +12,7 @@ import time
 import traceback
 import torch
 from pokemon.Emulator import Emulator
-from pokemon.ModelPokemon import ModelPokemon
+from pokemon.ModelPokemon import ModelPokemon, get_model
 
 
 @dataclass
@@ -45,9 +45,7 @@ class ExperienceWorker:
     def model(self):
         if not self.__model:
             emulator = Emulator()
-            self.__model = ModelPokemon(
-                len(emulator.data.data()), len(emulator.buttons)
-            )
+            self.__model = get_model(device="cpu")
             emulator.pyboy.stop(False)
 
             self.model.eval()
