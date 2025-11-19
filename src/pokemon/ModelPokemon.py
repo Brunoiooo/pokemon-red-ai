@@ -57,14 +57,12 @@ class ModelPokemon(nn.Module):
         self.continuous_dim = continuous_dim
         self.in_dim = in_dim
 
-        # pojedyncze ID
         self.map_id = nn.Embedding(256, 16)
         self.dialog_id = nn.Embedding(256, 16)
         self.index_of_current_pokemon_send_out = nn.Embedding(7, 4, padding_idx=0)
         self.type_of_battle = nn.Embedding(256, 16)
         self.move_menu_type = nn.Embedding(256, 16)
 
-        # sekwencje ID
         self.move_id = nn.Embedding(256, 16)
         self.move_type = nn.Embedding(256, 16)
         self.pokemon_id = nn.Embedding(256, 16)
@@ -74,7 +72,13 @@ class ModelPokemon(nn.Module):
 
         self.fc = nn.Sequential(
             nn.LayerNorm(in_dim),
-            nn.Linear(in_dim, 1024),
+            nn.Linear(in_dim, 4096),
+            nn.SiLU(),
+            nn.Dropout(0.1),
+            nn.Linear(4096, 2048),
+            nn.SiLU(),
+            nn.Dropout(0.1),
+            nn.Linear(2048, 1024),
             nn.SiLU(),
             nn.Dropout(0.1),
             nn.Linear(1024, 512),
@@ -129,7 +133,6 @@ class ModelPokemon(nn.Module):
             self._as_long_scalar_batch(x["move_menu_type"], device)
         )
 
-        # 3) sekwencje embeddingów -> [B, L, 16] -> [B, L*16]
         move_id_full = self.move_id(self._as_long_seq_batch(x["move_id"], device))
         move_id_emb = move_id_full.reshape(move_id_full.size(0), -1)
 
