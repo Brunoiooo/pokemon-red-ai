@@ -35,6 +35,19 @@ class ModelPokemon(nn.Module):
     def __init__(self, continuous_dim: int, outputs: int):
         super().__init__()
 
+        self.map_id = nn.Embedding(256, 16)
+        self.dialog_id = nn.Embedding(256, 16)
+        self.index_of_current_pokemon_send_out = nn.Embedding(7, 4, padding_idx=0)
+        self.type_of_battle = nn.Embedding(256, 16)
+        self.move_menu_type = nn.Embedding(256, 16)
+
+        self.move_id = nn.Embedding(256, 16)
+        self.move_type = nn.Embedding(256, 16)
+        self.pokemon_id = nn.Embedding(256, 16)
+        self.pokemon_type = nn.Embedding(256, 16)
+        self.sprite_id = nn.Embedding(256, 16)
+        self.item_id = nn.Embedding(256, 16)
+
         self.fc = nn.Sequential(
             nn.LayerNorm(continuous_dim),
             nn.Linear(continuous_dim, 1024),
