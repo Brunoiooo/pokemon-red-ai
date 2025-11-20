@@ -515,7 +515,7 @@ class Data:
         return memory[0xCC26]
 
     def index_of_current_pokemon_send_out(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xCC2F] + 1 if self.is_battle(memory) else 0
+        return memory[0xCC2F]
 
     def menu_data(self):
         data = [
