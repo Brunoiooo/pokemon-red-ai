@@ -59,7 +59,7 @@ class ModelPokemon(nn.Module):
 
         self.map_id = nn.Embedding(256, 16)
         self.dialog_id = nn.Embedding(256, 16)
-        self.index_of_current_pokemon_send_out = nn.Embedding(7, 4, padding_idx=0)
+        self.index_of_current_pokemon_send_out = nn.Embedding(6, 4)
         self.type_of_battle = nn.Embedding(256, 16)
         self.move_menu_type = nn.Embedding(256, 16)
 
