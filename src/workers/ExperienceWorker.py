@@ -160,7 +160,7 @@ class ExperienceWorker:
                             self.detach_to_cpu(self.buffer[0]["inputs"]),
                             self.buffer[0]["action"],
                             self.detach_to_cpu(self.buffer[-1]["next_inputs"]),
-                            min(1, reward),
+                            reward,
                             terminated,
                             len(self.buffer),
                         )
