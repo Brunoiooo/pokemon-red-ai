@@ -17,7 +17,6 @@ import time
 
 @dataclass
 class Emulator:
-    id: int = 0
     saves = "saves"
     truncated_count_file_name = "truncated_count"
     terminated_count_file_name = "terminated_count"
@@ -38,43 +37,6 @@ class Emulator:
     ]
     ticks_per_step = 32
     ALL_BUTTONS = ["a", "b", "start", "select", "left", "right", "up", "down"]
-
-    @property
-    def home_dir(self):
-        return f"{self.saves}/{self.id}"
-
-    @property
-    def pure_save(self):
-        scores: list[tuple[int, str]] = []
-        for dir in os.listdir(self.home_dir):
-            terminated_path = f"{self.home_dir}/{dir}/{self.terminated_count_file_name}"
-            truncated_path = f"{self.home_dir}/{dir}/{self.truncated_count_file_name}"
-
-            if not os.path.exists(terminated_path):
-                with open(terminated_path, "w") as f:
-                    f.write("0")
-
-            if not os.path.exists(truncated_path):
-                with open(truncated_path, "w") as f:
-                    f.write("0")
-
-            with open(terminated_path, "r") as f:
-                terminated_count = int(f.read().strip() or 0)
-
-            with open(truncated_path, "r") as f:
-                truncated_count = int(f.read().strip() or 0)
-
-            scores.append((truncated_count - terminated_count, dir))
-
-        scores.sort()
-
-        return scores[-1]
-
-    @property
-    def random_save(self):
-        return random.choice(os.listdir(self.home_dir))
-
-    __pyboy: None | PyBoy = None
 
     __use_sdl: bool = False
 
@@ -98,6 +60,8 @@ class Emulator:
             self.pyboy.stop(False)
             self.__pyboy = None
             self.pyboy.load_state(f)
+
+    __pyboy: None | PyBoy = None
 
     @property
     def pyboy(self):
