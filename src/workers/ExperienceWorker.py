@@ -10,6 +10,7 @@ from queue import Full
 import random
 import time
 import traceback
+from typing import Any
 import torch
 from pokemon.Emulator import Emulator
 from pokemon.ModelPokemon import ModelPokemon, get_model
@@ -17,16 +18,12 @@ from pokemon.ModelPokemon import ModelPokemon, get_model
 
 @dataclass
 class ExperienceWorker:
-    id: int
-    event_stop: Event
-    event_wait: Event
     queue_logs: Queue
-    connection_epsilon: Connection
-    connection_state_dict: Connection
     queue_data: Queue
     window: Synchronized
     gamma: float
-    epsilon: float = 1
+    model_state_dict: dict[str, Any]
+    epsilon: float
     td_error_steps = 5
 
     __last_save_path = "last"
@@ -44,11 +41,11 @@ class ExperienceWorker:
     @property
     def model(self):
         if not self.__model:
-            emulator = Emulator()
             self.__model = get_model(device="cpu")
-            emulator.pyboy.stop(False)
 
-            self.model.eval()
+            self.__model.load_state_dict(self.model_state_dict)
+
+            self.__model.eval()
 
         return self.__model
 
@@ -66,21 +63,15 @@ class ExperienceWorker:
     @property
     def emulator(self):
         if self.__emulator is None:
-            self.__emulator = Emulator(id=self.id)
+            self.__emulator = Emulator()
 
         return self.__emulator
 
-    def start(self):
+    def run(self):
         try:
-            self.sync()
-
             memory, inputs = self.emulator.reset(dir=self.last_save_path)
 
-            while not self.event_stop.is_set():
-                self.event_wait.wait()
-
-                self.poll()
-
+            while True:
                 action = self.get_action(inputs)
 
                 next_memory, next_inputs, reward, terminated, truncated = (
@@ -98,40 +89,18 @@ class ExperienceWorker:
 
                 self.put_to_queue_data(terminated=terminated, truncated=truncated)
 
-                memory, inputs = (
-                    self.emulator.reset(dir=self.last_save_path)
-                    if truncated
-                    else (next_memory, next_inputs)
-                )
+                if truncated:
+                    break
 
-                with self.window.get_lock():
-                    self.emulator.use_sdl = bool(self.window.value)
+                memory, inputs = next_memory, next_inputs
+
+                self.emulator.use_sdl = bool(self.window.get())
 
         except Exception as e:
-            self.event_stop.set()
             self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
         finally:
             self.emulator.pyboy.stop(False)
             self.queue_logs.put_nowait("Worker stopped.")
-
-    def sync(self):
-        self.load_state_dict(self.connection_state_dict.recv())
-
-        self.model.eval()
-
-        self.epsilon = self.connection_epsilon.recv()
-
-    def poll(self):
-        if self.connection_state_dict.poll(0):
-            self.load_state_dict(self.connection_state_dict.recv())
-        if self.connection_epsilon.poll(0):
-            self.epsilon = self.connection_epsilon.recv()
-
-    def load_state_dict(self, recv: bytes):
-        with torch.no_grad():
-            self.model.load_state_dict(
-                torch.load(io.BytesIO(recv), map_location="cpu"), strict=False
-            )
 
     def get_action(self, inputs: dict[float]):
         if random.random() < self.epsilon:

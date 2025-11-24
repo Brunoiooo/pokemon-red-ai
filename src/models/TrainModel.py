@@ -1,5 +1,5 @@
 import json
-from multiprocessing import Event, Process, Queue, Value
+from multiprocessing import Manager, Process
 import os
 from typing import Any
 
@@ -15,13 +15,16 @@ class TrainModel:
     auto_mode_process: None | Process = None
 
     def __init__(self):
-        self.event_stop = Event()
-        self.event_stop.set()
-        self.queue_logs = Queue()
-        self.count = Value("i", 0)
-        self.is_debug = Value("b", False)
-        self.is_evaluation_window = Value("b", False)
-        self.train_use_sdl = Value("b", False)
+        self._manager = Manager()
+
+        self.train_worker = TrainWorker(
+            queue_logs=self._manager.Queue(),
+            queue_data=self._manager.Queue(),
+            event_start=self._manager.Event(),
+            is_debug=self._manager.Value("b", False),
+            is_evaluation_window=self._manager.Value("b", False),
+            train_use_sdl=self._manager.Value("b", False),
+        )
 
     @property
     def settings(self) -> dict[str, Any]:
@@ -53,18 +56,8 @@ class TrainModel:
         if self.process is not None and self.process.is_alive():
             raise RuntimeError(f"Worker (pid={self.process.pid}) is already running")
 
-        self.event_stop.clear()
-
         self.process = Process(
-            target=TrainWorker().run,
-            kwargs={
-                "event_stop": self.event_stop,
-                "queue_logs": self.queue_logs,
-                "count": self.count,
-                "is_debug": self.is_debug,
-                "is_evaluation_window": self.is_evaluation_window,
-                "window": self.train_use_sdl,
-            },
+            target=self.train_worker.run_train,
             daemon=False,
         )
         self.process.start()
@@ -78,17 +71,16 @@ class TrainModel:
         model = get_model("cpu", "best" if best_model else "latest")
         model.eval()
 
-        with self.is_debug.get_lock():
-            self.evaluate_process = Process(
-                target=Emulator().evaluate_greedy,
-                kwargs={
-                    "model": model,
-                    "evaluate_greedy_times": 1,
-                    "queue_logs": self.queue_logs,
-                    "is_debug": self.is_debug.value,
-                    "is_evaluation_window": self.is_evaluation_window,
-                },
-            )
+        self.evaluate_process = Process(
+            target=Emulator().evaluate_greedy,
+            kwargs={
+                "model": model,
+                "evaluate_greedy_times": 1,
+                "queue_logs": self.train_worker.queue_logs,
+                "is_debug": self.train_worker.is_debug.value,
+                "is_evaluation_window": self.train_worker.is_evaluation_window,
+            },
+        )
 
         self.evaluate_process.start()
 
@@ -100,7 +92,7 @@ class TrainModel:
 
         self.auto_mode_process = Process(
             target=Emulator().auto_mode,
-            kwargs={"queue_logs": self.queue_logs},
+            kwargs={"queue_logs": self.train_worker.queue_logs},
         )
 
         self.auto_mode_process.start()

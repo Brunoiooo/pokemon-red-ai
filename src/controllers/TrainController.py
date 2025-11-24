@@ -41,14 +41,14 @@ class TrainController:
                 "disabled"
                 if self.__model.process
                 and self.__model.process.is_alive()
-                or not self.__model.event_stop.is_set()
+                or self.__model.train_worker.event_start.is_set()
                 else "normal"
             )
         )
         self.__view.button_stop.configure(
             state=(
                 "disabled"
-                if self.__model.event_stop.is_set()
+                if not self.__model.train_worker.event_start.is_set()
                 or not self.__model.process
                 or not self.__model.process.is_alive()
                 else "normal"
@@ -93,7 +93,7 @@ class TrainController:
 
     def stop(self):
         try:
-            self.__model.event_stop.set()
+            self.__model.train_worker.event_start.clear()
         except Exception as e:
             messagebox.showerror("stop", e)
         finally:
@@ -102,7 +102,7 @@ class TrainController:
     def __run_logs(self):
         try:
             for _ in range(self.__view.int_var_logs_per_run.get()):
-                self.__view.add_log(self.__model.queue_logs.get_nowait())
+                self.__view.add_log(self.__model.train_worker.queue_logs.get_nowait())
         except queue.Empty:
             pass
 
@@ -113,19 +113,17 @@ class TrainController:
 
     def handle_boolean_var_settings_debug(self, *args):
         try:
-            with self.__model.is_debug.get_lock():
-                self.__model.is_debug.value = (
-                    self.__view.boolean_var_settings_debug.get()
-                )
+            self.__model.train_worker.is_debug.value = (
+                self.__view.boolean_var_settings_debug.get()
+            )
         except Exception as e:
             messagebox.showerror("handle_boolean_var_settings_debug", e)
 
     def handle_boolean_var_settings_evaluation_window(self, *args):
         try:
-            with self.__model.is_evaluation_window.get_lock():
-                self.__model.is_evaluation_window.value = (
-                    self.__view.boolean_var_settings_evaluation_window.get()
-                )
+            self.__model.train_worker.is_evaluation_window.value = (
+                self.__view.boolean_var_settings_evaluation_window.get()
+            )
         except Exception as e:
             messagebox.showerror("handle_boolean_var_settings_evaluation_window", e)
 
@@ -158,9 +156,8 @@ class TrainController:
 
     def handle_boolean_var_train_window(self, *args):
         try:
-            with self.__model.train_use_sdl.get_lock():
-                self.__model.train_use_sdl.value = bool(
-                    self.__view.boolean_var_train_window.get()
-                )
+            self.__model.train_worker.train_use_sdl.value = bool(
+                self.__view.boolean_var_train_window.get()
+            )
         except Exception as e:
             messagebox.showerror("handle_boolean_var_train_window", e)

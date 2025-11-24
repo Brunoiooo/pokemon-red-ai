@@ -1,14 +1,14 @@
 from collections import deque
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
-import io
-from multiprocessing import Pipe, Process, Queue, Event as MPEvent
-from multiprocessing.queues import Queue as MPQueue
-from multiprocessing.connection import Connection
+from multiprocessing import Queue, Manager
+import multiprocessing as mp
 from multiprocessing.sharedctypes import Synchronized
 from multiprocessing.synchronize import Event
 import os
 from queue import Empty
 import random
+from threading import RLock, Thread
 import traceback
 from typing import Any
 import torch.optim as optim
@@ -22,64 +22,37 @@ from math import inf
 
 @dataclass
 class TrainWorker:
-    workers: int = field(default_factory=lambda: max(1, os.cpu_count() - 1 or 1))
+    max_workers: int = field(default_factory=lambda: max(1, os.cpu_count() - 1 or 1))
     device: str = field(
         default_factory=lambda: "cuda" if torch.cuda.is_available() else "cpu"
     )
-    event_wait: Event = field(default_factory=lambda: MPEvent())
-    queue_data_maxsize = 1000
-    deque_buffer_maxlen = 100000
-    optimize_every = 4
-    updates_per_optimize = 2
-    batch_size = 2048
+    queue_data: Queue = field(default_factory=lambda: Manager().Queue())
+    event_start: Event = field(default_factory=lambda: Manager().Event())
+    queue_logs: Queue = field(default_factory=lambda: Manager().Queue())
+    model_lock: RLock = field(default_factory=lambda: Manager().RLock())
+    is_debug: Synchronized = field(default_factory=lambda: Manager().Value("b", False))
+    is_evaluation_window: Synchronized = field(
+        default_factory=lambda: Manager().Value("b", False)
+    )
+    train_use_sdl: Synchronized = field(
+        default_factory=lambda: Manager().Value("b", False)
+    )
+    deque_buffer_maxlen = 50000
+    ckpt_every = 100
+
+    batch_size = 512
     grad_accum_steps = 1
     lr = 0.00001
     weight_decay = 1e-5
     gamma = 0.99
     criterion: torch.nn.SmoothL1Loss = field(default_factory=torch.nn.SmoothL1Loss)
     tau = 0.005
-    sync_interval = 100
-    ckpt_every = 5000
     evaluate_greedy_times = 1
-
-    __event_stop: None | Event = None
-
-    @property
-    def event_stop(self):
-        if not self.__event_stop:
-            raise RuntimeError("event_stop is not set")
-
-        return self.__event_stop
-
-    @event_stop.setter
-    def event_stop(self, event_stop: Event):
-        self.__event_stop = event_stop
-
-    __queue_logs: None | MPQueue = None
-
-    @property
-    def queue_logs(self):
-        if not self.__queue_logs:
-            raise RuntimeError("queue_logs is not set")
-
-        return self.__queue_logs
-
-    @queue_logs.setter
-    def queue_logs(self, queue_logs: MPQueue):
-        self.__queue_logs = queue_logs
-
-    __count: None | Synchronized = None
-
-    @property
-    def count(self):
-        if not self.__count:
-            raise RuntimeError("count is not set")
-
-        return self.__count
-
-    @count.setter
-    def count(self, count: Synchronized):
-        self.__count = count
+    epsilon: float = 0.1
+    # loss tracking
+    running_loss_ema: float = 0.0
+    loss_ema_alpha: float = 0.001
+    last_loss: float | None = None
 
     __model: None | ModelPokemon = None
 
@@ -92,7 +65,7 @@ class TrainWorker:
             elif os.path.exists("models/best.pth"):
                 name = "best"
 
-            self.__model = get_model(self.device, name)
+            self.__model = get_model(device=self.device, name=name)
 
             self.__model.train()
 
@@ -103,13 +76,12 @@ class TrainWorker:
     @property
     def target_model(self):
         if not self.__target_model:
-            emulator = Emulator()
             self.__target_model = get_model(self.device)
-            emulator.pyboy.stop(False)
 
-            self.target_model.load_state_dict(self.model.state_dict())
+            with self.model_lock:
+                self.__target_model.load_state_dict(self.model.state_dict())
 
-            self.target_model.eval()
+            self.__target_model.eval()
 
         return self.__target_model
 
@@ -118,9 +90,10 @@ class TrainWorker:
     @property
     def optimizer(self):
         if not self.__optimizer:
-            self.__optimizer = optim.AdamW(
-                self.model.parameters(), lr=self.lr, weight_decay=self.weight_decay
-            )
+            with self.model_lock:
+                self.__optimizer = optim.AdamW(
+                    self.model.parameters(), lr=self.lr, weight_decay=self.weight_decay
+                )
 
         return self.__optimizer
 
@@ -139,7 +112,6 @@ class TrainWorker:
 
     @property
     def best_eval_return(self):
-
         if self.__best_eval_return is None:
             try:
                 model_best = torch.load(
@@ -157,118 +129,78 @@ class TrainWorker:
 
         return self.__best_eval_return
 
-    __evaluate_greedy_process: None | Process = None
-
-    @property
-    def evaluate_greedy_process(self):
-        if self.__evaluate_greedy_process is None:
-            self.__evaluate_greedy_process = Process(
-                target=self.evaluate_greedy, daemon=True
-            )
-
-        return self.__evaluate_greedy_process
-
     @best_eval_return.setter
     def best_eval_return(self, best_eval_return: float):
         self.__best_eval_return = best_eval_return
 
-    def run(
-        self,
-        event_stop: Event,
-        queue_logs: MPQueue,
-        count: Synchronized,
-        is_debug: Synchronized,
-        is_evaluation_window: Synchronized,
-        window: Synchronized,
-    ):
+    def run_era(self):
         try:
-            self.event_wait.set()
-            self.event_stop = event_stop
-            self.queue_logs = queue_logs
-            self.count = count
-            self.is_debug = is_debug
-            self.is_evaluation_window = is_evaluation_window
-            self.window = window
+            with self.model_lock:
+                model_state_dict = self.model.state_dict()
 
-            queue_data = Queue(maxsize=self.queue_data_maxsize)
+            ctx = mp.get_context("spawn")
 
-            processes: dict[int, Process] = {}
-            connections_epsilon: dict[int, Connection] = {}
-            connections_state_dict: dict[int, Connection] = {}
-
-            for i in range(self.workers):
-                (connection_epsilon, connection_state_dict, process) = (
-                    self.create_process(queue_data=queue_data, id=i + 1)
-                )
-
-                connections_epsilon.setdefault(i, connection_epsilon)
-                connections_state_dict.setdefault(i, connection_state_dict)
-                processes.setdefault(i, process)
-
-            for i in processes:
-                processes[i].start()
-
-            evaluate_greedy_count = 0
-
-            self.setup_experience_workers(
-                connections_epsilon=connections_epsilon,
-                connections_state_dict=connections_state_dict,
-                evaluate_greedy_count=evaluate_greedy_count,
-            )
-
-            deque_buffer = deque(maxlen=self.deque_buffer_maxlen)
-
-            count = 0
-
-            while not self.event_stop.is_set():
-                if count % 100 == 0:
-                    with self.count.get_lock():
-                        self.count.value = count
-                    self.queue_logs.put_nowait(
-                        f"Count: {count} | Epsilon: {abs(evaluate_greedy_count / self.ckpt_every - 1):.2f}"
+            with ProcessPoolExecutor(
+                max_workers=self.max_workers, mp_context=ctx
+            ) as pool:
+                futures = [
+                    pool.submit(
+                        ExperienceWorker(
+                            queue_logs=self.queue_logs,
+                            queue_data=self.queue_data,
+                            gamma=self.gamma,
+                            model_state_dict=model_state_dict,
+                            epsilon=self.epsilon,
+                            window=self.train_use_sdl,
+                        ).run
                     )
+                    for _ in range(self.max_workers)
+                ]
 
-                try:
-                    deque_buffer.append(queue_data.get_nowait())
-                except Empty as e:
-                    self.event_stop.wait(0.001)
-                finally:
-                    count += 1
-
-                if count % self.optimize_every == 0:
-                    for _ in range(self.updates_per_optimize):
-                        self.optimize_batch(deque_buffer=deque_buffer)
-
-                if evaluate_greedy_count % (self.ckpt_every // 100) == 0:
-                    self.setup_experience_workers(
-                        connections_epsilon=connections_epsilon,
-                        connections_state_dict=connections_state_dict,
-                        evaluate_greedy_count=evaluate_greedy_count,
-                    )
-
-                if self.ckpt_every <= evaluate_greedy_count:
-                    evaluate_greedy_count = 0
-                    self.event_wait.clear()
-                    self.evaluate_greedy()
-                    self.event_wait.set()
-
-                evaluate_greedy_count += 1
+                for future in futures:
+                    future.result()
 
         except Exception as e:
             self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
-            self.event_stop.set()
-        finally:
-            for i in processes:
-                if processes[i].is_alive():
-                    processes[i].terminate()
+            self.event_start.clear()
 
-            if self.evaluate_greedy_process.is_alive():
-                self.evaluate_greedy_process.join()
+    def run_train(self):
+        try:
+            self.event_start.set()
+
+            deque_buffer = deque(maxlen=self.deque_buffer_maxlen)
+
+            age = 1
+
+            while self.event_start.is_set():
+                count = 0
+
+                thread = Thread(target=self.run_era, daemon=True)
+                thread.start()
+
+                if len(deque_buffer) < self.batch_size:
+                    thread.join()
+
+                while thread.is_alive():
+                    self.optimize_batch(deque_buffer=deque_buffer)
+                    count += 1
+
+                while True:
+                    try:
+                        deque_buffer.append(self.queue_data.get_nowait())
+                    except Empty:
+                        break
+
+                self.queue_logs.put_nowait(f"Age: {age} | Count: {count}")
+
+                if age % self.ckpt_every == 0 and age > 0:
+                    self.evaluate_greedy()
+
+                age += 1
+        except Exception as e:
+            self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
 
     def optimize_batch(self, deque_buffer: deque):
-        if len(deque_buffer) < self.batch_size:
-            return
-
         batch = random.sample(deque_buffer, self.batch_size)
         (
             inputs,
@@ -290,6 +222,7 @@ class TrainWorker:
         assert self.batch_size % self.grad_accum_steps == 0
 
         self.optimizer.zero_grad(set_to_none=True)
+        batch_loss = 0.0
 
         for i in range(self.grad_accum_steps):
             sl = slice(i * micro, (i + 1) * micro)
@@ -302,11 +235,13 @@ class TrainWorker:
             te = terminateds[sl]
             n = steps[sl]
 
-            q_all = self.model(s)
+            with self.model_lock:
+                q_all = self.model(s)
             q_sa = q_all.gather(1, a.view(-1, 1)).squeeze(1)
 
             with torch.no_grad():
-                next_q_online = self.model(ns)
+                with self.model_lock:
+                    next_q_online = self.model(ns)
                 next_a = torch.argmax(next_q_online, dim=1)
 
                 next_q_target = (
@@ -321,9 +256,30 @@ class TrainWorker:
             loss = self.criterion(q_sa, target) / self.grad_accum_steps
             loss.backward()
 
-        torch.nn.utils.clip_grad_norm_(self.model.parameters(), 10.0)
+            try:
+                batch_loss += float(loss.detach().item())
+            except Exception:
+                pass
+
+        with self.model_lock:
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 10.0)
         self.optimizer.step()
         self.soft_update_target()
+        self.last_loss = batch_loss
+        if self.running_loss_ema == 0.0:
+            self.running_loss_ema = batch_loss
+        else:
+            self.running_loss_ema = (
+                self.loss_ema_alpha * batch_loss
+                + (1 - self.loss_ema_alpha) * self.running_loss_ema
+            )
+
+        try:
+            self.queue_logs.put_nowait(
+                f"Loss: {batch_loss:.6f} | EMA: {self.running_loss_ema:.6f}"
+            )
+        except Exception:
+            pass
 
     def collate_states(self, list_of_dicts: tuple[Any, ...]):
         batch = {}
@@ -339,16 +295,15 @@ class TrainWorker:
         return batch
 
     def soft_update_target(self):
-        with torch.no_grad():
+        with torch.no_grad(), self.model_lock:
             for p, tp in zip(self.model.parameters(), self.target_model.parameters()):
                 tp.data.copy_(self.tau * p.data + (1 - self.tau) * tp.data)
 
     def save_latest(self):
         os.makedirs("models", exist_ok=True)
-        with self.count.get_lock():
+        with self.model_lock:
             torch.save(
                 {
-                    "step": self.count.value,
                     "model_state": self.model.state_dict(),
                     "optimizer_state": self.optimizer.state_dict(),
                     "target_state": self.target_model.state_dict(),
@@ -360,73 +315,28 @@ class TrainWorker:
         self.best_eval_return = avg_return
 
         os.makedirs("models", exist_ok=True)
-        with self.count.get_lock():
+        with self.model_lock:
             torch.save(
                 {
-                    "step": self.count.value,
                     "best_return": avg_return,
                     "model_state": self.model.state_dict(),
                 },
                 "models/best.pth",
             )
 
-    def create_process(self, queue_data: MPQueue, id: int):
-        connection_epsilon_parent, connection_epsilon_child = Pipe(duplex=True)
-        connection_state_dict_parent, connection_state_dict_child = Pipe(duplex=True)
-
-        process = Process(
-            target=ExperienceWorker(
-                event_stop=self.event_stop,
-                queue_logs=self.queue_logs,
-                connection_epsilon=connection_epsilon_child,
-                connection_state_dict=connection_state_dict_child,
-                queue_data=queue_data,
-                gamma=self.gamma,
-                id=id,
-                window=self.window,
-                event_wait=self.event_wait,
-            ).start,
-            daemon=True,
-        )
-
-        return (connection_epsilon_parent, connection_state_dict_parent, process)
-
-    def setup_experience_workers(
-        self,
-        connections_epsilon: dict[int, Connection],
-        connections_state_dict: dict[int, Connection],
-        evaluate_greedy_count: int = 0,
-    ):
-        for i in connections_epsilon:
-            connections_epsilon[i].send(
-                abs(evaluate_greedy_count / self.ckpt_every - 1)
-            )
-
-        buffer = io.BytesIO()
-        torch.save(self.model.state_dict(), buffer)
-
-        for i in connections_state_dict:
-            connections_state_dict[i].send(buffer.getvalue())
-
     def evaluate_greedy(self):
-        with self.count.get_lock():
-            self.queue_logs.put_nowait(
-                f"Starting evaluation at step {self.count.value}..."
-            )
+        self.queue_logs.put_nowait(f"Starting evaluation.")
 
         self.save_latest()
 
-        with self.is_debug.get_lock(), self.is_evaluation_window.get_lock():
-            is_debug = self.is_debug.value
-            is_evaluation_window = self.is_evaluation_window.value
-
-        avg_ret = Emulator().evaluate_greedy(
-            model=self.model,
-            evaluate_greedy_times=self.evaluate_greedy_times,
-            queue_logs=self.queue_logs,
-            is_debug=is_debug,
-            is_evaluation_window=is_evaluation_window,
-        )
+        with self.model_lock:
+            avg_ret = Emulator().evaluate_greedy(
+                model=self.model,
+                evaluate_greedy_times=self.evaluate_greedy_times,
+                queue_logs=self.queue_logs,
+                is_debug=self.is_debug,
+                is_evaluation_window=self.is_evaluation_window,
+            )
 
         if self.best_eval_return < avg_ret:
             self.save_best(avg_ret)
