@@ -15,7 +15,6 @@ class Data:
     menu_count: dict[int, int] = field(default_factory=dict)
     battle_count: int = 0
     useless_count: int = 0
-    reward_scale: int = 1
     __player_pokemon_size = 0x2C
     __pokemon_count = 6
 
@@ -214,7 +213,7 @@ class Data:
         if self.is_menu(self.pyboy.memory):
             reward += self.reward_menu()
 
-        return reward * self.reward_scale
+        return max(-1.0, min(1.0, reward))
 
     def reward_core(self, memory: bytes):
         reward = 0.0
@@ -1141,13 +1140,13 @@ class Data:
 
     def reward_dialog(self):
         return (
-            0.05
+            0.1
             if self.visited_dialogs_count.get(self.dialog_id(self.pyboy.memory), 0) == 0
-            else -0.01
+            else 0
         )
 
     def reward_battle(self, memory: bytes):
-        reward = 0.05 if self.battle_count == 0 else -0.01
+        reward = 0.1 if self.battle_count == 0 else 0
 
         reward += self.reward_players_substitute_hp(memory)
         reward += self.reward_enemy_substitute_hp(memory)
@@ -1162,17 +1161,11 @@ class Data:
 
     def reward_position(self):
         return (
-            0.05
-            if self.visited_positions_count.get(self.get_position(), 0) == 0
-            else -0.01
+            0.1 if self.visited_positions_count.get(self.get_position(), 0) == 0 else 0
         )
 
     def reward_menu(self):
-        return (
-            0.05
-            if self.menu_count.get(self.map_id(self.pyboy.memory), 0) == 0
-            else -0.01
-        )
+        return 0.1 if self.menu_count.get(self.map_id(self.pyboy.memory), 0) == 0 else 0
 
     def reward_players_substitute_hp(self, memory: bytes):
         return (

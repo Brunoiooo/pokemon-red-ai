@@ -40,14 +40,15 @@ class TrainWorker:
     deque_buffer_maxlen = 50000
     ckpt_every = 25
 
-    batch_size = 64
+    batch_size = 256
     grad_accum_steps = 1
-    lr = 0.00001
+    lr = 0.0001
     weight_decay = 1e-5
     gamma = 0.99
     criterion: torch.nn.SmoothL1Loss = field(default_factory=torch.nn.SmoothL1Loss)
     tau = 0.005
     evaluate_greedy_times = 1
+    epsilon = 0.1
     # loss tracking
     running_loss_ema: float = 0.0
     loss_ema_alpha: float = 0.001
@@ -169,18 +170,16 @@ class TrainWorker:
         try:
             self.event_start.set()
 
-            deque_buffer = deque()
+            deque_buffer = deque(maxlen=self.deque_buffer_maxlen)
 
             age = 1
 
             while self.event_start.is_set():
                 count = 0
 
-                epsilon = 1 - age % self.ckpt_every / self.ckpt_every
-
                 thread = Thread(
                     target=self.run_era,
-                    kwargs={"epsilon": epsilon},
+                    kwargs={"epsilon": self.epsilon},
                     daemon=True,
                 )
                 thread.start()
@@ -192,8 +191,6 @@ class TrainWorker:
                     self.optimize_batch(deque_buffer=deque_buffer)
                     count += 1
 
-                deque_buffer.clear()
-
                 while True:
                     try:
                         deque_buffer.append(self.queue_data.get_nowait())
@@ -201,7 +198,7 @@ class TrainWorker:
                         break
 
                 self.queue_logs.put_nowait(
-                    f"Age: {age} | Count: {count} | Buffer: {len(deque_buffer)} | Epsilon: {epsilon:.4f} | Loss: {self.last_loss:.6f} | EMA Loss: {self.running_loss_ema:.6f}"
+                    f"Age: {age} | Count: {count} | Buffer: {len(deque_buffer)} | Epsilon: {self.epsilon:.4f} | Loss: {self.last_loss:.6f} | EMA Loss: {self.running_loss_ema:.6f}"
                 )
 
                 if age % self.ckpt_every == 0 and age > 0:
