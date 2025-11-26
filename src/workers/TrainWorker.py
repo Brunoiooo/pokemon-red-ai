@@ -38,9 +38,9 @@ class TrainWorker:
         default_factory=lambda: Manager().Value("b", False)
     )
     deque_buffer_maxlen = 50000
-    ckpt_every = 100
+    ckpt_every = 25
 
-    batch_size = 512
+    batch_size = 64
     grad_accum_steps = 1
     lr = 0.00001
     weight_decay = 1e-5
@@ -48,7 +48,6 @@ class TrainWorker:
     criterion: torch.nn.SmoothL1Loss = field(default_factory=torch.nn.SmoothL1Loss)
     tau = 0.005
     evaluate_greedy_times = 1
-    epsilon: float = 0.1
     # loss tracking
     running_loss_ema: float = 0.0
     loss_ema_alpha: float = 0.001
@@ -135,7 +134,7 @@ class TrainWorker:
     def best_eval_return(self, best_eval_return: float):
         self.__best_eval_return = best_eval_return
 
-    def run_era(self):
+    def run_era(self, epsilon: float):
         try:
             with self.model_lock:
                 model_state_dict = self.model.state_dict()
@@ -152,7 +151,7 @@ class TrainWorker:
                             queue_data=self.queue_data,
                             gamma=self.gamma,
                             model_state_dict=model_state_dict,
-                            epsilon=self.epsilon,
+                            epsilon=epsilon,
                             window=self.train_use_sdl,
                         ).run
                     )
@@ -170,14 +169,20 @@ class TrainWorker:
         try:
             self.event_start.set()
 
-            deque_buffer = deque(maxlen=self.deque_buffer_maxlen)
+            deque_buffer = deque()
 
             age = 1
 
             while self.event_start.is_set():
                 count = 0
 
-                thread = Thread(target=self.run_era, daemon=True)
+                epsilon = 1 - age % self.ckpt_every / self.ckpt_every
+
+                thread = Thread(
+                    target=self.run_era,
+                    kwargs={"epsilon": epsilon},
+                    daemon=True,
+                )
                 thread.start()
 
                 if len(deque_buffer) < self.batch_size:
@@ -187,13 +192,17 @@ class TrainWorker:
                     self.optimize_batch(deque_buffer=deque_buffer)
                     count += 1
 
+                deque_buffer.clear()
+
                 while True:
                     try:
                         deque_buffer.append(self.queue_data.get_nowait())
                     except Empty:
                         break
 
-                self.queue_logs.put_nowait(f"Age: {age} | Count: {count}")
+                self.queue_logs.put_nowait(
+                    f"Age: {age} | Count: {count} | Buffer: {len(deque_buffer)} | Epsilon: {epsilon:.4f} | Loss: {self.last_loss:.6f}"
+                )
 
                 if age % self.ckpt_every == 0 and age > 0:
                     self.evaluate_greedy()
@@ -250,7 +259,7 @@ class TrainWorker:
                     )
 
                 gamma_pow_n = torch.pow(self.gamma_tensor, n)
-                bootstrap_mask = (~te | ~tr).float()
+                bootstrap_mask = (~te).float()
                 target = rN + bootstrap_mask * gamma_pow_n * next_q_target
 
             loss = self.criterion(q_sa, target) / self.grad_accum_steps
@@ -276,13 +285,6 @@ class TrainWorker:
                 self.loss_ema_alpha * batch_loss
                 + (1 - self.loss_ema_alpha) * self.running_loss_ema
             )
-
-        try:
-            self.queue_logs.put_nowait(
-                f"Loss: {batch_loss:.6f} | EMA: {self.running_loss_ema:.6f}"
-            )
-        except Exception:
-            pass
 
     def collate_states(self, list_of_dicts: tuple[Any, ...]):
         batch = {}
@@ -338,15 +340,15 @@ class TrainWorker:
         self.save_latest()
 
         with self.model_lock:
-            self.model.eval()
-            avg_ret = Emulator().evaluate_greedy(
-                model=self.model,
-                evaluate_greedy_times=self.evaluate_greedy_times,
-                queue_logs=self.queue_logs,
-                is_debug=self.is_debug.value,
-                is_evaluation_window=self.is_evaluation_window.value,
-            )
-            self.model.train()
+            model_state_dict = self.model.state_dict()
+
+        avg_ret = Emulator().evaluate_greedy(
+            model_state_dict=model_state_dict,
+            evaluate_greedy_times=self.evaluate_greedy_times,
+            queue_logs=self.queue_logs,
+            is_debug=self.is_debug.value,
+            is_evaluation_window=self.is_evaluation_window.value,
+        )
 
         if self.best_eval_return < avg_ret:
             self.save_best(avg_ret)

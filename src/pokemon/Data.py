@@ -52,13 +52,9 @@ class Data:
             x | y for x, y in zip(value, self.visited_pokedex_seen)
         ]
 
-    def clean(self, path: str | None = None):
-        if path is not None:
-            self.load_data(path)
-        else:
-            self.__visited_pokedex_own = None
-            self.__visited_pokedex_seen = None
-
+    def clean(self):
+        self.__visited_pokedex_own = None
+        self.__visited_pokedex_seen = None
         self.visited_dialogs_count = {}
         self.visited_positions_count = {}
         self.menu_count = {}
@@ -374,7 +370,7 @@ class Data:
     def truncated(self):
         return (
             True
-            if 64 <= self.useless_count
+            if 32 <= self.useless_count
             or 255
             <= self.visited_dialogs_count.get(self.dialog_id(self.pyboy.memory), 0)
             or 255 <= self.battle_count
@@ -1310,24 +1306,3 @@ class Data:
         reward += self.reward_event_flags(memory)
 
         return reward
-
-    def save_data(self, path: str):
-        os.makedirs(path, exist_ok=True)
-        with open(f"{path}/data", "wb") as f:
-            pickle.dump(
-                {
-                    "visited_pokedex_own": self.pokedex_own(self.pyboy.memory),
-                    "visited_pokedex_seen": self.pokedex_seen(self.pyboy.memory),
-                },
-                f,
-            )
-
-    def load_data(self, path: str):
-        try:
-            with open(f"{path}/data", "rb") as f:
-                data = pickle.load(f)
-                self.__visited_pokedex_own = data.get("visited_pokedex_own", None)
-                self.__visited_pokedex_seen = data.get("visited_pokedex_seen", None)
-        except FileNotFoundError:
-            self.__visited_pokedex_own = None
-            self.__visited_pokedex_seen = None

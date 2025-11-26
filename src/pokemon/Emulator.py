@@ -3,12 +3,13 @@ import hashlib
 import io
 import os
 from queue import Queue
+from typing import Any
 
 from pyboy import PyBoy
 import torch
 
 from pokemon.Data import Data
-from pokemon.ModelPokemon import ModelPokemon
+from pokemon.ModelPokemon import ModelPokemon, get_model
 import keyboard
 import time
 
@@ -28,10 +29,6 @@ class Emulator:
         ["right"],
         ["up"],
         ["down"],
-        ["left", "b"],
-        ["right", "b"],
-        ["up", "b"],
-        ["down", "b"],
     ]
     ticks_per_step = 32
     ALL_BUTTONS = ["a", "b", "start", "select", "left", "right", "up", "down"]
@@ -86,7 +83,7 @@ class Emulator:
         with open(f"{path}/checkpoint.state", "rb") as f:
             self.pyboy.load_state(f)
 
-        self.data.clean(path=path)
+        self.data.clean()
 
         return (bytes(self.pyboy.memory[0:0x10000]), self.data.inputs())
 
@@ -176,13 +173,17 @@ class Emulator:
 
     def evaluate_greedy(
         self,
-        model: ModelPokemon,
+        model_state_dict: dict[str, Any],
         evaluate_greedy_times: int,
         queue_logs: Queue,
         is_debug: bool,
         is_evaluation_window: bool,
     ):
         self.use_sdl = is_evaluation_window
+
+        model = get_model(device="cpu")
+        model.load_state_dict(model_state_dict)
+        model.eval()
 
         total_reward = 0.0
         for i in range(evaluate_greedy_times):
@@ -224,5 +225,3 @@ class Emulator:
         os.makedirs(path, exist_ok=True)
         with open(f"{path}/checkpoint.state", "wb") as f:
             self.pyboy.save_state(f)
-
-        self.data.save_data(path)
