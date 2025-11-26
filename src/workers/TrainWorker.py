@@ -53,6 +53,8 @@ class TrainWorker:
     running_loss_ema: float = 0.0
     loss_ema_alpha: float = 0.001
     last_loss: float | None = None
+    target_update_interval = 1000
+    _opt_steps: int = 0
 
     __model: None | ModelPokemon = None
 
@@ -202,20 +204,16 @@ class TrainWorker:
 
     def optimize_batch(self, deque_buffer: deque):
         batch = random.sample(deque_buffer, self.batch_size)
-        (
-            inputs,
-            actions,
-            next_inputs,
-            rewards,
-            terminateds,
-            steps,
-        ) = zip(*batch)
+        (inputs, actions, next_inputs, rewards, terminateds, truncateds, steps) = zip(
+            *batch
+        )
 
         inputs = self.collate_states(inputs)
         actions = torch.tensor(actions, device=self.device, dtype=torch.long)
         next_inputs = self.collate_states(next_inputs)
         rewards = torch.tensor(rewards, device=self.device, dtype=torch.float32)
         terminateds = torch.tensor(terminateds, device=self.device, dtype=torch.bool)
+        truncateds = torch.tensor(truncateds, device=self.device, dtype=torch.bool)
         steps = torch.tensor(steps, device=self.device, dtype=torch.long)
 
         micro = self.batch_size // self.grad_accum_steps
@@ -226,13 +224,12 @@ class TrainWorker:
 
         for i in range(self.grad_accum_steps):
             sl = slice(i * micro, (i + 1) * micro)
-
             s = {k: v[sl] for k, v in inputs.items()}
             ns = {k: v[sl] for k, v in next_inputs.items()}
-
             a = actions[sl]
             rN = rewards[sl]
             te = terminateds[sl]
+            tr = truncateds[sl]
             n = steps[sl]
 
             with self.model_lock:
@@ -241,30 +238,36 @@ class TrainWorker:
 
             with torch.no_grad():
                 with self.model_lock:
+                    was_training = self.model.training
+                    self.model.eval()
                     next_q_online = self.model(ns)
-                next_a = torch.argmax(next_q_online, dim=1)
+                    next_a = torch.argmax(next_q_online, dim=1)
+                    if was_training:
+                        self.model.train()
 
-                next_q_target = (
-                    self.target_model(ns).gather(1, next_a.view(-1, 1)).squeeze(1)
-                )
+                    next_q_target = (
+                        self.target_model(ns).gather(1, next_a.view(-1, 1)).squeeze(1)
+                    )
 
                 gamma_pow_n = torch.pow(self.gamma_tensor, n)
-
-                bootstrap_mask = (~te).float()
+                bootstrap_mask = (~te | ~tr).float()
                 target = rN + bootstrap_mask * gamma_pow_n * next_q_target
 
             loss = self.criterion(q_sa, target) / self.grad_accum_steps
             loss.backward()
-
-            try:
-                batch_loss += float(loss.detach().item())
-            except Exception:
-                pass
+            batch_loss += float(loss.detach().item())
 
         with self.model_lock:
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 10.0)
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+
         self.optimizer.step()
+
+        self._opt_steps += 1
+        if self._opt_steps % self.target_update_interval == 0:
+            self.hard_update_target()
+
         self.soft_update_target()
+
         self.last_loss = batch_loss
         if self.running_loss_ema == 0.0:
             self.running_loss_ema = batch_loss
@@ -299,6 +302,11 @@ class TrainWorker:
             for p, tp in zip(self.model.parameters(), self.target_model.parameters()):
                 tp.data.copy_(self.tau * p.data + (1 - self.tau) * tp.data)
 
+    def hard_update_target(self):
+        with torch.no_grad(), self.model_lock:
+            for p, tp in zip(self.model.parameters(), self.target_model.parameters()):
+                tp.data.copy_(p.data)
+
     def save_latest(self):
         os.makedirs("models", exist_ok=True)
         with self.model_lock:
@@ -330,13 +338,15 @@ class TrainWorker:
         self.save_latest()
 
         with self.model_lock:
+            self.model.eval()
             avg_ret = Emulator().evaluate_greedy(
                 model=self.model,
                 evaluate_greedy_times=self.evaluate_greedy_times,
                 queue_logs=self.queue_logs,
-                is_debug=self.is_debug,
-                is_evaluation_window=self.is_evaluation_window,
+                is_debug=self.is_debug.value,
+                is_evaluation_window=self.is_evaluation_window.value,
             )
+            self.model.train()
 
         if self.best_eval_return < avg_ret:
             self.save_best(avg_ret)

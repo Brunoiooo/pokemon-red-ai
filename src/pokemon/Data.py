@@ -15,7 +15,7 @@ class Data:
     menu_count: dict[int, int] = field(default_factory=dict)
     battle_count: int = 0
     useless_count: int = 0
-    reward_scale: int = 100
+    reward_scale: int = 1
     __player_pokemon_size = 0x2C
     __pokemon_count = 6
 
@@ -184,7 +184,7 @@ class Data:
         if self.is_menu(self.pyboy.memory):
             reward += self.reward_menu()
 
-        return max(min(reward, 1.0), -1.0) * self.reward_scale
+        return reward * self.reward_scale
 
     def reward_core(self, memory: bytes):
         reward = 0.0

@@ -3,8 +3,6 @@ import hashlib
 import io
 import os
 from queue import Queue
-import random
-import traceback
 
 from pyboy import PyBoy
 import torch
@@ -99,12 +97,12 @@ class Emulator:
 
         terminated = self.data.terminated(memory)
 
-        if terminated:
-            self.data.clean()
-
         truncated = self.data.truncated()
 
         self.data.count(memory, reward)
+
+        if terminated:
+            self.data.clean()
 
         return (
             bytes(self.pyboy.memory[0:0x10000]),

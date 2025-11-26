@@ -63,12 +63,12 @@ class ModelPokemon(nn.Module):
         self.type_of_battle = nn.Embedding(256, 16)
         self.move_menu_type = nn.Embedding(256, 16)
 
-        self.move_id = nn.Embedding(256, 16)
-        self.move_type = nn.Embedding(256, 16)
-        self.pokemon_id = nn.Embedding(256, 16)
-        self.pokemon_type = nn.Embedding(256, 16)
-        self.sprite_id = nn.Embedding(256, 16)
-        self.item_id = nn.Embedding(256, 16)
+        self.move_id = nn.Embedding(256, 16, padding_idx=0)
+        self.move_type = nn.Embedding(256, 16, padding_idx=0)
+        self.pokemon_id = nn.Embedding(256, 16, padding_idx=0)
+        self.pokemon_type = nn.Embedding(256, 16, padding_idx=0)
+        self.sprite_id = nn.Embedding(256, 16, padding_idx=0)
+        self.item_id = nn.Embedding(256, 16, padding_idx=0)
 
         self.fc = nn.Sequential(
             nn.LayerNorm(in_dim),

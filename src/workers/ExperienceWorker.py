@@ -1,10 +1,7 @@
 from collections import deque
 from dataclasses import dataclass
-import io
 from multiprocessing import Queue
-from multiprocessing.connection import Connection
 from multiprocessing.sharedctypes import Synchronized
-from multiprocessing.synchronize import Event
 import os
 from queue import Full
 import random
@@ -131,6 +128,7 @@ class ExperienceWorker:
                             self.detach_to_cpu(self.buffer[-1]["next_inputs"]),
                             reward,
                             terminated,
+                            truncated,
                             len(self.buffer),
                         )
                     )
