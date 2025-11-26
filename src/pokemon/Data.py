@@ -116,6 +116,24 @@ class Data:
                 self.move_menu_type(self.pyboy.memory),
                 dtype=torch.long,
             ),
+            "position_x": torch.tensor(
+                self.position_x(self.pyboy.memory), dtype=torch.float32
+            ),
+            "position_y": torch.tensor(
+                self.position_y(self.pyboy.memory), dtype=torch.float32
+            ),
+            "bike_speed": torch.tensor(
+                self.bike_speed(self.pyboy.memory), dtype=torch.float32
+            ),
+            "menu_position_x": torch.tensor(
+                self.menu_position_x(self.pyboy.memory), dtype=torch.long
+            ),
+            "menu_position_y": torch.tensor(
+                self.menu_position_y(self.pyboy.memory), dtype=torch.long
+            ),
+            "current_menu_selected_item": torch.tensor(
+                self.current_menu_selected_item(self.pyboy.memory), dtype=torch.long
+            ),
             "move_id": torch.tensor(
                 [
                     self.player_selected_move(self.pyboy.memory),
@@ -163,6 +181,22 @@ class Data:
                 self.poke_mart_items(self.pyboy.memory)
                 + self.items_ids(self.pyboy.memory)
                 + self.stored_items_ids(self.pyboy.memory),
+                dtype=torch.long,
+            ),
+            "sprite_data_movement_statuses": torch.tensor(
+                self.sprite_data_movement_statuses(self.pyboy.memory),
+                dtype=torch.long,
+            ),
+            "sprite_data_facing_directions": torch.tensor(
+                self.sprite_data_facing_directions(self.pyboy.memory),
+                dtype=torch.long,
+            ),
+            "sprite_data_y_positions": torch.tensor(
+                self.sprite_data_y_positions(self.pyboy.memory),
+                dtype=torch.long,
+            ),
+            "sprite_data_x_positions": torch.tensor(
+                self.sprite_data_x_positions(self.pyboy.memory),
                 dtype=torch.long,
             ),
         }
@@ -359,7 +393,6 @@ class Data:
         data += self.dialog_data()
         data += self.menu_data()
         data += self.battle_data()
-        data += self.menu_battle_dialog_data()
 
         return data
 
@@ -376,23 +409,6 @@ class Data:
 
     def core_data(self):
         data = []
-        data += self.data_normalizer(
-            [
-                self.position_x(self.pyboy.memory),
-                self.position_y(self.pyboy.memory),
-                self.bike_speed(self.pyboy.memory),
-            ]
-        )
-        data += self.data_normalizer(
-            self.sprite_data_movement_statuses(self.pyboy.memory),
-            max=3,
-        )
-        data += self.data_normalizer(
-            self.sprite_data_facing_directions(self.pyboy.memory),
-            max=0xC,
-        )
-        data += self.data_normalizer(self.sprite_data_y_positions(self.pyboy.memory))
-        data += self.data_normalizer(self.sprite_data_x_positions(self.pyboy.memory))
         data += [
             0 if self.visited_positions_count.get(self.get_position(), 0) == 0 else 1
         ]
@@ -488,23 +504,6 @@ class Data:
 
     def sprite_data_x_positions(self, memory: PyBoyMemoryView | bytes):
         return [memory[0xC205 + 0x10 * x] for x in range(16)]
-
-    def menu_battle_dialog_data(self):
-        data = self.data_normalizer(
-            [
-                self.menu_position_x(self.pyboy.memory),
-                self.menu_position_y(self.pyboy.memory),
-                self.current_menu_selected_item(self.pyboy.memory),
-            ]
-        )
-
-        return (
-            data
-            if self.is_menu(self.pyboy.memory)
-            or self.is_battle(self.pyboy.memory)
-            or self.is_dialog(self.pyboy.memory)
-            else [0] * len(data)
-        )
 
     def menu_position_x(self, memory: PyBoyMemoryView | bytes):
         return memory[0xCC24]

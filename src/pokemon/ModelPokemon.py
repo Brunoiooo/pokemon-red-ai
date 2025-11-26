@@ -12,7 +12,7 @@ def get_model(device: str, name: str | None = None):
 
     continuous_dim = len(inputs["continuous"])
 
-    single_embed_dim = 16 + 16 + 4 + 16 + 16
+    single_embed_dim = 16 + 16 + 4 + 16 + 16 + 16 + 16 + 16 + 16 + 16 + 16
 
     multi_embed_dim = (
         len(inputs["move_id"]) * 16
@@ -21,6 +21,10 @@ def get_model(device: str, name: str | None = None):
         + len(inputs["pokemon_type"]) * 16
         + len(inputs["sprite_id"]) * 16
         + len(inputs["item_id"]) * 16
+        + len(inputs["sprite_data_movement_statuses"]) * 2
+        + len(inputs["sprite_data_facing_directions"]) * 4
+        + len(inputs["sprite_data_y_positions"]) * 16
+        + len(inputs["sprite_data_x_positions"]) * 16
     )
 
     total_in_dim = continuous_dim + single_embed_dim + multi_embed_dim
@@ -62,6 +66,12 @@ class ModelPokemon(nn.Module):
         self.index_of_current_pokemon_send_out = nn.Embedding(6, 4)
         self.type_of_battle = nn.Embedding(256, 16)
         self.move_menu_type = nn.Embedding(256, 16)
+        self.position_x = nn.Embedding(256, 16)
+        self.position_y = nn.Embedding(256, 16)
+        self.bike_speed = nn.Embedding(256, 16, padding_idx=0)
+        self.menu_position_x = nn.Embedding(256, 16)
+        self.menu_position_y = nn.Embedding(256, 16)
+        self.current_menu_selected_item = nn.Embedding(256, 16)
 
         self.move_id = nn.Embedding(256, 16, padding_idx=0)
         self.move_type = nn.Embedding(256, 16, padding_idx=0)
@@ -69,6 +79,10 @@ class ModelPokemon(nn.Module):
         self.pokemon_type = nn.Embedding(256, 16, padding_idx=0)
         self.sprite_id = nn.Embedding(256, 16, padding_idx=0)
         self.item_id = nn.Embedding(256, 16, padding_idx=0)
+        self.sprite_data_movement_statuses = nn.Embedding(4, 2)
+        self.sprite_data_facing_directions = nn.Embedding(13, 4)
+        self.sprite_data_y_positions = nn.Embedding(256, 16, padding_idx=0)
+        self.sprite_data_x_positions = nn.Embedding(256, 16, padding_idx=0)
 
         self.fc = nn.Sequential(
             nn.LayerNorm(in_dim),
@@ -132,6 +146,24 @@ class ModelPokemon(nn.Module):
         move_menu_emb = self.move_menu_type(
             self._as_long_scalar_batch(x["move_menu_type"], device)
         )
+        position_x_emb = self.position_x(
+            self._as_long_scalar_batch(x["position_x"], device)
+        )
+        position_y_emb = self.position_y(
+            self._as_long_scalar_batch(x["position_y"], device)
+        )
+        bike_speed_emb = self.bike_speed(
+            self._as_long_scalar_batch(x["bike_speed"], device)
+        )
+        menu_position_x_emb = self.menu_position_x(
+            self._as_long_scalar_batch(x["menu_position_x"], device)
+        )
+        menu_position_y_emb = self.menu_position_y(
+            self._as_long_scalar_batch(x["menu_position_y"], device)
+        )
+        current_menu_selected_item_emb = self.current_menu_selected_item(
+            self._as_long_scalar_batch(x["current_menu_selected_item"], device)
+        )
 
         move_id_full = self.move_id(self._as_long_seq_batch(x["move_id"], device))
         move_id_emb = move_id_full.reshape(move_id_full.size(0), -1)
@@ -155,6 +187,34 @@ class ModelPokemon(nn.Module):
         item_id_full = self.item_id(self._as_long_seq_batch(x["item_id"], device))
         item_id_emb = item_id_full.reshape(item_id_full.size(0), -1)
 
+        sprite_data_movement_statuses_full = self.sprite_data_movement_statuses(
+            self._as_long_seq_batch(x["sprite_data_movement_statuses"], device)
+        )
+        sprite_data_movement_statuses_emb = sprite_data_movement_statuses_full.reshape(
+            sprite_data_movement_statuses_full.size(0), -1
+        )
+
+        sprite_data_facing_directions_full = self.sprite_data_facing_directions(
+            self._as_long_seq_batch(x["sprite_data_facing_directions"], device)
+        )
+        sprite_data_facing_directions_emb = sprite_data_facing_directions_full.reshape(
+            sprite_data_facing_directions_full.size(0), -1
+        )
+
+        sprite_data_y_positions_full = self.sprite_data_y_positions(
+            self._as_long_seq_batch(x["sprite_data_y_positions"], device)
+        )
+        sprite_data_y_positions_emb = sprite_data_y_positions_full.reshape(
+            sprite_data_y_positions_full.size(0), -1
+        )
+
+        sprite_data_x_positions_full = self.sprite_data_x_positions(
+            self._as_long_seq_batch(x["sprite_data_x_positions"], device)
+        )
+        sprite_data_x_positions_emb = sprite_data_x_positions_full.reshape(
+            sprite_data_x_positions_full.size(0), -1
+        )
+
         h = torch.cat(
             [
                 cont,
@@ -163,12 +223,22 @@ class ModelPokemon(nn.Module):
                 index_emb,
                 type_battle_emb,
                 move_menu_emb,
+                position_x_emb,
+                position_y_emb,
+                bike_speed_emb,
+                menu_position_x_emb,
+                menu_position_y_emb,
+                current_menu_selected_item_emb,
                 move_id_emb,
                 move_type_emb,
                 pokemon_id_emb,
                 pokemon_type_emb,
                 sprite_id_emb,
                 item_id_emb,
+                sprite_data_movement_statuses_emb,
+                sprite_data_facing_directions_emb,
+                sprite_data_y_positions_emb,
+                sprite_data_x_positions_emb,
             ],
             dim=1,
         )
