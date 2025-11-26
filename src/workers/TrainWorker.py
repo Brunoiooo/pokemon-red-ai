@@ -51,7 +51,7 @@ class TrainWorker:
     # loss tracking
     running_loss_ema: float = 0.0
     loss_ema_alpha: float = 0.001
-    last_loss: float | None = None
+    last_loss: float = 0.0
     target_update_interval = 1000
     _opt_steps: int = 0
 
@@ -201,7 +201,7 @@ class TrainWorker:
                         break
 
                 self.queue_logs.put_nowait(
-                    f"Age: {age} | Count: {count} | Buffer: {len(deque_buffer)} | Epsilon: {epsilon:.4f} | Loss: {self.last_loss:.6f}"
+                    f"Age: {age} | Count: {count} | Buffer: {len(deque_buffer)} | Epsilon: {epsilon:.4f} | Loss: {self.last_loss:.6f} | EMA Loss: {self.running_loss_ema:.6f}"
                 )
 
                 if age % self.ckpt_every == 0 and age > 0:
