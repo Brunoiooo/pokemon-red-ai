@@ -68,13 +68,12 @@ class TrainModel:
                 f"Evaluation Worker (pid={self.evaluate_process.pid}) is already running"
             )
 
-        model = get_model("cpu", "best" if best_model else "latest")
-        model.eval()
-
         self.evaluate_process = Process(
             target=Emulator().evaluate_greedy,
             kwargs={
-                "model": model,
+                "model_state_dict": get_model(
+                    "cpu", "best" if best_model else "latest"
+                ).state_dict(),
                 "evaluate_greedy_times": 1,
                 "queue_logs": self.train_worker.queue_logs,
                 "is_debug": self.train_worker.is_debug.value,
