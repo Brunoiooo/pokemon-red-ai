@@ -22,6 +22,7 @@ class ExperienceWorker:
     model_state_dict: dict[str, Any]
     epsilon: float
     td_error_steps = 5
+    start_save_chance = 0.2
 
     __last_save_path = "last"
 
@@ -66,7 +67,13 @@ class ExperienceWorker:
 
     def run(self):
         try:
-            memory, inputs = self.emulator.reset(dir=self.last_save_path)
+            memory, inputs = self.emulator.reset(
+                dir=(
+                    "start"
+                    if random.random() < self.start_save_chance
+                    else self.last_save_path
+                )
+            )
 
             while True:
                 action = self.get_action(inputs)
