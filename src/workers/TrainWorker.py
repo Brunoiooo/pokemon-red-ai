@@ -38,7 +38,7 @@ class TrainWorker:
         default_factory=lambda: Manager().Value("b", False)
     )
     deque_buffer_maxlen = 50000
-    ckpt_every = 25
+    ckpt_every = 10
 
     batch_size = 256
     grad_accum_steps = 1
@@ -48,7 +48,7 @@ class TrainWorker:
     criterion: torch.nn.SmoothL1Loss = field(default_factory=torch.nn.SmoothL1Loss)
     tau = 0.005
     evaluate_greedy_times = 1
-    epsilon = 0.1
+    epsilon = 0.3
     # loss tracking
     running_loss_ema: float = 0.0
     loss_ema_alpha: float = 0.001

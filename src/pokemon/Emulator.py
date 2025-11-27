@@ -9,7 +9,7 @@ from pyboy import PyBoy
 import torch
 
 from pokemon.Data import Data
-from pokemon.ModelPokemon import ModelPokemon, get_model
+from pokemon.ModelPokemon import get_model
 import keyboard
 import time
 
@@ -189,8 +189,6 @@ class Emulator:
         for i in range(evaluate_greedy_times):
             memory, inputs = self.reset(dir="start")
 
-            self.save_last_checkpoint("saves/last")
-
             while True:
                 with torch.inference_mode():
                     q = model(inputs)
@@ -198,9 +196,14 @@ class Emulator:
 
                 action = int(torch.argmax(q).item())
 
+                useless_count = self.data.useless_count
+
                 next_memory, next_inputs, reward, terminated, truncated = self.step(
                     memory=memory, action=action
                 )
+
+                if useless_count == 0 and 0 < self.data.useless_count:
+                    self.save_last_checkpoint("saves/last")
 
                 total_reward += reward
 
@@ -208,9 +211,6 @@ class Emulator:
                     queue_logs.put_nowait(
                         f"Episode: {i + 1}, Action: {action}, Reward: {reward:.2f}, Terminated: {terminated}, Truncated: {truncated}"
                     )
-
-                if terminated:
-                    self.save_last_checkpoint("saves/last")
 
                 if truncated:
                     break
