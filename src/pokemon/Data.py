@@ -1,6 +1,4 @@
 from dataclasses import dataclass, field
-import os
-import pickle
 
 from pyboy import PyBoy, PyBoyMemoryView
 import torch
@@ -10,8 +8,9 @@ import torch
 class Data:
     pyboy: PyBoy
 
-    visited_dialogs_count: dict[str, int] = field(default_factory=dict)
+    visited_dialogs_count: dict[int, int] = field(default_factory=dict)
     visited_positions_count: dict[str, int] = field(default_factory=dict)
+    visited_maps_count: dict[int, int] = field(default_factory=dict)
     menu_count: dict[int, int] = field(default_factory=dict)
     battle_count: int = 0
     useless_count: int = 0
@@ -55,6 +54,7 @@ class Data:
         self.__visited_pokedex_own = None
         self.__visited_pokedex_seen = None
         self.visited_dialogs_count = {}
+        self.visited_maps_count = {}
         self.visited_positions_count = {}
         self.menu_count = {}
         self.battle_count = 0
@@ -86,6 +86,9 @@ class Data:
 
         self.visited_pokedex_own = self.pokedex_own(self.pyboy.memory)
         self.visited_pokedex_seen = self.pokedex_seen(self.pyboy.memory)
+
+        self.visited_maps_count.setdefault(self.map_id(self.pyboy.memory), 0)
+        self.visited_maps_count[self.map_id(self.pyboy.memory)] += 1
 
         if 0 < reward:
             self.useless_count = 0
@@ -228,8 +231,12 @@ class Data:
         reward += self.reward_player_pokemons_defenses(memory)
         reward += self.reward_player_pokemons_speeds(memory)
         reward += self.reward_player_pokemons_pps(memory)
+        reward += self.reward_map(memory)
 
         return reward
+
+    def reward_map(self, memory: bytes):
+        return 0.3 if self.visited_maps_count.get(self.map_id(memory), 0) < 4 else 0.0
 
     def reward_player_pokemons_current_hps(self, memory: bytes):
         reward = 0.0
@@ -369,7 +376,7 @@ class Data:
     def truncated(self):
         return (
             True
-            if 32 <= self.useless_count
+            if 64 <= self.useless_count
             or 255
             <= self.visited_dialogs_count.get(self.dialog_id(self.pyboy.memory), 0)
             or 255 <= self.battle_count
@@ -1140,13 +1147,13 @@ class Data:
 
     def reward_dialog(self):
         return (
-            0.2
-            if self.visited_dialogs_count.get(self.dialog_id(self.pyboy.memory), 0) == 0
+            0.1
+            if self.visited_dialogs_count.get(self.dialog_id(self.pyboy.memory), 0) < 8
             else 0
         )
 
     def reward_battle(self, memory: bytes):
-        reward = 0.2 if self.battle_count == 0 else 0
+        reward = 0.1 if self.battle_count < 4 else 0
 
         reward += self.reward_players_substitute_hp(memory)
         reward += self.reward_enemy_substitute_hp(memory)
@@ -1161,11 +1168,11 @@ class Data:
 
     def reward_position(self):
         return (
-            0.2 if self.visited_positions_count.get(self.get_position(), 0) == 0 else 0
+            0.1 if self.visited_positions_count.get(self.get_position(), 0) == 0 else 0
         )
 
     def reward_menu(self):
-        return 0.2 if self.menu_count.get(self.map_id(self.pyboy.memory), 0) == 0 else 0
+        return 0.1 if self.menu_count.get(self.map_id(self.pyboy.memory), 0) == 0 else 0
 
     def reward_players_substitute_hp(self, memory: bytes):
         return (
