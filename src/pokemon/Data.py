@@ -71,17 +71,14 @@ class Data:
 
         if self.is_dialog(self.pyboy.memory):
             self.visited_dialogs_count.setdefault(self.dialog_id(self.pyboy.memory), 0)
-
             self.visited_dialogs_count[self.dialog_id(self.pyboy.memory)] += 1
 
         if self.is_world(self.pyboy.memory):
             self.visited_positions_count.setdefault(self.get_position(), 0)
-
             self.visited_positions_count[self.get_position()] += 1
 
         if self.is_menu(self.pyboy.memory):
             self.menu_count.setdefault(self.map_id(self.pyboy.memory), 0)
-
             self.menu_count[self.map_id(self.pyboy.memory)] += 1
 
         self.visited_pokedex_own = self.pokedex_own(self.pyboy.memory)
@@ -131,6 +128,52 @@ class Data:
             ),
             "current_menu_selected_item": torch.tensor(
                 self.current_menu_selected_item(self.pyboy.memory), dtype=torch.long
+            ),
+            "visited_dialogs_count": torch.tensor(
+                (
+                    min(
+                        self.visited_dialogs_count.get(
+                            self.dialog_id(self.pyboy.memory), 0
+                        ),
+                        8,
+                    )
+                    if self.is_dialog(self.pyboy.memory)
+                    else 0
+                ),
+                dtype=torch.long,
+            ),
+            "visited_maps_count": torch.tensor(
+                (
+                    min(
+                        self.visited_maps_count.get(self.map_id(self.pyboy.memory), 0),
+                        4,
+                    )
+                    if self.is_world(self.pyboy.memory)
+                    else 0
+                ),
+                dtype=torch.long,
+            ),
+            "menu_count": torch.tensor(
+                (
+                    min(
+                        self.menu_count.get(self.map_id(self.pyboy.memory), 0),
+                        4,
+                    )
+                    if not self.is_battle(self.pyboy.memory)
+                    else 0
+                ),
+                dtype=torch.long,
+            ),
+            "battle_count": torch.tensor(
+                (
+                    min(
+                        self.battle_count,
+                        4,
+                    )
+                    if self.is_battle(self.pyboy.memory)
+                    else 0
+                ),
+                dtype=torch.long,
             ),
             "move_id": torch.tensor(
                 [
@@ -383,11 +426,19 @@ class Data:
         data = []
 
         data += self.core_data()
-        data += self.dialog_data()
-        data += self.menu_data()
         data += self.battle_data()
+        data += self.world_data()
 
         return data
+
+    def world_data(self):
+        return [
+            (
+                min(self.visited_positions_count.get(self.get_position(), 0), 1)
+                if self.is_world(self.pyboy.memory)
+                else 0
+            )
+        ]
 
     def game_mode_flags_data(self):
         return [
@@ -419,18 +470,6 @@ class Data:
         data += self.stored_pokemon_data(self.pyboy.memory)
 
         return data
-
-    def dialog_data(self):
-        data = [
-            (
-                0
-                if self.visited_dialogs_count.get(self.dialog_id(self.pyboy.memory), 0)
-                == 0
-                else 1
-            )
-        ]
-
-        return data if self.is_dialog(self.pyboy.memory) else [0] * len(data)
 
     def map_id(self, memory: PyBoyMemoryView | bytes):
         return memory[0xD35E]
@@ -510,13 +549,6 @@ class Data:
     def index_of_current_pokemon_send_out(self, memory: PyBoyMemoryView | bytes):
         return memory[0xCC2F]
 
-    def menu_data(self):
-        data = [
-            0 if self.menu_count.get(self.map_id(self.pyboy.memory), 0) == 0 else 1,
-        ]
-
-        return data if self.is_menu(self.pyboy.memory) else [0] * len(data)
-
     def battle_data(self):
         data_bit = (
             self.enemy_status(self.pyboy.memory)
@@ -528,7 +560,6 @@ class Data:
                 self.critical_hit_flag(self.pyboy.memory),
                 self.one_hit_ko_flag(self.pyboy.memory),
                 self.hooked_pokemon_flag(self.pyboy.memory),
-                0 if self.battle_count == 0 else 1,
             ]
         )
         data_byte = self.data_normalizer(

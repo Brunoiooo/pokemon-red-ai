@@ -12,7 +12,9 @@ def get_model(device: str, name: str | None = None):
 
     continuous_dim = len(inputs["continuous"])
 
-    single_embed_dim = 16 + 16 + 4 + 16 + 16 + 16 + 16 + 16 + 16 + 16 + 16
+    single_embed_dim = (
+        16 + 16 + 4 + 16 + 16 + 16 + 16 + 16 + 16 + 16 + 16 + 2 + 2 + 2 + 2
+    )
 
     multi_embed_dim = (
         len(inputs["move_id"]) * 16
@@ -72,6 +74,10 @@ class ModelPokemon(nn.Module):
         self.menu_position_x = nn.Embedding(256, 16)
         self.menu_position_y = nn.Embedding(256, 16)
         self.current_menu_selected_item = nn.Embedding(256, 16)
+        self.visited_dialogs_count = nn.Embedding(9, 2, padding_idx=0)
+        self.visited_maps_count = nn.Embedding(5, 2, padding_idx=0)
+        self.menu_count = nn.Embedding(5, 2, padding_idx=0)
+        self.battle_count = nn.Embedding(5, 2, padding_idx=0)
 
         self.move_id = nn.Embedding(256, 16, padding_idx=0)
         self.move_type = nn.Embedding(256, 16, padding_idx=0)
@@ -164,6 +170,18 @@ class ModelPokemon(nn.Module):
         current_menu_selected_item_emb = self.current_menu_selected_item(
             self._as_long_scalar_batch(x["current_menu_selected_item"], device)
         )
+        visited_dialogs_count_emb = self.visited_dialogs_count(
+            self._as_long_scalar_batch(x["visited_dialogs_count"], device)
+        )
+        visited_maps_count_emb = self.visited_maps_count(
+            self._as_long_scalar_batch(x["visited_maps_count"], device)
+        )
+        menu_count_emb = self.menu_count(
+            self._as_long_scalar_batch(x["menu_count"], device)
+        )
+        battle_count_emb = self.battle_count(
+            self._as_long_scalar_batch(x["battle_count"], device)
+        )
 
         move_id_full = self.move_id(self._as_long_seq_batch(x["move_id"], device))
         move_id_emb = move_id_full.reshape(move_id_full.size(0), -1)
@@ -229,6 +247,10 @@ class ModelPokemon(nn.Module):
                 menu_position_x_emb,
                 menu_position_y_emb,
                 current_menu_selected_item_emb,
+                visited_dialogs_count_emb,
+                visited_maps_count_emb,
+                menu_count_emb,
+                battle_count_emb,
                 move_id_emb,
                 move_type_emb,
                 pokemon_id_emb,
