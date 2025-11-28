@@ -374,16 +374,7 @@ class Data:
         return True if 0 < self.reward_badges(memory) else False
 
     def truncated(self):
-        return (
-            True
-            if 64 <= self.useless_count
-            or 255
-            <= self.visited_dialogs_count.get(self.dialog_id(self.pyboy.memory), 0)
-            or 255 <= self.battle_count
-            or 255 <= self.visited_positions_count.get(self.get_position(), 0)
-            or 255 <= self.menu_count.get(self.map_id(self.pyboy.memory), 0)
-            else False
-        )
+        return True if 64 <= self.useless_count else False
 
     def number_of_turns_in_current_battle(self, memory: bytes):
         return memory[0xCCD5]
