@@ -39,9 +39,7 @@ class TrainController:
         self.__view.button_start.configure(
             state=(
                 "disabled"
-                if self.__model.process
-                and self.__model.process.is_alive()
-                or self.__model.train_worker.event_start.is_set()
+                if self.__model.train_worker.event_start.is_set()
                 else "normal"
             )
         )
@@ -49,8 +47,6 @@ class TrainController:
             state=(
                 "disabled"
                 if not self.__model.train_worker.event_start.is_set()
-                or not self.__model.process
-                or not self.__model.process.is_alive()
                 else "normal"
             )
         )
@@ -84,20 +80,14 @@ class TrainController:
     def start(self):
         try:
             self.__model.start()
-
-            self.__run_logs()
         except Exception as e:
             messagebox.showerror("start", e)
-        finally:
-            self.__refresh()
 
     def stop(self):
         try:
             self.__model.train_worker.event_start.clear()
         except Exception as e:
             messagebox.showerror("stop", e)
-        finally:
-            self.__refresh()
 
     def __run_logs(self):
         try:

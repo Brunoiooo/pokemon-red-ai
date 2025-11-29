@@ -174,7 +174,6 @@ class Emulator:
     def evaluate_greedy(
         self,
         model_state_dict: dict[str, Any],
-        evaluate_greedy_times: int,
         queue_logs: Queue,
         is_debug: bool,
         is_evaluation_window: bool,
@@ -186,40 +185,40 @@ class Emulator:
         model.eval()
 
         total_reward = 0.0
-        for i in range(evaluate_greedy_times):
-            memory, inputs = self.reset(dir="start")
 
-            while True:
-                with torch.inference_mode():
-                    q = model(inputs)
-                    q = q.squeeze(0)
+        memory, inputs = self.reset(dir="start")
 
-                action = int(torch.argmax(q).item())
+        while True:
+            with torch.inference_mode():
+                q = model(inputs)
+                q = q.squeeze(0)
 
-                useless_count = self.data.useless_count
+            action = int(torch.argmax(q).item())
 
-                next_memory, next_inputs, reward, terminated, truncated = self.step(
-                    memory=memory, action=action
+            useless_count = self.data.useless_count
+
+            next_memory, next_inputs, reward, terminated, truncated = self.step(
+                memory=memory, action=action
+            )
+
+            if useless_count == 0 and 0 < self.data.useless_count:
+                self.save_last_checkpoint("saves/last")
+
+            total_reward += reward
+
+            if is_debug:
+                queue_logs.put_nowait(
+                    f"Action: {action}, Reward: {reward:.2f}, Terminated: {terminated}, Truncated: {truncated}"
                 )
 
-                if useless_count == 0 and 0 < self.data.useless_count:
-                    self.save_last_checkpoint("saves/last")
+            if truncated:
+                break
 
-                total_reward += reward
-
-                if is_debug:
-                    queue_logs.put_nowait(
-                        f"Episode: {i + 1}, Action: {action}, Reward: {reward:.2f}, Terminated: {terminated}, Truncated: {truncated}"
-                    )
-
-                if truncated:
-                    break
-
-                memory, inputs = (next_memory, next_inputs)
+            memory, inputs = (next_memory, next_inputs)
 
         self.pyboy.stop(False)
 
-        return total_reward / evaluate_greedy_times
+        return total_reward
 
     def save_last_checkpoint(self, path: str):
         os.makedirs(path, exist_ok=True)

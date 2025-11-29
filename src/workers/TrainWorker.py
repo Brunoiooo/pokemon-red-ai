@@ -9,6 +9,7 @@ import os
 from queue import Empty
 import random
 from threading import RLock, Thread
+from time import sleep
 import traceback
 from typing import Any
 import torch.optim as optim
@@ -31,14 +32,14 @@ class TrainWorker:
     queue_logs: Queue = field(default_factory=lambda: Manager().Queue())
     model_lock: RLock = field(default_factory=lambda: Manager().RLock())
     is_debug: Synchronized = field(default_factory=lambda: Manager().Value("b", False))
+    deque_buffer = deque(maxlen=50000)
+    deque_buffer_lock: RLock = field(default_factory=lambda: Manager().RLock())
     is_evaluation_window: Synchronized = field(
         default_factory=lambda: Manager().Value("b", False)
     )
     train_use_sdl: Synchronized = field(
         default_factory=lambda: Manager().Value("b", False)
     )
-    deque_buffer_maxlen = 50000
-    ckpt_every = 10
 
     batch_size = 256
     grad_accum_steps = 1
@@ -47,7 +48,6 @@ class TrainWorker:
     gamma = 0.99
     criterion: torch.nn.SmoothL1Loss = field(default_factory=torch.nn.SmoothL1Loss)
     tau = 0.005
-    evaluate_greedy_times = 1
     epsilon = 0.3
     # loss tracking
     running_loss_ema: float = 0.0
@@ -135,81 +135,190 @@ class TrainWorker:
     def best_eval_return(self, best_eval_return: float):
         self.__best_eval_return = best_eval_return
 
-    def run_era(self, epsilon: float):
+    __run_queue_thread: Thread | None = None
+
+    @property
+    def run_queue_thread(self):
+        if not self.__run_queue_thread:
+            self.__run_queue_thread = Thread(target=self.run_queue, daemon=True)
+
+        return self.__run_queue_thread
+
+    @run_queue_thread.setter
+    def run_queue_thread(self, value: Thread | None):
+        self.__run_queue_thread = value
+
+    __run_train_thread: Thread | None = None
+
+    @property
+    def run_train_thread(self):
+        if not self.__run_train_thread:
+            self.__run_train_thread = Thread(target=self.run_train, daemon=True)
+
+        return self.__run_train_thread
+
+    @run_train_thread.setter
+    def run_train_thread(self, value: Thread | None):
+        self.__run_train_thread = value
+
+    __run_workers_thread: Thread | None = None
+
+    @property
+    def run_workers_thread(self):
+        if not self.__run_workers_thread:
+            self.__run_workers_thread = Thread(target=self.run_workers, daemon=True)
+
+        return self.__run_workers_thread
+
+    @run_workers_thread.setter
+    def run_workers_thread(self, value: Thread | None):
+        self.__run_workers_thread = value
+
+    __run_evaluate_thread: Thread | None = None
+
+    @property
+    def run_evaluate_thread(self):
+        if not self.__run_evaluate_thread:
+            self.__run_evaluate_thread = Thread(target=self.run_evaluate, daemon=True)
+
+        return self.__run_evaluate_thread
+
+    @run_evaluate_thread.setter
+    def run_evaluate_thread(self, value: Thread | None):
+        self.__run_evaluate_thread = value
+
+    def run(self):
         try:
-            with self.model_lock:
-                model_state_dict = self.model.state_dict()
+            self.queue_logs.put_nowait("TrainWorker starting up.")
 
-            ctx = mp.get_context("spawn")
+            self.event_start.set()
 
-            with ProcessPoolExecutor(
-                max_workers=self.max_workers, mp_context=ctx
-            ) as pool:
-                futures = [
-                    pool.submit(
-                        ExperienceWorker(
-                            queue_logs=self.queue_logs,
-                            queue_data=self.queue_data,
-                            gamma=self.gamma,
-                            model_state_dict=model_state_dict,
-                            epsilon=epsilon,
-                            window=self.train_use_sdl,
-                        ).run
-                    )
-                    for _ in range(self.max_workers)
-                ]
+            if not self.run_queue_thread.is_alive():
+                self.run_queue_thread = None
+                self.run_queue_thread.start()
 
-                for future in futures:
-                    future.result()
+            if not self.run_train_thread.is_alive():
+                self.run_train_thread = None
+                self.run_train_thread.start()
 
+            if not self.run_workers_thread.is_alive():
+                self.run_workers_thread = None
+                self.run_workers_thread.start()
+
+            if not self.run_evaluate_thread.is_alive():
+                self.run_evaluate_thread = None
+                self.run_evaluate_thread.start()
         except Exception as e:
             self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
             self.event_start.clear()
+        finally:
+            self.queue_logs.put_nowait("TrainWorker setted up.")
 
     def run_train(self):
         try:
-            self.event_start.set()
+            self.queue_logs.put_nowait("Training started.")
 
-            deque_buffer = deque(maxlen=self.deque_buffer_maxlen)
-
-            age = 1
-
+            count = 0
             while self.event_start.is_set():
-                count = 0
+                self.optimize_batch()
 
-                thread = Thread(
-                    target=self.run_era,
-                    kwargs={"epsilon": self.epsilon},
-                    daemon=True,
-                )
-                thread.start()
+                if self.is_debug.value and count % 10 == 0:
+                    with self.deque_buffer_lock:
+                        self.queue_logs.put_nowait(
+                            f"Count: {count} | Buffer: {len(self.deque_buffer)} | Epsilon: {self.epsilon:.2f} | Loss: {self.last_loss:.6f} | EMA Loss: {self.running_loss_ema:.6f}"
+                        )
 
-                if len(deque_buffer) < self.batch_size:
-                    thread.join()
-
-                while thread.is_alive():
-                    self.optimize_batch(deque_buffer=deque_buffer)
-                    count += 1
-
-                while True:
-                    try:
-                        deque_buffer.append(self.queue_data.get_nowait())
-                    except Empty:
-                        break
-
-                self.queue_logs.put_nowait(
-                    f"Age: {age} | Count: {count} | Buffer: {len(deque_buffer)} | Epsilon: {self.epsilon:.4f} | Loss: {self.last_loss:.6f} | EMA Loss: {self.running_loss_ema:.6f}"
-                )
-
-                if age % self.ckpt_every == 0 and age > 0:
-                    self.evaluate_greedy()
-
-                age += 1
+                count += 1
         except Exception as e:
             self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
+        finally:
+            self.event_start.clear()
+            self.queue_logs.put_nowait("Train stopped.")
 
-    def optimize_batch(self, deque_buffer: deque):
-        batch = random.sample(deque_buffer, self.batch_size)
+    def run_workers(self):
+        try:
+            self.queue_logs.put_nowait("Workers started.")
+
+            while self.event_start.is_set():
+                with self.model_lock:
+                    model_state_dict = self.model.state_dict()
+
+                with ProcessPoolExecutor(
+                    max_workers=self.max_workers, mp_context=mp.get_context("spawn")
+                ) as pool:
+                    futures = [
+                        pool.submit(
+                            ExperienceWorker(
+                                queue_logs=self.queue_logs,
+                                queue_data=self.queue_data,
+                                gamma=self.gamma,
+                                model_state_dict=model_state_dict,
+                                epsilon=self.epsilon,
+                                window=self.train_use_sdl,
+                            ).run
+                        )
+                        for _ in range(self.max_workers)
+                    ]
+
+                    for future in futures:
+                        future.result()
+
+        except Exception as e:
+            self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
+        finally:
+            self.event_start.clear()
+            self.queue_logs.put_nowait("Workers stopped.")
+
+    def run_queue(self):
+        try:
+            self.queue_logs.put_nowait("Queue handler started.")
+
+            while self.event_start.is_set():
+                with self.deque_buffer_lock:
+                    self.deque_buffer.append(self.queue_data.get())
+        except Exception as e:
+            self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
+        finally:
+            self.event_start.clear()
+            self.queue_logs.put_nowait("Queue handler stopped.")
+
+    def run_evaluate(self):
+        try:
+            self.queue_logs.put_nowait(f"Starting evaluation.")
+
+            while self.event_start.is_set():
+                with self.model_lock:
+                    model_state_dict = self.model.state_dict()
+
+                self.save_latest()
+
+                avg_ret = Emulator().evaluate_greedy(
+                    model_state_dict=model_state_dict,
+                    queue_logs=self.queue_logs,
+                    is_debug=self.is_debug.value,
+                    is_evaluation_window=self.is_evaluation_window.value,
+                )
+
+                if self.best_eval_return < avg_ret:
+                    self.save_best(avg_ret)
+
+                self.queue_logs.put_nowait(f"Finished evaluation {avg_ret:.2f}.")
+
+        except Exception as e:
+            self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
+        finally:
+            self.event_start.clear()
+            self.queue_logs.put_nowait("Evaluation stopped.")
+
+    def optimize_batch(self):
+        with self.deque_buffer_lock:
+            if len(self.deque_buffer) < self.batch_size:
+                sleep(0.1)
+                return
+
+        with self.deque_buffer_lock:
+            batch = random.sample(self.deque_buffer, self.batch_size)
+
         (inputs, actions, next_inputs, rewards, terminateds, truncateds, steps) = zip(
             *batch
         )
@@ -330,24 +439,3 @@ class TrainWorker:
                 },
                 "models/best.pth",
             )
-
-    def evaluate_greedy(self):
-        self.queue_logs.put_nowait(f"Starting evaluation.")
-
-        self.save_latest()
-
-        with self.model_lock:
-            model_state_dict = self.model.state_dict()
-
-        avg_ret = Emulator().evaluate_greedy(
-            model_state_dict=model_state_dict,
-            evaluate_greedy_times=self.evaluate_greedy_times,
-            queue_logs=self.queue_logs,
-            is_debug=self.is_debug.value,
-            is_evaluation_window=self.is_evaluation_window.value,
-        )
-
-        if self.best_eval_return < avg_ret:
-            self.save_best(avg_ret)
-
-        self.queue_logs.put_nowait(f"Finished evaluation {avg_ret:.2f}.")

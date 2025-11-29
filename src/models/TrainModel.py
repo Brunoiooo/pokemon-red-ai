@@ -56,11 +56,7 @@ class TrainModel:
         if self.process is not None and self.process.is_alive():
             raise RuntimeError(f"Worker (pid={self.process.pid}) is already running")
 
-        self.process = Process(
-            target=self.train_worker.run_train,
-            daemon=False,
-        )
-        self.process.start()
+        self.train_worker.run()
 
     def start_evaluation(self, best_model: bool):
         if self.evaluate_process is not None and self.evaluate_process.is_alive():
@@ -74,7 +70,6 @@ class TrainModel:
                 "model_state_dict": get_model(
                     "cpu", "best" if best_model else "latest"
                 ).state_dict(),
-                "evaluate_greedy_times": 1,
                 "queue_logs": self.train_worker.queue_logs,
                 "is_debug": self.train_worker.is_debug.value,
                 "is_evaluation_window": self.train_worker.is_evaluation_window,
