@@ -197,8 +197,6 @@ class Emulator:
 
             action = int(torch.argmax(q).item())
 
-            useless_count = self.data.useless_count
-
             next_memory, next_inputs, reward, terminated, truncated = self.step(
                 memory=memory, action=action
             )
