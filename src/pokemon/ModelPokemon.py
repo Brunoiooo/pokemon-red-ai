@@ -1,3 +1,4 @@
+import math
 import os
 import torch
 import torch.nn as nn
@@ -12,9 +13,7 @@ def get_model(device: str, name: str | None = None):
 
     continuous_dim = len(inputs["continuous"])
 
-    single_embed_dim = (
-        16 + 16 + 4 + 16 + 16 + 16 + 16 + 16 + 16 + 16 + 16 + 2 + 2 + 2 + 2
-    )
+    single_embed_dim = 16 + 16 + 4 + 16 + 16 + 16 + 16 + 16 + 16 + 16 + 16
 
     multi_embed_dim = (
         len(inputs["move_id"]) * 16
@@ -31,7 +30,14 @@ def get_model(device: str, name: str | None = None):
 
     total_in_dim = continuous_dim + single_embed_dim + multi_embed_dim
 
-    model = ModelPokemon(continuous_dim, total_in_dim, len(emulator.buttons)).to(device)
+    model = ModelPokemon(
+        in_dim=total_in_dim,
+        visited_dialogs_count_max=emulator.data.visited_dialogs_count_max + 1,
+        visited_maps_count_max=emulator.data.visited_maps_count_max + 1,
+        menu_count_max=emulator.data.menu_count_max + 1,
+        battle_count_max=emulator.data.battle_count_max + 1,
+        outputs=len(emulator.buttons),
+    ).to(device)
 
     emulator.pyboy.stop(False)
 
@@ -57,11 +63,28 @@ def get_model(device: str, name: str | None = None):
 
 
 class ModelPokemon(nn.Module):
-    def __init__(self, continuous_dim: int, in_dim: int, outputs: int):
+    def __init__(
+        self,
+        in_dim: int,
+        visited_dialogs_count_max: int,
+        visited_maps_count_max: int,
+        menu_count_max: int,
+        battle_count_max: int,
+        outputs: int,
+    ):
         super().__init__()
 
-        self.continuous_dim = continuous_dim
-        self.in_dim = in_dim
+        visited_dialogs_count_output = int(math.sqrt(visited_dialogs_count_max))
+        visited_maps_count_output = int(math.sqrt(visited_maps_count_max))
+        menu_count_output = int(math.sqrt(menu_count_max))
+        battle_count_output = int(math.sqrt(battle_count_max))
+        in_dim = (
+            in_dim
+            + visited_dialogs_count_output
+            + visited_maps_count_output
+            + menu_count_output
+            + battle_count_output
+        )
 
         self.map_id = nn.Embedding(256, 16)
         self.dialog_id = nn.Embedding(256, 16)
@@ -74,10 +97,20 @@ class ModelPokemon(nn.Module):
         self.menu_position_x = nn.Embedding(256, 16)
         self.menu_position_y = nn.Embedding(256, 16)
         self.current_menu_selected_item = nn.Embedding(256, 16)
-        self.visited_dialogs_count = nn.Embedding(9, 2, padding_idx=0)
-        self.visited_maps_count = nn.Embedding(5, 2, padding_idx=0)
-        self.menu_count = nn.Embedding(5, 2, padding_idx=0)
-        self.battle_count = nn.Embedding(5, 2, padding_idx=0)
+        self.visited_dialogs_count = nn.Embedding(
+            visited_dialogs_count_max,
+            visited_dialogs_count_output,
+            padding_idx=0,
+        )
+        self.visited_maps_count = nn.Embedding(
+            visited_maps_count_max,
+            visited_maps_count_output,
+            padding_idx=0,
+        )
+        self.menu_count = nn.Embedding(menu_count_max, menu_count_output, padding_idx=0)
+        self.battle_count = nn.Embedding(
+            battle_count_max, battle_count_output, padding_idx=0
+        )
 
         self.move_id = nn.Embedding(256, 16, padding_idx=0)
         self.move_type = nn.Embedding(256, 16, padding_idx=0)

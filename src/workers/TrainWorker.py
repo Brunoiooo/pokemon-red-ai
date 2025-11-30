@@ -51,7 +51,7 @@ class TrainWorker:
     gamma = 0.99
     criterion: torch.nn.SmoothL1Loss = field(default_factory=torch.nn.SmoothL1Loss)
     tau = 0.005
-    epsilon = 0.3
+    epsilon = 0.1
     # loss tracking
     running_loss_ema: float = 0.0
     loss_ema_alpha: float = 0.001

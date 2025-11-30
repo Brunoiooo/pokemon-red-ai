@@ -9,10 +9,14 @@ class Data:
     pyboy: PyBoy
 
     visited_dialogs_count: dict[int, int] = field(default_factory=dict)
+    visited_dialogs_count_max: int = 16
     visited_positions_count: dict[str, int] = field(default_factory=dict)
     visited_maps_count: dict[int, int] = field(default_factory=dict)
+    visited_maps_count_max: int = 4
     menu_count: dict[int, int] = field(default_factory=dict)
+    menu_count_max: int = 4
     battle_count: int = 0
+    battle_count_max: int = 4
     useless_count: int = 0
     __player_pokemon_size = 0x2C
     __pokemon_count = 6
@@ -135,7 +139,7 @@ class Data:
                         self.visited_dialogs_count.get(
                             self.dialog_id(self.pyboy.memory), 0
                         ),
-                        8,
+                        self.visited_dialogs_count_max,
                     )
                     if self.is_dialog(self.pyboy.memory)
                     else 0
@@ -146,7 +150,7 @@ class Data:
                 (
                     min(
                         self.visited_maps_count.get(self.map_id(self.pyboy.memory), 0),
-                        4,
+                        self.visited_maps_count_max,
                     )
                     if self.is_world(self.pyboy.memory)
                     else 0
@@ -157,7 +161,7 @@ class Data:
                 (
                     min(
                         self.menu_count.get(self.map_id(self.pyboy.memory), 0),
-                        4,
+                        self.menu_count_max,
                     )
                     if not self.is_battle(self.pyboy.memory)
                     else 0
@@ -168,7 +172,7 @@ class Data:
                 (
                     min(
                         self.battle_count,
-                        4,
+                        self.battle_count_max,
                     )
                     if self.is_battle(self.pyboy.memory)
                     else 0
@@ -1170,12 +1174,13 @@ class Data:
     def reward_dialog(self):
         return (
             0.01
-            if self.visited_dialogs_count.get(self.dialog_id(self.pyboy.memory), 0) < 8
+            if self.visited_dialogs_count.get(self.dialog_id(self.pyboy.memory), 0)
+            < self.visited_dialogs_count_max
             else 0
         )
 
     def reward_battle(self, memory: bytes):
-        reward = 0.01 if self.battle_count < 4 else 0
+        reward = 0.01 if self.battle_count < self.battle_count_max else 0
 
         reward += self.reward_players_substitute_hp(memory)
         reward += self.reward_enemy_substitute_hp(memory)
@@ -1195,7 +1200,10 @@ class Data:
 
     def reward_menu(self):
         return (
-            0.01 if self.menu_count.get(self.map_id(self.pyboy.memory), 0) == 0 else 0
+            0.01
+            if self.menu_count.get(self.map_id(self.pyboy.memory), 0)
+            < self.menu_count_max
+            else 0
         )
 
     def reward_players_substitute_hp(self, memory: bytes):
