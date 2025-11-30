@@ -98,7 +98,9 @@ class Emulator:
 
         self.data.count(memory, reward)
 
-        if terminated:
+        if 0 < self.data.reward_event_flags(memory) or 0 < self.data.reward_badges(
+            memory
+        ):
             self.data.clean()
 
         return (
@@ -201,7 +203,9 @@ class Emulator:
                 memory=memory, action=action
             )
 
-            if useless_count == 0 and 0 < self.data.useless_count:
+            if 0 < self.data.reward_event_flags(memory) or 0 < self.data.reward_badges(
+                memory
+            ):
                 self.save_last_checkpoint("saves/last")
 
             total_reward += reward
