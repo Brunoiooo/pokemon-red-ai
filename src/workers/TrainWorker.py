@@ -17,13 +17,14 @@ import numpy as np
 import torch
 from pokemon.Emulator import Emulator
 from pokemon.ModelPokemon import ModelPokemon, get_model
+from pokemon.PrioritizedReplayBuffer import PrioritizedReplayBuffer
 from workers.ExperienceWorker import ExperienceWorker
 from math import inf
 
 
 @dataclass
 class TrainWorker:
-    max_workers: int = field(default_factory=lambda: max(1, os.cpu_count() - 1 or 1))
+    max_workers: int = field(default_factory=lambda: 8)
     device: str = field(
         default_factory=lambda: "cuda" if torch.cuda.is_available() else "cpu"
     )
@@ -32,8 +33,10 @@ class TrainWorker:
     queue_logs: Queue = field(default_factory=lambda: Manager().Queue())
     model_lock: RLock = field(default_factory=lambda: Manager().RLock())
     is_debug: Synchronized = field(default_factory=lambda: Manager().Value("b", False))
-    deque_buffer = deque(maxlen=50000)
-    deque_buffer_lock: RLock = field(default_factory=lambda: Manager().RLock())
+    buffer: PrioritizedReplayBuffer = field(
+        default_factory=lambda: PrioritizedReplayBuffer(capacity=1000000)
+    )
+    buffer_lock: RLock = field(default_factory=lambda: Manager().RLock())
     is_evaluation_window: Synchronized = field(
         default_factory=lambda: Manager().Value("b", False)
     )
@@ -55,6 +58,12 @@ class TrainWorker:
     last_loss: float = 0.0
     target_update_interval = 1000
     _opt_steps: int = 0
+
+    per_alpha: float = 0.6
+    per_beta_start: float = 0.4
+    per_beta_frames: int = 100000
+
+    count: int = 0
 
     __model: None | ModelPokemon = None
 
@@ -218,17 +227,16 @@ class TrainWorker:
         try:
             self.queue_logs.put_nowait("Training started.")
 
-            count = 0
             while self.event_start.is_set():
                 self.optimize_batch()
 
-                if self.is_debug.value and count % 10 == 0:
-                    with self.deque_buffer_lock:
+                if self.is_debug.value and self.count % 10 == 0:
+                    with self.buffer_lock:
                         self.queue_logs.put_nowait(
-                            f"Count: {count} | Buffer: {len(self.deque_buffer)} | Epsilon: {self.epsilon:.2f} | Loss: {self.last_loss:.6f} | EMA Loss: {self.running_loss_ema:.6f}"
+                            f"Count: {self.count} | Buffer: {len(self.buffer)} | Epsilon: {self.epsilon:.2f} | Loss: {self.last_loss:.6f} | EMA Loss: {self.running_loss_ema:.6f}"
                         )
 
-                count += 1
+                self.count += 1
         except Exception as e:
             self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
         finally:
@@ -274,8 +282,8 @@ class TrainWorker:
             self.queue_logs.put_nowait("Queue handler started.")
 
             while self.event_start.is_set():
-                with self.deque_buffer_lock:
-                    self.deque_buffer.append(self.queue_data.get())
+                with self.buffer_lock:
+                    self.buffer.add(self.queue_data.get())
         except Exception as e:
             self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
         finally:
@@ -295,7 +303,7 @@ class TrainWorker:
                 avg_ret = Emulator().evaluate_greedy(
                     model_state_dict=model_state_dict,
                     queue_logs=self.queue_logs,
-                    is_debug=self.is_debug.value,
+                    is_debug=False,
                     is_evaluation_window=self.is_evaluation_window.value,
                 )
 
@@ -311,13 +319,21 @@ class TrainWorker:
             self.queue_logs.put_nowait("Evaluation stopped.")
 
     def optimize_batch(self):
-        with self.deque_buffer_lock:
-            if len(self.deque_buffer) < self.batch_size:
+        with self.buffer_lock:
+            if len(self.buffer) < self.batch_size:
                 sleep(0.1)
                 return
 
-        with self.deque_buffer_lock:
-            batch = random.sample(self.deque_buffer, self.batch_size)
+        with self.buffer_lock:
+            batch, idxs, weights = self.buffer.sample(
+                self.batch_size,
+                min(
+                    1.0,
+                    self.per_beta_start
+                    + self.count * (1.0 - self.per_beta_start) / self.per_beta_frames,
+                ),
+            )
+        weights = torch.tensor(weights, device=self.device, dtype=torch.float32)
 
         (inputs, actions, next_inputs, rewards, terminateds, truncateds, steps) = zip(
             *batch
@@ -337,6 +353,8 @@ class TrainWorker:
         self.optimizer.zero_grad(set_to_none=True)
         batch_loss = 0.0
 
+        total_td_errors = np.zeros(self.batch_size)
+
         for i in range(self.grad_accum_steps):
             sl = slice(i * micro, (i + 1) * micro)
             s = {k: v[sl] for k, v in inputs.items()}
@@ -346,6 +364,7 @@ class TrainWorker:
             te = terminateds[sl]
             tr = truncateds[sl]
             n = steps[sl]
+            w_slice = weights[sl]
 
             with self.model_lock:
                 q_all = self.model(s)
@@ -368,7 +387,15 @@ class TrainWorker:
                 bootstrap_mask = (~te).float()
                 target = rN + bootstrap_mask * gamma_pow_n * next_q_target
 
-            loss = self.criterion(q_sa, target) / self.grad_accum_steps
+            td_error = torch.abs(q_sa - target).detach()
+            total_td_errors[sl] = td_error.cpu().numpy()
+
+            element_wise_loss = torch.nn.functional.smooth_l1_loss(
+                q_sa, target, reduction="none"
+            )
+            weighted_loss = (element_wise_loss * w_slice).mean()
+
+            loss = weighted_loss / self.grad_accum_steps
             loss.backward()
             batch_loss += float(loss.detach().item())
 
@@ -376,6 +403,8 @@ class TrainWorker:
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
 
         self.optimizer.step()
+
+        self.buffer.update_priorities(idxs, total_td_errors)
 
         self._opt_steps += 1
         if self._opt_steps % self.target_update_interval == 0:
