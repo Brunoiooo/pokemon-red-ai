@@ -9,7 +9,7 @@ class Data:
     pyboy: PyBoy
 
     visited_dialogs_count: dict[int, int] = field(default_factory=dict)
-    visited_dialogs_count_max: int = 16
+    visited_dialogs_count_max: int = 8
     visited_positions_count: dict[str, int] = field(default_factory=dict)
     visited_maps_count: dict[int, int] = field(default_factory=dict)
     visited_maps_count_max: int = 4
