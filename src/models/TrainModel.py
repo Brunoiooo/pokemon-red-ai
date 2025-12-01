@@ -15,15 +15,13 @@ class TrainModel:
     auto_mode_process: None | Process = None
 
     def __init__(self):
-        self._manager = Manager()
-
         self.train_worker = TrainWorker(
-            queue_logs=self._manager.Queue(),
-            queue_data=self._manager.Queue(),
-            event_start=self._manager.Event(),
-            is_debug=self._manager.Value("b", False),
-            is_evaluation_window=self._manager.Value("b", False),
-            train_use_sdl=self._manager.Value("b", False),
+            queue_logs=Manager().Queue(),
+            queue_data=Manager().Queue(),
+            event_start=Manager().Event(),
+            is_debug=Manager().Value("b", False),
+            is_evaluation_window=Manager().Value("b", False),
+            train_use_sdl=Manager().Value("b", False),
         )
 
     @property
