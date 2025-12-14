@@ -9,14 +9,11 @@ class Data:
     pyboy: PyBoy
 
     visited_dialogs_count: dict[int, int] = field(default_factory=dict)
-    visited_dialogs_count_max: int = 8
+    visited_dialogs_count_max: int = 32
     visited_positions_count: dict[str, int] = field(default_factory=dict)
     visited_maps_count: dict[int, int] = field(default_factory=dict)
     visited_maps_count_max: int = 4
-    menu_count: dict[int, int] = field(default_factory=dict)
-    menu_count_max: int = 4
-    battle_count: int = 0
-    battle_count_max: int = 4
+    max_counters_reward: float = 0.01
     useless_count: int = 0
     __player_pokemon_size = 0x2C
     __pokemon_count = 6
@@ -60,19 +57,9 @@ class Data:
         self.visited_dialogs_count = {}
         self.visited_maps_count = {}
         self.visited_positions_count = {}
-        self.menu_count = {}
-        self.battle_count = 0
         self.useless_count = 0
 
     def count(self, memory: bytes, reward: float):
-        if self.is_battle(self.pyboy.memory):
-            if self.number_of_turns_in_current_battle(
-                memory
-            ) != self.number_of_turns_in_current_battle(self.pyboy.memory):
-                self.battle_count = 0
-            else:
-                self.battle_count += 1
-
         if self.is_dialog(self.pyboy.memory):
             self.visited_dialogs_count.setdefault(self.dialog_id(self.pyboy.memory), 0)
             self.visited_dialogs_count[self.dialog_id(self.pyboy.memory)] += 1
@@ -80,10 +67,6 @@ class Data:
         if self.is_world(self.pyboy.memory):
             self.visited_positions_count.setdefault(self.get_position(), 0)
             self.visited_positions_count[self.get_position()] += 1
-
-        if self.is_menu(self.pyboy.memory):
-            self.menu_count.setdefault(self.map_id(self.pyboy.memory), 0)
-            self.menu_count[self.map_id(self.pyboy.memory)] += 1
 
         self.visited_pokedex_own = self.pokedex_own(self.pyboy.memory)
         self.visited_pokedex_seen = self.pokedex_seen(self.pyboy.memory)
@@ -153,28 +136,6 @@ class Data:
                         self.visited_maps_count_max,
                     )
                     if self.is_world(self.pyboy.memory)
-                    else 0
-                ),
-                dtype=torch.long,
-            ),
-            "menu_count": torch.tensor(
-                (
-                    min(
-                        self.menu_count.get(self.map_id(self.pyboy.memory), 0),
-                        self.menu_count_max,
-                    )
-                    if not self.is_battle(self.pyboy.memory)
-                    else 0
-                ),
-                dtype=torch.long,
-            ),
-            "battle_count": torch.tensor(
-                (
-                    min(
-                        self.battle_count,
-                        self.battle_count_max,
-                    )
-                    if self.is_battle(self.pyboy.memory)
                     else 0
                 ),
                 dtype=torch.long,
@@ -259,9 +220,7 @@ class Data:
 
         if self.is_world(self.pyboy.memory):
             reward += self.reward_position()
-
-        if self.is_menu(self.pyboy.memory):
-            reward += self.reward_menu()
+            reward += self.reward_map(memory)
 
         return max(-1.0, min(1.0, reward))
 
@@ -278,12 +237,22 @@ class Data:
         reward += self.reward_player_pokemons_defenses(memory)
         reward += self.reward_player_pokemons_speeds(memory)
         reward += self.reward_player_pokemons_pps(memory)
-        reward += self.reward_map(memory)
 
         return reward
 
     def reward_map(self, memory: bytes):
-        return 0.01 if self.visited_maps_count.get(self.map_id(memory), 0) < 4 else 0.0
+        return (
+            self.max_counters_reward
+            - min(
+                self.visited_maps_count.get(self.map_id(memory), 0),
+                self.visited_maps_count_max,
+            )
+            / self.visited_maps_count_max
+            * self.max_counters_reward
+            if self.visited_maps_count.get(self.map_id(memory), 0)
+            < self.visited_maps_count_max
+            else 0.0
+        )
 
     def reward_player_pokemons_current_hps(self, memory: bytes):
         reward = 0.0
@@ -421,7 +390,7 @@ class Data:
         return True if 0 < self.reward_badges(memory) else False
 
     def truncated(self):
-        return True if 64 <= self.useless_count else False
+        return True if 128 <= self.useless_count else False
 
     def number_of_turns_in_current_battle(self, memory: bytes):
         return memory[0xCCD5]
@@ -568,7 +537,6 @@ class Data:
         )
         data_byte = self.data_normalizer(
             [
-                self.number_of_turns_in_current_battle(self.pyboy.memory),
                 self.players_substitute_hp(self.pyboy.memory),
                 self.enemy_substitute_hp(self.pyboy.memory),
                 self.enemy_move_power(self.pyboy.memory),
@@ -1173,14 +1141,20 @@ class Data:
 
     def reward_dialog(self):
         return (
-            0.01
+            self.max_counters_reward
+            - min(
+                self.visited_dialogs_count.get(self.dialog_id(self.pyboy.memory), 0),
+                self.visited_dialogs_count_max,
+            )
+            / self.visited_dialogs_count_max
+            * self.max_counters_reward
             if self.visited_dialogs_count.get(self.dialog_id(self.pyboy.memory), 0)
             < self.visited_dialogs_count_max
             else 0
         )
 
     def reward_battle(self, memory: bytes):
-        reward = 0.01 if self.battle_count < self.battle_count_max else 0
+        reward = 0.0
 
         reward += self.reward_players_substitute_hp(memory)
         reward += self.reward_enemy_substitute_hp(memory)
@@ -1195,14 +1169,8 @@ class Data:
 
     def reward_position(self):
         return (
-            0.01 if self.visited_positions_count.get(self.get_position(), 0) == 0 else 0
-        )
-
-    def reward_menu(self):
-        return (
-            0.01
-            if self.menu_count.get(self.map_id(self.pyboy.memory), 0)
-            < self.menu_count_max
+            self.max_counters_reward
+            if self.visited_positions_count.get(self.get_position(), 0) == 0
             else 0
         )
 

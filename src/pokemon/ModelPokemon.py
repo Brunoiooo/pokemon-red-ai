@@ -34,8 +34,6 @@ def get_model(device: str, name: str | None = None):
         in_dim=total_in_dim,
         visited_dialogs_count_max=emulator.data.visited_dialogs_count_max + 1,
         visited_maps_count_max=emulator.data.visited_maps_count_max + 1,
-        menu_count_max=emulator.data.menu_count_max + 1,
-        battle_count_max=emulator.data.battle_count_max + 1,
         outputs=len(emulator.buttons),
     ).to(device)
 
@@ -68,23 +66,13 @@ class ModelPokemon(nn.Module):
         in_dim: int,
         visited_dialogs_count_max: int,
         visited_maps_count_max: int,
-        menu_count_max: int,
-        battle_count_max: int,
         outputs: int,
     ):
         super().__init__()
 
         visited_dialogs_count_output = int(math.sqrt(visited_dialogs_count_max))
         visited_maps_count_output = int(math.sqrt(visited_maps_count_max))
-        menu_count_output = int(math.sqrt(menu_count_max))
-        battle_count_output = int(math.sqrt(battle_count_max))
-        in_dim = (
-            in_dim
-            + visited_dialogs_count_output
-            + visited_maps_count_output
-            + menu_count_output
-            + battle_count_output
-        )
+        in_dim = in_dim + visited_dialogs_count_output + visited_maps_count_output
 
         self.map_id = nn.Embedding(256, 16)
         self.dialog_id = nn.Embedding(256, 16)
@@ -106,10 +94,6 @@ class ModelPokemon(nn.Module):
             visited_maps_count_max,
             visited_maps_count_output,
             padding_idx=0,
-        )
-        self.menu_count = nn.Embedding(menu_count_max, menu_count_output, padding_idx=0)
-        self.battle_count = nn.Embedding(
-            battle_count_max, battle_count_output, padding_idx=0
         )
 
         self.move_id = nn.Embedding(256, 16, padding_idx=0)
@@ -209,12 +193,6 @@ class ModelPokemon(nn.Module):
         visited_maps_count_emb = self.visited_maps_count(
             self._as_long_scalar_batch(x["visited_maps_count"], device)
         )
-        menu_count_emb = self.menu_count(
-            self._as_long_scalar_batch(x["menu_count"], device)
-        )
-        battle_count_emb = self.battle_count(
-            self._as_long_scalar_batch(x["battle_count"], device)
-        )
 
         move_id_full = self.move_id(self._as_long_seq_batch(x["move_id"], device))
         move_id_emb = move_id_full.reshape(move_id_full.size(0), -1)
@@ -282,8 +260,6 @@ class ModelPokemon(nn.Module):
                 current_menu_selected_item_emb,
                 visited_dialogs_count_emb,
                 visited_maps_count_emb,
-                menu_count_emb,
-                battle_count_emb,
                 move_id_emb,
                 move_type_emb,
                 pokemon_id_emb,

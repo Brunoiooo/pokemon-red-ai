@@ -1,10 +1,10 @@
 from dataclasses import dataclass
-import hashlib
 import io
 import os
 from queue import Queue
 from typing import Any
 
+import numpy as np
 from pyboy import PyBoy
 import torch
 
@@ -30,6 +30,12 @@ class Emulator:
         ["up"],
         ["down"],
     ]
+    dialog_action_set = [0, 1, 2, 5, 6, 7, 8]
+    blocked_action_set = [0]
+    battle_action_set = [0, 1, 2, 5, 6, 7, 8]
+    world_action_set = [0, 1, 2, 3, 4, 5, 6, 7, 8]
+    menu_action_set = [0, 1, 2, 3, 4, 5, 6, 7, 8]
+
     ticks_per_step = 32
     ALL_BUTTONS = ["a", "b", "start", "select", "left", "right", "up", "down"]
 
@@ -96,11 +102,12 @@ class Emulator:
 
         truncated = self.data.truncated()
 
+        if truncated:
+            reward -= 0.1
+
         self.data.count(memory, reward)
 
-        if 0 < self.data.reward_event_flags(memory) or 0 < self.data.reward_badges(
-            memory
-        ):
+        if self.is_new_episode(memory):
             self.data.clean()
 
         return (
@@ -109,6 +116,14 @@ class Emulator:
             reward,
             terminated,
             truncated,
+        )
+
+    def is_new_episode(self, memory: bytes):
+        return (
+            0 < self.data.reward_event_flags(memory)
+            or 0 < self.data.reward_badges(memory)
+            or 0 < self.data.reward_pokedex_own(memory)
+            or self.data.is_battle(memory) != self.data.is_battle(self.pyboy.memory)
         )
 
     def auto_mode(self, queue_logs: Queue):
@@ -149,7 +164,7 @@ class Emulator:
                 break
 
             queue_logs.put_nowait("==================================")
-            queue_logs.put_nowait(f"Reward: {reward:.2f}")
+            queue_logs.put_nowait(f"Reward: {reward:.6f}")
             queue_logs.put_nowait(f"Terminated: {terminated}")
             queue_logs.put_nowait(f"Truncated: {truncated}")
             queue_logs.put_nowait("==================================")
@@ -169,7 +184,25 @@ class Emulator:
 
         self.pyboy.tick(self.ticks_per_step / 2)
 
-    def mask_action(self, action: int) -> int:
+    def mask_action(
+        self,
+        action: int,
+    ) -> int:
+        if self.data.is_battle(self.pyboy.memory):
+            if action not in self.battle_action_set:
+                action = np.random.choice(self.battle_action_set)
+        elif self.data.is_menu(self.pyboy.memory):
+            if action not in self.menu_action_set:
+                action = np.random.choice(self.menu_action_set)
+        elif self.data.is_dialog(self.pyboy.memory):
+            if action not in self.dialog_action_set:
+                action = np.random.choice(self.dialog_action_set)
+        elif self.data.is_world(self.pyboy.memory):
+            if action not in self.world_action_set:
+                action = np.random.choice(self.world_action_set)
+        elif self.data.is_blocked(self.pyboy.memory):
+            if action not in self.blocked_action_set:
+                action = np.random.choice(self.blocked_action_set)
 
         return action
 
@@ -201,9 +234,7 @@ class Emulator:
                 memory=memory, action=action
             )
 
-            if 0 < self.data.reward_event_flags(memory) or 0 < self.data.reward_badges(
-                memory
-            ):
+            if self.is_new_episode(memory):
                 self.save_last_checkpoint("saves/last")
 
             total_reward += reward

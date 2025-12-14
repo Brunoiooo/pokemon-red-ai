@@ -1,4 +1,3 @@
-from collections import deque
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from multiprocessing import Queue, Manager
@@ -6,8 +5,6 @@ import multiprocessing as mp
 from multiprocessing.sharedctypes import Synchronized
 from multiprocessing.synchronize import Event
 import os
-from queue import Empty
-import random
 from threading import RLock, Thread
 from time import sleep
 import traceback
@@ -24,7 +21,7 @@ from math import inf
 
 @dataclass
 class TrainWorker:
-    max_workers: int = field(default_factory=lambda: 8)
+    max_workers: int = field(default_factory=lambda: 6)
     device: str = field(
         default_factory=lambda: "cuda" if torch.cuda.is_available() else "cpu"
     )
@@ -34,7 +31,7 @@ class TrainWorker:
     model_lock: RLock = field(default_factory=lambda: Manager().RLock())
     is_debug: Synchronized = field(default_factory=lambda: Manager().Value("b", False))
     buffer: PrioritizedReplayBuffer = field(
-        default_factory=lambda: PrioritizedReplayBuffer(capacity=1000000)
+        default_factory=lambda: PrioritizedReplayBuffer(capacity=500000)
     )
     buffer_lock: RLock = field(default_factory=lambda: Manager().RLock())
     is_evaluation_window: Synchronized = field(
@@ -196,6 +193,31 @@ class TrainWorker:
     def run_evaluate_thread(self, value: Thread | None):
         self.__run_evaluate_thread = value
 
+    __experienceWorkers: list[ExperienceWorker] | None = None
+
+    @property
+    def experienceWorkers(self):
+        with self.model_lock:
+            model_state_dict = self.model.state_dict()
+
+        if self.__experienceWorkers is None:
+            self.__experienceWorkers = [
+                ExperienceWorker(
+                    queue_logs=self.queue_logs,
+                    queue_data=self.queue_data,
+                    gamma=self.gamma,
+                    model_state_dict=model_state_dict,
+                    epsilon=self.epsilon,
+                    window=self.train_use_sdl,
+                )
+                for _ in range(self.max_workers)
+            ]
+
+        for x in self.__experienceWorkers:
+            x.model_state_dict = model_state_dict
+
+        return self.__experienceWorkers
+
     def run(self):
         try:
             self.queue_logs.put_nowait("TrainWorker starting up.")
@@ -248,25 +270,10 @@ class TrainWorker:
             self.queue_logs.put_nowait("Workers started.")
 
             while self.event_start.is_set():
-                with self.model_lock:
-                    model_state_dict = self.model.state_dict()
-
                 with ProcessPoolExecutor(
                     max_workers=self.max_workers, mp_context=mp.get_context("spawn")
                 ) as pool:
-                    futures = [
-                        pool.submit(
-                            ExperienceWorker(
-                                queue_logs=self.queue_logs,
-                                queue_data=self.queue_data,
-                                gamma=self.gamma,
-                                model_state_dict=model_state_dict,
-                                epsilon=self.epsilon,
-                                window=self.train_use_sdl,
-                            ).run
-                        )
-                        for _ in range(self.max_workers)
-                    ]
+                    futures = [pool.submit(x.run) for x in self.experienceWorkers]
 
                     for future in futures:
                         future.result()
@@ -310,7 +317,7 @@ class TrainWorker:
                 if self.best_eval_return < avg_ret:
                     self.save_best(avg_ret)
 
-                self.queue_logs.put_nowait(f"Finished evaluation {avg_ret:.2f}.")
+                self.queue_logs.put_nowait(f"Finished evaluation {avg_ret:.6f}.")
 
         except Exception as e:
             self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
@@ -319,10 +326,15 @@ class TrainWorker:
             self.queue_logs.put_nowait("Evaluation stopped.")
 
     def optimize_batch(self):
-        with self.buffer_lock:
-            if len(self.buffer) < self.batch_size:
-                sleep(0.1)
-                return
+        try:
+            with self.buffer_lock:
+                if len(self.buffer) < self.batch_size:
+                    raise ValueError(
+                        f"Buffer too small: expected at least {self.batch_size}, got {len(self.buffer)}"
+                    )
+        except Exception:
+            sleep(1.0)
+            return
 
         with self.buffer_lock:
             batch, idxs, weights = self.buffer.sample(
