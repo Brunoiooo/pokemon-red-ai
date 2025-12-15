@@ -23,6 +23,10 @@ class Data:
 
     __visited_pokedex_own: list[int] | None = None
 
+    __truncuted_position_actions: list[int] = field(
+        default_factory=lambda: [5, 6, 7, 8]
+    )
+
     @property
     def visited_pokedex_own(self):
         if self.__visited_pokedex_own is None:
@@ -389,8 +393,26 @@ class Data:
     def terminated(self, memory: bytes):
         return True if 0 < self.reward_badges(memory) else False
 
-    def truncated(self):
-        return True if 128 <= self.useless_count else False
+    def truncated(self, memory: bytes, action: int):
+        return (
+            True
+            if 128 <= self.useless_count or self.is_truncuted_position(memory, action)
+            else False
+        )
+
+    def is_truncuted_position(self, memory: bytes, action: int):
+        return (
+            True
+            if self.is_world(memory)
+            and self.is_world(self.pyboy.memory)
+            and action in self.__truncuted_position_actions
+            and self.map_id(memory) == self.map_id(self.pyboy.memory)
+            and self.position_x(memory) == self.position_x(self.pyboy.memory)
+            and self.position_y(memory) == self.position_y(self.pyboy.memory)
+            and self.sprite_data_facing_directions(memory)[0]
+            == self.sprite_data_facing_directions(self.pyboy.memory)[0]
+            else False
+        )
 
     def number_of_turns_in_current_battle(self, memory: bytes):
         return memory[0xCCD5]
