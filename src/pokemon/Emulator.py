@@ -36,7 +36,8 @@ class Emulator:
     world_action_set = [0, 1, 2, 3, 4, 5, 6, 7, 8]
     menu_action_set = [0, 1, 2, 3, 4, 5, 6, 7, 8]
 
-    ticks_per_step = 32
+    ticks_per_step_on_press = 16
+    ticks_per_step_after_press = 64
     ALL_BUTTONS = ["a", "b", "start", "select", "left", "right", "up", "down"]
 
     __use_sdl: bool = False
@@ -177,12 +178,12 @@ class Emulator:
         for button in self.buttons[action]:
             self.pyboy.button_press(button)
 
-        self.pyboy.tick(self.ticks_per_step / 2)
+        self.pyboy.tick(self.ticks_per_step_on_press)
 
         for i in range(len(self.ALL_BUTTONS)):
             self.pyboy.button_release(self.ALL_BUTTONS[i])
 
-        self.pyboy.tick(self.ticks_per_step / 2)
+        self.pyboy.tick(self.ticks_per_step_after_press)
 
     def mask_action(
         self,

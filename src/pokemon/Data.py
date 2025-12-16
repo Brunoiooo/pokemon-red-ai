@@ -133,17 +133,6 @@ class Data:
                 ),
                 dtype=torch.long,
             ),
-            "visited_maps_count": torch.tensor(
-                (
-                    min(
-                        self.visited_maps_count.get(self.map_id(self.pyboy.memory), 0),
-                        self.visited_maps_count_max,
-                    )
-                    if self.is_world(self.pyboy.memory)
-                    else 0
-                ),
-                dtype=torch.long,
-            ),
             "move_id": torch.tensor(
                 [
                     self.player_selected_move(self.pyboy.memory),
@@ -247,14 +236,7 @@ class Data:
     def reward_map(self, memory: bytes):
         return (
             self.max_counters_reward
-            - min(
-                self.visited_maps_count.get(self.map_id(memory), 0),
-                self.visited_maps_count_max,
-            )
-            / self.visited_maps_count_max
-            * self.max_counters_reward
-            if self.visited_maps_count.get(self.map_id(memory), 0)
-            < self.visited_maps_count_max
+            if self.visited_maps_count.get(self.map_id(memory), 0) == 0
             else 0.0
         )
 
@@ -427,13 +409,12 @@ class Data:
         return data
 
     def world_data(self):
-        return [
-            (
-                min(self.visited_positions_count.get(self.get_position(), 0), 1)
-                if self.is_world(self.pyboy.memory)
-                else 0
-            )
+        data = [
+            min(self.visited_positions_count.get(self.get_position(), 0), 1),
+            min(self.visited_maps_count.get(self.get_position(), 0), 1),
         ]
+
+        return data if self.is_world(self.pyboy.memory) else [0] * len(data)
 
     def game_mode_flags_data(self):
         return [

@@ -33,7 +33,6 @@ def get_model(device: str, name: str | None = None):
     model = ModelPokemon(
         in_dim=total_in_dim,
         visited_dialogs_count_max=emulator.data.visited_dialogs_count_max + 1,
-        visited_maps_count_max=emulator.data.visited_maps_count_max + 1,
         outputs=len(emulator.buttons),
     ).to(device)
 
@@ -65,14 +64,12 @@ class ModelPokemon(nn.Module):
         self,
         in_dim: int,
         visited_dialogs_count_max: int,
-        visited_maps_count_max: int,
         outputs: int,
     ):
         super().__init__()
 
         visited_dialogs_count_output = int(math.sqrt(visited_dialogs_count_max))
-        visited_maps_count_output = int(math.sqrt(visited_maps_count_max))
-        in_dim = in_dim + visited_dialogs_count_output + visited_maps_count_output
+        in_dim = in_dim + visited_dialogs_count_output
 
         self.map_id = nn.Embedding(256, 16)
         self.dialog_id = nn.Embedding(256, 16)
@@ -88,11 +85,6 @@ class ModelPokemon(nn.Module):
         self.visited_dialogs_count = nn.Embedding(
             visited_dialogs_count_max,
             visited_dialogs_count_output,
-            padding_idx=0,
-        )
-        self.visited_maps_count = nn.Embedding(
-            visited_maps_count_max,
-            visited_maps_count_output,
             padding_idx=0,
         )
 
@@ -190,9 +182,6 @@ class ModelPokemon(nn.Module):
         visited_dialogs_count_emb = self.visited_dialogs_count(
             self._as_long_scalar_batch(x["visited_dialogs_count"], device)
         )
-        visited_maps_count_emb = self.visited_maps_count(
-            self._as_long_scalar_batch(x["visited_maps_count"], device)
-        )
 
         move_id_full = self.move_id(self._as_long_seq_batch(x["move_id"], device))
         move_id_emb = move_id_full.reshape(move_id_full.size(0), -1)
@@ -259,7 +248,6 @@ class ModelPokemon(nn.Module):
                 menu_position_y_emb,
                 current_menu_selected_item_emb,
                 visited_dialogs_count_emb,
-                visited_maps_count_emb,
                 move_id_emb,
                 move_type_emb,
                 pokemon_id_emb,
