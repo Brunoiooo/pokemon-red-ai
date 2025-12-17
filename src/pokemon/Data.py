@@ -209,9 +209,10 @@ class Data:
             reward += self.reward_battle(memory)
 
         if self.is_dialog(self.pyboy.memory):
-            reward += self.reward_dialog()
+            reward += self.reward_dialog(memory)
 
         if self.is_world(self.pyboy.memory):
+            reward += -0.001
             reward += self.reward_position()
             reward += self.reward_map(memory)
 
@@ -375,26 +376,8 @@ class Data:
     def terminated(self, memory: bytes):
         return True if 0 < self.reward_badges(memory) else False
 
-    def truncated(self, memory: bytes, action: int):
-        return (
-            True
-            if 128 <= self.useless_count or self.is_truncuted_position(memory, action)
-            else False
-        )
-
-    def is_truncuted_position(self, memory: bytes, action: int):
-        return (
-            True
-            if self.is_world(memory)
-            and self.is_world(self.pyboy.memory)
-            and action in self.__truncuted_position_actions
-            and self.map_id(memory) == self.map_id(self.pyboy.memory)
-            and self.position_x(memory) == self.position_x(self.pyboy.memory)
-            and self.position_y(memory) == self.position_y(self.pyboy.memory)
-            and self.sprite_data_facing_directions(memory)[0]
-            == self.sprite_data_facing_directions(self.pyboy.memory)[0]
-            else False
-        )
+    def truncated(self):
+        return True if (32 <= self.useless_count) else False
 
     def number_of_turns_in_current_battle(self, memory: bytes):
         return memory[0xCCD5]
@@ -1142,7 +1125,7 @@ class Data:
             for i in range(self.__stored_pokemon_count)
         ]
 
-    def reward_dialog(self):
+    def reward_dialog(self, memory: bytes):
         return (
             self.max_counters_reward
             - min(
@@ -1153,8 +1136,12 @@ class Data:
             * self.max_counters_reward
             if self.visited_dialogs_count.get(self.dialog_id(self.pyboy.memory), 0)
             < self.visited_dialogs_count_max
+            and self.tile_data(memory) != self.tile_data(self.pyboy.memory)
             else 0
         )
+
+    def tile_data(self, memory: PyBoyMemoryView | bytes):
+        return [memory[i] for i in range(0xC490, 0xC4F1)]
 
     def reward_battle(self, memory: bytes):
         reward = 0.0

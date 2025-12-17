@@ -101,10 +101,7 @@ class Emulator:
 
         terminated = self.data.terminated(memory)
 
-        truncated = self.data.truncated(memory=memory, action=action)
-
-        if truncated:
-            reward -= 0.01
+        truncated = self.data.truncated()
 
         self.data.count(memory, reward)
 

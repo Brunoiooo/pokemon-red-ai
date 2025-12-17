@@ -21,7 +21,7 @@ from math import inf
 
 @dataclass
 class TrainWorker:
-    max_workers: int = field(default_factory=lambda: 6)
+    max_workers: int = field(default_factory=lambda: 11)
     device: str = field(
         default_factory=lambda: "cuda" if torch.cuda.is_available() else "cpu"
     )
@@ -31,7 +31,7 @@ class TrainWorker:
     model_lock: RLock = field(default_factory=lambda: Manager().RLock())
     is_debug: Synchronized = field(default_factory=lambda: Manager().Value("b", False))
     buffer: PrioritizedReplayBuffer = field(
-        default_factory=lambda: PrioritizedReplayBuffer(capacity=500000)
+        default_factory=lambda: PrioritizedReplayBuffer(capacity=250000)
     )
     buffer_lock: RLock = field(default_factory=lambda: Manager().RLock())
     is_evaluation_window: Synchronized = field(
@@ -48,7 +48,7 @@ class TrainWorker:
     gamma = 0.99
     criterion: torch.nn.SmoothL1Loss = field(default_factory=torch.nn.SmoothL1Loss)
     tau = 0.005
-    epsilon = 0.3
+    epsilon = 0.25
     # loss tracking
     running_loss_ema: float = 0.0
     loss_ema_alpha: float = 0.001
@@ -318,6 +318,8 @@ class TrainWorker:
                     self.save_best(avg_ret)
 
                 self.queue_logs.put_nowait(f"Finished evaluation {avg_ret:.6f}.")
+
+                sleep(1.0)
 
         except Exception as e:
             self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
