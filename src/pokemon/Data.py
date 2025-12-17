@@ -212,7 +212,6 @@ class Data:
             reward += self.reward_dialog(memory)
 
         if self.is_world(self.pyboy.memory):
-            reward += -0.001
             reward += self.reward_position()
             reward += self.reward_map(memory)
 
