@@ -21,7 +21,7 @@ from math import inf
 
 @dataclass
 class TrainWorker:
-    max_workers: int = field(default_factory=lambda: 11)
+    max_workers: int = field(default_factory=lambda: 10)
     device: str = field(
         default_factory=lambda: "cuda" if torch.cuda.is_available() else "cpu"
     )
@@ -48,7 +48,6 @@ class TrainWorker:
     gamma = 0.99
     criterion: torch.nn.SmoothL1Loss = field(default_factory=torch.nn.SmoothL1Loss)
     tau = 0.005
-    epsilon = 0.25
     # loss tracking
     running_loss_ema: float = 0.0
     loss_ema_alpha: float = 0.001
@@ -207,10 +206,10 @@ class TrainWorker:
                     queue_data=self.queue_data,
                     gamma=self.gamma,
                     model_state_dict=model_state_dict,
-                    epsilon=self.epsilon,
+                    epsilon=i / self.max_workers,
                     window=self.train_use_sdl,
                 )
-                for _ in range(self.max_workers)
+                for i in range(self.max_workers)
             ]
 
         for x in self.__experienceWorkers:
@@ -255,7 +254,7 @@ class TrainWorker:
                 if self.is_debug.value and self.count % 10 == 0:
                     with self.buffer_lock:
                         self.queue_logs.put_nowait(
-                            f"Count: {self.count} | Buffer: {len(self.buffer)} | Epsilon: {self.epsilon:.2f} | Loss: {self.last_loss:.6f} | EMA Loss: {self.running_loss_ema:.6f}"
+                            f"Count: {self.count} | Buffer: {len(self.buffer)} | Loss: {self.last_loss:.6f} | EMA Loss: {self.running_loss_ema:.6f}"
                         )
 
                 self.count += 1
