@@ -13,7 +13,9 @@ class Data:
     visited_positions_count: dict[str, int] = field(default_factory=dict)
     visited_maps_count: dict[int, int] = field(default_factory=dict)
     visited_maps_count_max: int = 4
-    max_counters_reward: float = 0.01
+    max_visited_dialogs_count_reward: float = 0.02
+    max_visited_positions_count_reward: float = 0.01
+    max_visited_maps_count_reward: float = 0.01
     useless_count: int = 0
     __player_pokemon_size = 0x2C
     __pokemon_count = 6
@@ -235,7 +237,7 @@ class Data:
 
     def reward_map(self, memory: bytes):
         return (
-            self.max_counters_reward
+            self.max_visited_maps_count_reward
             if self.visited_maps_count.get(self.map_id(memory), 0) == 0
             else 0.0
         )
@@ -1126,13 +1128,13 @@ class Data:
 
     def reward_dialog(self, memory: bytes):
         return (
-            self.max_counters_reward
+            self.max_visited_dialogs_count_reward
             - min(
                 self.visited_dialogs_count.get(self.dialog_id(self.pyboy.memory), 0),
                 self.visited_dialogs_count_max,
             )
             / self.visited_dialogs_count_max
-            * self.max_counters_reward
+            * self.max_visited_dialogs_count_reward
             if self.visited_dialogs_count.get(self.dialog_id(self.pyboy.memory), 0)
             < self.visited_dialogs_count_max
             and self.tile_data(memory) != self.tile_data(self.pyboy.memory)
@@ -1158,7 +1160,7 @@ class Data:
 
     def reward_position(self):
         return (
-            self.max_counters_reward
+            self.max_visited_positions_count_reward
             if self.visited_positions_count.get(self.get_position(), 0) == 0
             else 0
         )
