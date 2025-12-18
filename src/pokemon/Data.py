@@ -25,10 +25,6 @@ class Data:
 
     __visited_pokedex_own: list[int] | None = None
 
-    __truncuted_position_actions: list[int] = field(
-        default_factory=lambda: [5, 6, 7, 8]
-    )
-
     @property
     def visited_pokedex_own(self):
         if self.__visited_pokedex_own is None:
