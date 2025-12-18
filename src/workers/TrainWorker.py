@@ -319,8 +319,6 @@ class TrainWorker:
 
                 self.queue_logs.put_nowait(f"Finished evaluation {avg_ret:.6f}.")
 
-                sleep(10.0)
-
         except Exception as e:
             self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
         finally:
