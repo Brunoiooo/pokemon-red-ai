@@ -327,9 +327,9 @@ class TrainWorker:
     def optimize_batch(self):
         try:
             with self.buffer_lock:
-                if len(self.buffer) < self.batch_size:
+                if len(self.buffer) < self.buffer.tree.capacity // 10:
                     raise ValueError(
-                        f"Buffer too small: expected at least {self.batch_size}, got {len(self.buffer)}"
+                        f"Buffer too small: expected at least {self.buffer.tree.capacity // 10}, got {len(self.buffer)}"
                     )
         except Exception:
             sleep(1.0)
