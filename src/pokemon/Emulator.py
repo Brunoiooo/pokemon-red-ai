@@ -221,6 +221,8 @@ class Emulator:
 
         memory, inputs = self.reset(dir="start")
 
+        self.save_last_checkpoint("saves/last")
+
         while True:
             with torch.inference_mode():
                 q = model(inputs)
