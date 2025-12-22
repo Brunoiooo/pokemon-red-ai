@@ -208,7 +208,7 @@ class TrainWorker:
                     queue_data=self.queue_data,
                     gamma=self.gamma,
                     model_state_dict=model_state_dict,
-                    epsilon=i / self.max_workers * self.max_epsilon,
+                    epsilon=(i + 1) / self.max_workers * self.max_epsilon,
                     window=self.train_use_sdl,
                 )
                 for i in range(self.max_workers)
