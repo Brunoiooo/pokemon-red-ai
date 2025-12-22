@@ -48,4 +48,4 @@ class PrioritizedReplayBuffer:
             self.tree.update(idx, p)
 
     def __len__(self) -> int:
-        return self.tree.data_pointer
+        return self.tree.n_entries

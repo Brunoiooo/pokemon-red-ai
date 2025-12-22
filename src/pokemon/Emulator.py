@@ -37,7 +37,7 @@ class Emulator:
     menu_action_set = [0, 1, 2, 3, 4, 5, 6, 7, 8]
 
     ticks_per_step_on_press = 16
-    ticks_per_step_after_press = 64
+    ticks_per_step_after_press = 256
     ALL_BUTTONS = ["a", "b", "start", "select", "left", "right", "up", "down"]
 
     __use_sdl: bool = False
@@ -103,7 +103,7 @@ class Emulator:
 
         truncated = self.data.truncated()
 
-        self.data.count(memory, reward)
+        self.data.count(reward=reward, action=action)
 
         if self.is_new_episode(memory):
             self.data.clean()
@@ -165,6 +165,7 @@ class Emulator:
             queue_logs.put_nowait(f"Reward: {reward:.6f}")
             queue_logs.put_nowait(f"Terminated: {terminated}")
             queue_logs.put_nowait(f"Truncated: {truncated}")
+            queue_logs.put_nowait(f"Game mode: {self.data.game_mode_flags_data()}")
             queue_logs.put_nowait("==================================")
 
             time.sleep(0.1)

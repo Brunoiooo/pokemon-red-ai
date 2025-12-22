@@ -59,6 +59,8 @@ class TrainWorker:
     per_beta_start: float = 0.4
     per_beta_frames: int = 100000
 
+    max_epsilon: float = 0.4
+
     count: int = 0
 
     __model: None | ModelPokemon = None
@@ -206,7 +208,7 @@ class TrainWorker:
                     queue_data=self.queue_data,
                     gamma=self.gamma,
                     model_state_dict=model_state_dict,
-                    epsilon=i / self.max_workers,
+                    epsilon=i / self.max_workers * self.max_epsilon,
                     window=self.train_use_sdl,
                 )
                 for i in range(self.max_workers)
@@ -327,9 +329,9 @@ class TrainWorker:
     def optimize_batch(self):
         try:
             with self.buffer_lock:
-                if len(self.buffer) < self.buffer.tree.capacity // 10:
+                if len(self.buffer) < self.buffer.tree.capacity // 100:
                     raise ValueError(
-                        f"Buffer too small: expected at least {self.buffer.tree.capacity // 10}, got {len(self.buffer)}"
+                        f"Buffer too small: expected at least {self.buffer.tree.capacity // 100}, got {len(self.buffer)}"
                     )
         except Exception:
             sleep(1.0)
