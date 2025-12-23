@@ -20,7 +20,6 @@ class Emulator:
     truncated_count_file_name = "truncated_count"
     terminated_count_file_name = "terminated_count"
     buttons = [
-        [],
         ["a"],
         ["b"],
         ["start"],
@@ -30,11 +29,10 @@ class Emulator:
         ["up"],
         ["down"],
     ]
-    dialog_action_set = [0, 1, 2, 5, 6, 7, 8]
-    blocked_action_set = [0]
-    battle_action_set = [0, 1, 2, 5, 6, 7, 8]
-    world_action_set = [0, 1, 2, 3, 4, 5, 6, 7, 8]
-    menu_action_set = [0, 1, 2, 3, 4, 5, 6, 7, 8]
+    dialog_action_set = [0, 1, 4, 5, 6, 7]
+    battle_action_set = [0, 1, 4, 5, 6, 7]
+    world_action_set = [0, 1, 2, 3, 4, 5, 6, 7]
+    menu_action_set = [0, 1, 2, 3, 4, 5, 6, 7]
 
     ticks_per_step_on_press = 16
     ticks_per_step_after_press = 256
@@ -103,7 +101,10 @@ class Emulator:
 
         truncated = self.data.truncated()
 
-        self.data.count(reward=reward, action=action)
+        if truncated:
+            reward = -1.0
+
+        self.data.count(reward=reward, action=action, memory=memory)
 
         if self.is_new_episode(memory):
             self.data.clean()
@@ -136,23 +137,25 @@ class Emulator:
 
             key = keyboard.read_key()
             if key == "up":
-                action = 7
-            elif key == "down":
-                action = 8
-            elif key == "left":
-                action = 5
-            elif key == "right":
                 action = 6
-            elif key == "a":
-                action = 1
-            elif key == "b":
-                action = 2
-            elif key == "space":
-                action = 3
-            elif key == "enter":
+            elif key == "down":
+                action = 7
+            elif key == "left":
                 action = 4
+            elif key == "right":
+                action = 5
+            elif key == "a":
+                action = 0
+            elif key == "b":
+                action = 1
+            elif key == "space":
+                action = 2
+            elif key == "enter":
+                action = 3
             elif key == "q":
                 break
+            elif key == "e":
+                self.save_last_checkpoint("saves/manual")
 
             memory, inputs, reward, terminated, truncated = self.step(
                 memory=memory, action=action
@@ -166,6 +169,12 @@ class Emulator:
             queue_logs.put_nowait(f"Terminated: {terminated}")
             queue_logs.put_nowait(f"Truncated: {truncated}")
             queue_logs.put_nowait(f"Game mode: {self.data.game_mode_flags_data()}")
+            queue_logs.put_nowait(f"world_data: {self.data.world_data()} ")
+            queue_logs.put_nowait(f"dialog_data: {self.data.dialog_data()} ")
+            queue_logs.put_nowait(
+                f"menu_battle_dialog_data: {self.data.menu_battle_dialog_data()} "
+            )
+            queue_logs.put_nowait(f"useless_count: {self.data.useless_count} ")
             queue_logs.put_nowait("==================================")
 
             time.sleep(0.1)
@@ -199,9 +208,6 @@ class Emulator:
         elif self.data.is_world(self.pyboy.memory):
             if action not in self.world_action_set:
                 action = np.random.choice(self.world_action_set)
-        elif self.data.is_blocked(self.pyboy.memory):
-            if action not in self.blocked_action_set:
-                action = np.random.choice(self.blocked_action_set)
 
         return action
 

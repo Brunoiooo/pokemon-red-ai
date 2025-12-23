@@ -41,7 +41,7 @@ class TrainWorker:
         default_factory=lambda: Manager().Value("b", False)
     )
 
-    batch_size = 256
+    batch_size = 512
     grad_accum_steps = 1
     lr = 0.0001
     weight_decay = 1e-5
@@ -58,6 +58,9 @@ class TrainWorker:
     per_alpha: float = 0.6
     per_beta_start: float = 0.4
     per_beta_frames: int = 100000
+
+    era: int = 10
+    era_count: int = 0
 
     max_epsilon: float = 0.4
 
@@ -181,19 +184,6 @@ class TrainWorker:
     def run_workers_thread(self, value: Thread | None):
         self.__run_workers_thread = value
 
-    __run_evaluate_thread: Thread | None = None
-
-    @property
-    def run_evaluate_thread(self):
-        if not self.__run_evaluate_thread:
-            self.__run_evaluate_thread = Thread(target=self.run_evaluate, daemon=True)
-
-        return self.__run_evaluate_thread
-
-    @run_evaluate_thread.setter
-    def run_evaluate_thread(self, value: Thread | None):
-        self.__run_evaluate_thread = value
-
     __experienceWorkers: list[ExperienceWorker] | None = None
 
     @property
@@ -237,9 +227,6 @@ class TrainWorker:
                 self.run_workers_thread = None
                 self.run_workers_thread.start()
 
-            if not self.run_evaluate_thread.is_alive():
-                self.run_evaluate_thread = None
-                self.run_evaluate_thread.start()
         except Exception as e:
             self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
             self.event_start.clear()
@@ -271,6 +258,11 @@ class TrainWorker:
             self.queue_logs.put_nowait("Workers started.")
 
             while self.event_start.is_set():
+                if self.era_count % self.era == 0:
+                    self.evaluate_greedy()
+
+                self.queue_logs.put_nowait(f"Episode {self.era_count}.")
+
                 with ProcessPoolExecutor(
                     max_workers=self.max_workers, mp_context=mp.get_context("spawn")
                 ) as pool:
@@ -278,6 +270,8 @@ class TrainWorker:
 
                     for future in futures:
                         future.result()
+
+                self.era_count += 1
 
         except Exception as e:
             self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
@@ -298,33 +292,27 @@ class TrainWorker:
             self.event_start.clear()
             self.queue_logs.put_nowait("Queue handler stopped.")
 
-    def run_evaluate(self):
-        try:
-            self.queue_logs.put_nowait(f"Starting evaluation.")
+    def evaluate_greedy(self):
+        self.queue_logs.put_nowait(f"Starting evaluation.")
 
-            while self.event_start.is_set():
-                with self.model_lock:
-                    model_state_dict = self.model.state_dict()
+        with self.model_lock:
+            model_state_dict = self.model.state_dict()
 
-                self.save_latest()
+        self.save_latest()
 
-                avg_ret = Emulator().evaluate_greedy(
-                    model_state_dict=model_state_dict,
-                    queue_logs=self.queue_logs,
-                    is_debug=False,
-                    is_evaluation_window=self.is_evaluation_window.value,
-                )
+        avg_ret = Emulator().evaluate_greedy(
+            model_state_dict=model_state_dict,
+            queue_logs=self.queue_logs,
+            is_debug=False,
+            is_evaluation_window=self.is_evaluation_window.value,
+        )
 
-                if self.best_eval_return < avg_ret:
-                    self.save_best(avg_ret)
+        if self.best_eval_return < avg_ret:
+            self.save_best(avg_ret)
 
-                self.queue_logs.put_nowait(f"Finished evaluation {avg_ret:.6f}.")
+        self.queue_logs.put_nowait(f"Finished evaluation {avg_ret:.6f}.")
 
-        except Exception as e:
-            self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
-        finally:
-            self.event_start.clear()
-            self.queue_logs.put_nowait("Evaluation stopped.")
+        self.queue_logs.put_nowait("Evaluation stopped.")
 
     def optimize_batch(self):
         try:
@@ -397,7 +385,7 @@ class TrainWorker:
                     )
 
                 gamma_pow_n = torch.pow(self.gamma_tensor, n)
-                bootstrap_mask = (~te).float()
+                bootstrap_mask = (~(te | tr)).float()
                 target = rN + bootstrap_mask * gamma_pow_n * next_q_target
 
             td_error = torch.abs(q_sa - target).detach()

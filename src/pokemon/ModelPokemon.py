@@ -13,7 +13,7 @@ def get_model(device: str, name: str | None = None):
 
     continuous_dim = len(inputs["continuous"])
 
-    single_embed_dim = 16 + 16 + 4 + 16 + 16 + 16
+    single_embed_dim = 16 + 16 + 4 + 16 + 16
 
     multi_embed_dim = (
         len(inputs["move_id"]) * 16
@@ -74,7 +74,6 @@ class ModelPokemon(nn.Module):
         self.index_of_current_pokemon_send_out = nn.Embedding(6, 4)
         self.type_of_battle = nn.Embedding(256, 16)
         self.move_menu_type = nn.Embedding(256, 16)
-        self.current_menu_selected_item = nn.Embedding(256, 16)
 
         self.move_id = nn.Embedding(256, 16, padding_idx=0)
         self.move_type = nn.Embedding(256, 16, padding_idx=0)
@@ -150,10 +149,6 @@ class ModelPokemon(nn.Module):
         move_menu_emb = self.move_menu_type(
             self._as_long_scalar_batch(x["move_menu_type"], device)
         )
-        current_menu_selected_item_emb = self.current_menu_selected_item(
-            self._as_long_scalar_batch(x["current_menu_selected_item"], device)
-        )
-
         move_id_full = self.move_id(self._as_long_seq_batch(x["move_id"], device))
         move_id_emb = move_id_full.reshape(move_id_full.size(0), -1)
 
@@ -199,7 +194,6 @@ class ModelPokemon(nn.Module):
                 index_emb,
                 type_battle_emb,
                 move_menu_emb,
-                current_menu_selected_item_emb,
                 move_id_emb,
                 move_type_emb,
                 pokemon_id_emb,
