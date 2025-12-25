@@ -37,6 +37,7 @@ class Emulator:
     ticks_per_step_on_press = 16
     ticks_per_step_after_press = 256
     ALL_BUTTONS = ["a", "b", "start", "select", "left", "right", "up", "down"]
+    truncated_reward = -0.1
 
     __use_sdl: bool = False
 
@@ -99,10 +100,10 @@ class Emulator:
 
         terminated = self.data.terminated(memory)
 
-        truncated = self.data.truncated()
+        truncated = self.data.truncated(memory)
 
         if truncated:
-            reward = -1.0
+            reward = self.truncated_reward
 
         self.data.count(reward=reward, action=action, memory=memory)
 
