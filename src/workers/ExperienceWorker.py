@@ -106,7 +106,7 @@ class ExperienceWorker:
             self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
         finally:
             self.emulator.pyboy.stop(False)
-            self.queue_logs.put_nowait("Worker stopped.")
+            self.queue_logs.put_nowait(f"Worker stopped epsilon: {self.epsilon}.")
 
     def get_action(self, inputs: dict[float]):
         if random.random() < self.epsilon:
@@ -118,7 +118,7 @@ class ExperienceWorker:
 
             action = int(torch.argmax(q).item())
 
-        return self.emulator.mask_action(action)
+        return action
 
     def put_to_queue_data(self, terminated: bool, truncated: bool):
         if self.buffer.maxlen <= len(self.buffer):

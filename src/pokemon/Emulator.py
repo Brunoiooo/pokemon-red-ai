@@ -122,7 +122,6 @@ class Emulator:
         return (
             0 < self.data.reward_event_flags(memory)
             or 0 < self.data.reward_badges(memory)
-            or 0 < self.data.reward_pokedex_own(memory)
             or self.data.is_battle(memory) != self.data.is_battle(self.pyboy.memory)
         )
 
@@ -192,25 +191,6 @@ class Emulator:
             self.pyboy.button_release(self.ALL_BUTTONS[i])
 
         self.pyboy.tick(self.ticks_per_step_after_press)
-
-    def mask_action(
-        self,
-        action: int,
-    ) -> int:
-        if self.data.is_battle(self.pyboy.memory):
-            if action not in self.battle_action_set:
-                action = np.random.choice(self.battle_action_set)
-        elif self.data.is_menu(self.pyboy.memory):
-            if action not in self.menu_action_set:
-                action = np.random.choice(self.menu_action_set)
-        elif self.data.is_dialog(self.pyboy.memory):
-            if action not in self.dialog_action_set:
-                action = np.random.choice(self.dialog_action_set)
-        elif self.data.is_world(self.pyboy.memory):
-            if action not in self.world_action_set:
-                action = np.random.choice(self.world_action_set)
-
-        return action
 
     def evaluate_greedy(
         self,

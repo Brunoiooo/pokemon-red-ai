@@ -73,9 +73,7 @@ class Data:
         self.last_action = action
         self.last_reward = reward
 
-        if self.is_dialog(memory) and self.tile_data(
-            self.pyboy.memory
-        ) != self.tile_data(memory):
+        if self.is_dialog(memory) and not self.is_menu_illegal_move(memory):
             self.visited_dialogs_count.setdefault(self.dialog_id(memory), 0)
             self.visited_dialogs_count[self.dialog_id(memory)] += 1
 
@@ -205,6 +203,8 @@ class Data:
             and self.is_battle(memory)
             or self.is_menu(self.pyboy.memory)
             and self.is_menu(memory)
+            or self.is_dialog(self.pyboy.memory)
+            and self.is_dialog(memory)
         ):
             reward += self.reward_menu_illegal_move(memory)
 
@@ -221,16 +221,17 @@ class Data:
             else 0.0
         )
 
-    def reward_menu_illegal_move(self, memory: bytes):
+    def is_menu_illegal_move(self, memory: bytes):
         return (
-            -0.01
-            if self.current_menu_selected_item(self.pyboy.memory)
+            self.current_menu_selected_item(self.pyboy.memory)
             == self.current_menu_selected_item(memory)
             and self.menu_position_x(self.pyboy.memory) == self.menu_position_x(memory)
             and self.menu_position_y(self.pyboy.memory) == self.menu_position_y(memory)
             and self.tile_data(self.pyboy.memory) == self.tile_data(memory)
-            else 0.0
         )
+
+    def reward_menu_illegal_move(self, memory: bytes):
+        return -0.01 if self.is_menu_illegal_move(memory) else 0.0
 
     def reward_illegal_world_move(self, memory: bytes):
         return -0.01 if self.is_illegal_world_move(memory) else 0.0
@@ -411,21 +412,28 @@ class Data:
         data += self.core_data()
         data += self.battle_data()
         data += self.menu_battle_dialog_data()
-        data += self.dialog_data()
+        data += self.dialog_world_data()
         data += self.world_data()
 
         return data
 
-    def dialog_data(self):
-        data = [
-            min(
-                self.visited_dialogs_count.get(self.dialog_id(self.pyboy.memory), 0),
-                self.visited_dialogs_count_max,
-            )
-            / self.visited_dialogs_count_max
-        ]
+    def dialog_world_data(self):
+        data = self.data_normalizer(
+            [
+                min(
+                    self.visited_dialogs_count.get(i, 0),
+                    self.visited_dialogs_count_max,
+                )
+                for i in range(1, 256)
+            ],
+            self.visited_dialogs_count_max,
+        )
 
-        return data if self.is_dialog(self.pyboy.memory) else [0] * len(data)
+        return (
+            data
+            if self.is_dialog(self.pyboy.memory) or self.is_world(self.pyboy.memory)
+            else [0] * len(data)
+        )
 
     def menu_battle_dialog_data(self):
         data = self.data_normalizer(
@@ -448,8 +456,18 @@ class Data:
 
     def world_data(self):
         data = [
-            min(self.visited_positions_count.get(self.get_position(), 0), 1),
-            min(self.visited_maps_count.get(self.get_position(), 0), 1),
+            min(self.visited_maps_count.get(self.map_id(self.pyboy.memory), 0), 1),
+        ]
+
+        data += [
+            min(
+                self.visited_positions_count.get(
+                    self.get_position(offset_x=offset_x, offset_y=offset_y), 0
+                ),
+                1,
+            )
+            for offset_x in range(-8, 9)
+            for offset_y in range(-8, 9)
         ]
 
         data += self.data_normalizer(
@@ -523,8 +541,8 @@ class Data:
     def type_of_battle(self, memory: PyBoyMemoryView | bytes):
         return memory[0xD057]
 
-    def get_position(self):
-        return f"{self.position_x(self.pyboy.memory)}x{self.position_y(self.pyboy.memory)}x{self.map_id(self.pyboy.memory)}"
+    def get_position(self, offset_x=0, offset_y=0):
+        return f"{self.position_x(self.pyboy.memory) + offset_x}x{self.position_y(self.pyboy.memory) + offset_y}x{self.map_id(self.pyboy.memory)}"
 
     def is_world(self, memory: PyBoyMemoryView | bytes):
         return (
@@ -1203,8 +1221,8 @@ class Data:
             )
             / self.visited_dialogs_count_max
             * self.max_visited_dialogs_count_reward
-            if self.tile_data(memory) != self.tile_data(self.pyboy.memory)
-            else -0.1
+            if not self.is_menu_illegal_move(memory)
+            else 0.0
         )
 
     def tile_data(self, memory: PyBoyMemoryView | bytes):
