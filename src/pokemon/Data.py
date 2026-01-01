@@ -17,7 +17,8 @@ class Data:
     max_visited_maps_count_reward: float = 0.01
     useless_count: int = 0
     max_useless_count = 64
-    punish_reward = -0.01
+    punish_world_reward = -0.003
+    punish_dialog_menu_battle_reward = -0.01
     __player_pokemon_size = 0x2C
     __pokemon_count = 6
     last_action = 0
@@ -215,7 +216,7 @@ class Data:
 
     def reward_last_game_mode_flags(self, memory: bytes):
         return (
-            self.punish_reward
+            self.punish_dialog_menu_battle_reward
             if self.last_game_mode_flags == self.game_mode_flags_data(self.pyboy.memory)
             and self.game_mode_flags_data(self.pyboy.memory)
             != self.game_mode_flags_data(memory)
@@ -232,10 +233,10 @@ class Data:
         )
 
     def reward_menu_illegal_move(self, memory: bytes):
-        return self.punish_reward if self.is_menu_illegal_move(memory) else 0.0
+        return self.punish_dialog_menu_battle_reward if self.is_menu_illegal_move(memory) else 0.0
 
     def reward_illegal_world_move(self, memory: bytes):
-        return self.punish_reward if self.is_illegal_world_move(memory) else 0.0
+        return self.punish_world_reward if self.is_illegal_world_move(memory) else 0.0
 
     def reward_core(self, memory: bytes):
         reward = 0.0
