@@ -67,7 +67,7 @@ class ExperienceWorker:
 
     def run(self):
         try:
-            self.queue_logs.put_nowait(f"Worker started epsilon: {self.epsilon}.")
+            self.queue_logs.put_nowait(f"Worker started epsilon: {self.epsilon:.3f}.")
 
             memory, inputs = self.emulator.reset(
                 dir=(
