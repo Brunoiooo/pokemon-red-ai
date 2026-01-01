@@ -95,7 +95,7 @@ class ExperienceWorker:
 
                 self.put_to_queue_data(terminated=terminated, truncated=truncated)
 
-                if truncated:
+                if truncated or terminated:
                     break
 
                 memory, inputs = next_memory, next_inputs
@@ -145,7 +145,7 @@ class ExperienceWorker:
                     time.sleep(0.01)
                     pass
 
-                if truncated:
+                if truncated or terminated:
                     self.buffer.popleft()
                 else:
                     break
