@@ -17,8 +17,6 @@ import time
 @dataclass
 class Emulator:
     saves = "saves"
-    truncated_count_file_name = "truncated_count"
-    terminated_count_file_name = "terminated_count"
     buttons = [
         ["a"],
         ["b"],
@@ -29,10 +27,6 @@ class Emulator:
         ["up"],
         ["down"],
     ]
-    dialog_action_set = [0, 1, 4, 5, 6, 7]
-    battle_action_set = [0, 1, 4, 5, 6, 7]
-    world_action_set = [0, 1, 2, 3, 4, 5, 6, 7]
-    menu_action_set = [0, 1, 2, 3, 4, 5, 6, 7]
 
     ticks_per_step_on_press = 16
     ticks_per_step_after_press = 256
@@ -119,10 +113,8 @@ class Emulator:
         )
 
     def is_new_episode(self, memory: bytes):
-        return (
-            0 < self.data.reward_event_flags(memory)
-            or 0 < self.data.reward_badges(memory)
-            or self.data.is_battle(memory) != self.data.is_battle(self.pyboy.memory)
+        return 0 < self.data.reward_event_flags(memory) or 0 < self.data.reward_badges(
+            memory
         )
 
     def auto_mode(self, queue_logs: Queue):

@@ -16,9 +16,9 @@ class Data:
     max_visited_positions_count_reward: float = 0.01
     max_visited_maps_count_reward: float = 0.01
     useless_count: int = 0
-    max_useless_count = 64
-    punish_world_reward = -0.003
-    punish_dialog_menu_battle_reward = -0.01
+    max_useless_count: int = 32
+    punish_world_reward: float = -0.003
+    punish_dialog_menu_battle_reward: float = -0.01
     __player_pokemon_size = 0x2C
     __pokemon_count = 6
     last_action = 0
@@ -233,7 +233,11 @@ class Data:
         )
 
     def reward_menu_illegal_move(self, memory: bytes):
-        return self.punish_dialog_menu_battle_reward if self.is_menu_illegal_move(memory) else 0.0
+        return (
+            self.punish_dialog_menu_battle_reward
+            if self.is_menu_illegal_move(memory)
+            else 0.0
+        )
 
     def reward_illegal_world_move(self, memory: bytes):
         return self.punish_world_reward if self.is_illegal_world_move(memory) else 0.0
