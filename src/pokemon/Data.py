@@ -100,9 +100,9 @@ class Data:
         return {
             "continuous": torch.tensor(self.data(), dtype=torch.float32),
             "screen_tiles": torch.tensor(
-                self.data_normalizer(self.screen_tiles(self.pyboy.memory), max=0xFF),
+                self.data_normalizer(self.screen_tiles(self.pyboy.memory)),
                 dtype=torch.float32,
-            ).view(18, 20),
+            ).view(1, 18, 20),
             "last_action": torch.tensor(self.last_action, dtype=torch.long),
             "map_id": torch.tensor(self.map_id(self.pyboy.memory), dtype=torch.long),
             "dialog_id": torch.tensor(
