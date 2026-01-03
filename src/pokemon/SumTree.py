@@ -3,6 +3,7 @@ import numpy as np
 
 class SumTree:
     data_pointer = 0
+    n_entries = 0
 
     def __init__(self, capacity: int):
         self.capacity = capacity
@@ -17,6 +18,9 @@ class SumTree:
         self.data_pointer += 1
         if self.data_pointer >= self.capacity:
             self.data_pointer = 0
+
+        if self.n_entries < self.capacity:
+            self.n_entries += 1
 
     def update(self, tree_idx: int, p: float):
         change = p - self.tree[tree_idx]

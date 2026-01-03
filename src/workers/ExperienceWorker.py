@@ -22,7 +22,7 @@ class ExperienceWorker:
     model_state_dict: dict[str, Any]
     epsilon: float
     td_error_steps = 5
-    start_save_chance = 0.5
+    start_save_chance = 0.0
 
     __last_save_path = "last"
 
@@ -67,7 +67,7 @@ class ExperienceWorker:
 
     def run(self):
         try:
-            self.queue_logs.put_nowait(f"Worker started epsilon: {self.epsilon}.")
+            self.queue_logs.put_nowait(f"Worker started epsilon: {self.epsilon:.3f}.")
 
             memory, inputs = self.emulator.reset(
                 dir=(
@@ -95,7 +95,7 @@ class ExperienceWorker:
 
                 self.put_to_queue_data(terminated=terminated, truncated=truncated)
 
-                if truncated:
+                if truncated or terminated:
                     break
 
                 memory, inputs = next_memory, next_inputs
@@ -106,7 +106,7 @@ class ExperienceWorker:
             self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
         finally:
             self.emulator.pyboy.stop(False)
-            self.queue_logs.put_nowait("Worker stopped.")
+            self.queue_logs.put_nowait(f"Worker stopped epsilon: {self.epsilon:.3f}.")
 
     def get_action(self, inputs: dict[float]):
         if random.random() < self.epsilon:
@@ -118,7 +118,7 @@ class ExperienceWorker:
 
             action = int(torch.argmax(q).item())
 
-        return self.emulator.mask_action(action)
+        return action
 
     def put_to_queue_data(self, terminated: bool, truncated: bool):
         if self.buffer.maxlen <= len(self.buffer):
@@ -145,7 +145,7 @@ class ExperienceWorker:
                     time.sleep(0.01)
                     pass
 
-                if truncated:
+                if truncated or terminated:
                     self.buffer.popleft()
                 else:
                     break
