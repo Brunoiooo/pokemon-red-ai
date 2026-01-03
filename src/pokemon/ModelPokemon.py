@@ -85,8 +85,8 @@ class ModelPokemon(nn.Module):
         self.sprite_data_facing_directions = nn.Embedding(13, 4)
 
         self.trunk = nn.Sequential(
-            nn.LayerNorm(in_dim),
             nn.Linear(in_dim, 1024),
+            nn.LayerNorm(1024),
             nn.SiLU(),
             nn.Linear(1024, 512),
             nn.SiLU(),

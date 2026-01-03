@@ -187,6 +187,7 @@ class Data:
             reward += self.reward_dialog(memory)
 
         if self.is_world(self.pyboy.memory):
+            reward += -0.001
             reward += self.reward_position()
             reward += self.reward_map(memory)
             reward += self.reward_illegal_world_move(memory)
@@ -398,7 +399,11 @@ class Data:
         return reward
 
     def terminated(self, memory: bytes):
-        return True if 0 < self.reward_badges(memory) else False
+        return (
+            True
+            if 0 < self.reward_badges(memory) or 0 < self.reward_event_flags(memory)
+            else False
+        )
 
     def truncated(self, memory: bytes):
         return True if self.max_useless_count <= self.useless_count else False

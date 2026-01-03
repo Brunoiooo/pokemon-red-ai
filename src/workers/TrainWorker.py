@@ -62,7 +62,7 @@ class TrainWorker:
     era: int = 10
     era_count: int = 0
 
-    max_epsilon: float = 0.05
+    max_epsilon: float = 0.01
 
     count: int = 0
 
