@@ -135,9 +135,10 @@ class ModelPokemon(nn.Module):
 
         cont = self._as_float_batch(x["continuous"], device)
 
-        screen_tiles_emb = self.screen_tiles(
+        screen_tiles_full = self.screen_tiles(
             self._as_long_seq_batch(x["screen_tiles"], device)
         )
+        screen_tiles_emb = screen_tiles_full.reshape(screen_tiles_full.size(0), -1)
         last_action_emb = self.last_action(
             self._as_long_scalar_batch(x["last_action"], device)
         )
