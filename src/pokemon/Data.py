@@ -99,6 +99,10 @@ class Data:
     def inputs(self):
         return {
             "continuous": torch.tensor(self.data(), dtype=torch.float32),
+            "screen_tiles": torch.tensor(
+                self.screen_tiles(self.pyboy.memory),
+                dtype=torch.long,
+            ),
             "last_action": torch.tensor(self.last_action, dtype=torch.long),
             "map_id": torch.tensor(self.map_id(self.pyboy.memory), dtype=torch.long),
             "dialog_id": torch.tensor(
@@ -174,6 +178,9 @@ class Data:
                 dtype=torch.long,
             ),
         }
+
+    def screen_tiles(self, memory: PyBoyMemoryView | bytes):
+        return [memory[i] for i in range(0xC3A0, 0xC508)]
 
     def reward(self, memory: bytes):
         reward = 0.0

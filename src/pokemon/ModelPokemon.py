@@ -16,7 +16,8 @@ def get_model(device: str, name: str | None = None):
     single_embed_dim = 16 + 16 + 4 + 16 + 16
 
     multi_embed_dim = (
-        len(inputs["move_id"]) * 16
+        len(inputs["screen_tiles"]) * 16
+        + len(inputs["move_id"]) * 16
         + len(inputs["move_type"]) * 16
         + len(inputs["pokemon_id"]) * 16
         + len(inputs["pokemon_type"]) * 16
@@ -68,6 +69,7 @@ class ModelPokemon(nn.Module):
 
         in_dim = in_dim + last_action_output
 
+        self.screen_tiles = nn.Embedding(256, 16)
         self.last_action = nn.Embedding(outputs, last_action_output)
         self.map_id = nn.Embedding(256, 16)
         self.dialog_id = nn.Embedding(256, 16)
@@ -85,25 +87,25 @@ class ModelPokemon(nn.Module):
         self.sprite_data_facing_directions = nn.Embedding(13, 4)
 
         self.trunk = nn.Sequential(
-            nn.Linear(in_dim, 1024),
-            nn.LayerNorm(1024),
+            nn.Linear(in_dim, 2048),
+            nn.LayerNorm(2048),
+            nn.SiLU(),
+            nn.Linear(2048, 1024),
             nn.SiLU(),
             nn.Linear(1024, 512),
-            nn.SiLU(),
-            nn.Linear(512, 256),
             nn.SiLU(),
         )
 
         self.value = nn.Sequential(
-            nn.Linear(256, 128),
+            nn.Linear(512, 256),
             nn.SiLU(),
-            nn.Linear(128, 1),
+            nn.Linear(256, 1),
         )
 
         self.advantage = nn.Sequential(
-            nn.Linear(256, 128),
+            nn.Linear(512, 256),
             nn.SiLU(),
-            nn.Linear(128, outputs),
+            nn.Linear(256, outputs),
         )
 
     def _as_float_batch(self, t, device):
@@ -133,6 +135,9 @@ class ModelPokemon(nn.Module):
 
         cont = self._as_float_batch(x["continuous"], device)
 
+        screen_tiles_emb = self.screen_tiles(
+            self._as_long_seq_batch(x["screen_tiles"], device)
+        )
         last_action_emb = self.last_action(
             self._as_long_scalar_batch(x["last_action"], device)
         )
@@ -188,6 +193,7 @@ class ModelPokemon(nn.Module):
         h = torch.cat(
             [
                 cont,
+                screen_tiles_emb,
                 last_action_emb,
                 map_id_emb,
                 dialog_id_emb,
