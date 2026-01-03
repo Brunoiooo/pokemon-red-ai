@@ -66,7 +66,7 @@ class ModelPokemon(nn.Module):
 
         last_action_output = int(math.sqrt(outputs))
 
-        in_dim = in_dim + last_action_output
+        in_dim = in_dim + last_action_output + 128
 
         self.last_action = nn.Embedding(outputs, last_action_output)
         self.map_id = nn.Embedding(256, 16)
@@ -83,6 +83,16 @@ class ModelPokemon(nn.Module):
         self.item_id = nn.Embedding(256, 16, padding_idx=0)
         self.sprite_data_movement_statuses = nn.Embedding(4, 2)
         self.sprite_data_facing_directions = nn.Embedding(13, 4)
+
+        self.screen_enc = nn.Sequential(
+            nn.Conv2d(1, 8, 3, padding=1),
+            nn.SiLU(),
+            nn.Conv2d(8, 16, 3, padding=1),
+            nn.SiLU(),
+            nn.Flatten(),
+            nn.Linear(16 * 18 * 20, 128),
+            nn.SiLU(),
+        )
 
         self.trunk = nn.Sequential(
             nn.Linear(in_dim, 1024),
@@ -185,6 +195,11 @@ class ModelPokemon(nn.Module):
             sprite_data_facing_directions_full.size(0), -1
         )
 
+        screen = self._as_float_batch(x["screen_tiles"], device)
+        if screen.dim() == 3:
+            screen = screen.unsqueeze(1)
+        screen_feat = self.screen_enc(screen)
+
         h = torch.cat(
             [
                 cont,
@@ -202,6 +217,7 @@ class ModelPokemon(nn.Module):
                 item_id_emb,
                 sprite_data_movement_statuses_emb,
                 sprite_data_facing_directions_emb,
+                screen_feat,
             ],
             dim=1,
         )
