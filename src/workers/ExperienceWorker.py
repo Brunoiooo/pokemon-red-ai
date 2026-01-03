@@ -21,7 +21,7 @@ class ExperienceWorker:
     gamma: float
     model_state_dict: dict[str, Any]
     epsilon: float
-    td_error_steps = 5
+    td_error_steps = 20
     start_save_chance = 0.0
 
     __last_save_path = "last"
