@@ -19,7 +19,7 @@ class Data:
     max_visited_maps_count_reward: float = 0.01
     useless_count: int = 0
     max_useless_count: int = 32
-    punish_world_reward: float = -0.02
+    punish_world_reward: float = -0.003
     punish_dialog_menu_battle_reward: float = -0.01
     __player_pokemon_size = 0x2C
     __pokemon_count = 6
