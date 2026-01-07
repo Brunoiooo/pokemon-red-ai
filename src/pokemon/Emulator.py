@@ -217,6 +217,11 @@ class Emulator:
             if self.is_new_episode(memory):
                 self.save_last_checkpoint("saves/last")
 
+            if terminated:
+                queue_logs.put_nowait(
+                    f"Evaluation terminated successfully with total reward: {total_reward:.2f}"
+                )
+
             total_reward += reward
 
             if is_debug:

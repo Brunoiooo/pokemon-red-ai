@@ -106,7 +106,9 @@ class ExperienceWorker:
             self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
         finally:
             self.emulator.pyboy.stop(False)
-            self.queue_logs.put_nowait(f"Worker stopped epsilon: {self.epsilon:.3f}.")
+            self.queue_logs.put_nowait(
+                f"Worker stopped epsilon: {self.epsilon:.3f} | {'success' if terminated else 'failure'}"
+            )
 
     def get_action(self, inputs: dict[float]):
         if random.random() < self.epsilon:
