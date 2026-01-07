@@ -85,6 +85,11 @@ class Emulator:
 
         self.data.clean()
 
+        try:
+            self.data.load(path=path)
+        except FileNotFoundError:
+            pass
+
         return (bytes(self.pyboy.memory[0:0x10000]), self.data.inputs())
 
     def step(self, memory: bytes, action: int):
@@ -100,9 +105,6 @@ class Emulator:
             reward = self.truncated_reward
 
         self.data.count(reward=reward, action=action, memory=memory)
-
-        if self.is_new_episode(memory):
-            self.data.clean()
 
         return (
             bytes(self.pyboy.memory[0:0x10000]),
@@ -242,3 +244,5 @@ class Emulator:
         os.makedirs(path, exist_ok=True)
         with open(f"{path}/checkpoint.state", "wb") as f:
             self.pyboy.save_state(f)
+
+        self.data.save(path=path)

@@ -1,3 +1,4 @@
+import pickle
 from dataclasses import dataclass, field
 
 from pyboy import PyBoy, PyBoyMemoryView
@@ -58,6 +59,30 @@ class Data:
         self.__visited_pokedex_seen = [
             x | y for x, y in zip(value, self.visited_pokedex_seen)
         ]
+
+    def save(self, path: str):
+        with open(f"{path}/__visited_pokedex_own.pkl", "wb") as f:
+            pickle.dump(self.__visited_pokedex_own, f)
+        with open(f"{path}/__visited_pokedex_seen.pkl", "wb") as f:
+            pickle.dump(self.__visited_pokedex_seen, f)
+        with open(f"{path}/visited_dialogs_count.pkl", "wb") as f:
+            pickle.dump(self.visited_dialogs_count, f)
+        with open(f"{path}/visited_maps_count.pkl", "wb") as f:
+            pickle.dump(self.visited_maps_count, f)
+        with open(f"{path}/visited_positions_count.pkl", "wb") as f:
+            pickle.dump(self.visited_positions_count, f)
+
+    def load(self, path: str):
+        with open(f"{path}/__visited_pokedex_own.pkl", "rb") as f:
+            self.__visited_pokedex_own = pickle.load(f)
+        with open(f"{path}/__visited_pokedex_seen.pkl", "rb") as f:
+            self.__visited_pokedex_seen = pickle.load(f)
+        with open(f"{path}/visited_dialogs_count.pkl", "rb") as f:
+            self.visited_dialogs_count = pickle.load(f)
+        with open(f"{path}/visited_maps_count.pkl", "rb") as f:
+            self.visited_maps_count = pickle.load(f)
+        with open(f"{path}/visited_positions_count.pkl", "rb") as f:
+            self.visited_positions_count = pickle.load(f)
 
     def clean(self):
         self.__visited_pokedex_own = None
