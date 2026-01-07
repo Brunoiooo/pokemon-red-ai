@@ -68,8 +68,6 @@ class Data:
             pickle.dump(self.__visited_pokedex_seen, f)
         with open(f"{path}/visited_dialogs_count.pkl", "wb") as f:
             pickle.dump(self.visited_dialogs_count, f)
-        with open(f"{path}/visited_maps_count.pkl", "wb") as f:
-            pickle.dump(self.visited_maps_count, f)
         with open(f"{path}/visited_positions_count.pkl", "wb") as f:
             pickle.dump(self.visited_positions_count, f)
 
@@ -80,8 +78,6 @@ class Data:
             self.__visited_pokedex_seen = pickle.load(f)
         with open(f"{path}/visited_dialogs_count.pkl", "rb") as f:
             self.visited_dialogs_count = pickle.load(f)
-        with open(f"{path}/visited_maps_count.pkl", "rb") as f:
-            self.visited_maps_count = pickle.load(f)
         with open(f"{path}/visited_positions_count.pkl", "rb") as f:
             self.visited_positions_count = pickle.load(f)
 
