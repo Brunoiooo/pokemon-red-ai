@@ -12,13 +12,14 @@ class Data:
     visited_dialogs_count: dict[int, int] = field(default_factory=dict)
     visited_dialogs_count_max: int = 32
     visited_positions_count: dict[str, int] = field(default_factory=dict)
+    visited_positions_count_max: int = 4
     visited_maps_count: dict[int, int] = field(default_factory=dict)
     max_visited_dialogs_count_reward: float = 0.02
     max_visited_positions_count_reward: float = 0.01
     max_visited_maps_count_reward: float = 0.01
     useless_count: int = 0
     max_useless_count: int = 32
-    punish_world_reward: float = -0.003
+    punish_world_reward: float = -0.02
     punish_dialog_menu_battle_reward: float = -0.01
     __player_pokemon_size = 0x2C
     __pokemon_count = 6
@@ -104,12 +105,11 @@ class Data:
             self.visited_dialogs_count.setdefault(self.dialog_id(memory), 0)
             self.visited_dialogs_count[self.dialog_id(memory)] += 1
 
-        if self.is_world(memory):
-            self.visited_positions_count.setdefault(self.get_position(), 0)
-            self.visited_positions_count[self.get_position()] += 1
-
         self.visited_pokedex_own = self.pokedex_own(memory)
         self.visited_pokedex_seen = self.pokedex_seen(memory)
+
+        self.visited_positions_count.setdefault(self.get_position(), 0)
+        self.visited_positions_count[self.get_position()] += 1
 
         self.visited_maps_count.setdefault(self.map_id(memory), 0)
         self.visited_maps_count[self.map_id(memory)] += 1
@@ -506,7 +506,8 @@ class Data:
             min(
                 self.visited_positions_count.get(
                     self.get_position(offset_x=offset_x, offset_y=offset_y), 0
-                ),
+                )
+                / self.visited_positions_count_max,
                 1,
             )
             for offset_x in range(-8, 9)
@@ -1287,8 +1288,12 @@ class Data:
     def reward_position(self):
         return (
             self.max_visited_positions_count_reward
-            if self.visited_positions_count.get(self.get_position(), 0) == 0
-            else 0
+            - min(
+                self.visited_positions_count.get(self.get_position(), 0)
+                / self.visited_positions_count_max,
+                1,
+            )
+            * self.max_visited_positions_count_reward
         )
 
     def reward_players_substitute_hp(self, memory: bytes):
