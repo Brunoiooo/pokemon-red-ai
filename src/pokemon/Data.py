@@ -14,13 +14,17 @@ class Data:
     visited_positions_count: dict[str, int] = field(default_factory=dict)
     visited_positions_count_max: int = 4
     visited_maps_count: dict[int, int] = field(default_factory=dict)
-    max_visited_dialogs_count_reward: float = 0.02
+    max_visited_dialogs_count_reward: float = 0.01
     max_visited_positions_count_reward: float = 0.01
     max_visited_maps_count_reward: float = 0.01
     useless_count: int = 0
-    max_useless_count: int = 32
+    max_useless_count: int = 128
     punish_world_reward: float = -0.003
-    punish_dialog_menu_battle_reward: float = -0.01
+    punish_dialog_menu_battle_reward: float = -0.003
+    visited_battle_positions: list[str] = field(default_factory=list)
+    visited_battle_positions_count: int = 0
+    max_visited_battle_positions_count: int = 16
+    visited_battle_positions_reward: int = 0.01
     __player_pokemon_size = 0x2C
     __pokemon_count = 6
     last_action = 0
@@ -92,6 +96,8 @@ class Data:
         self.last_reward = 0
         self.buffer_reward = 0.0
         self.last_game_mode_flags = self.game_mode_flags_data(self.pyboy.memory)
+        self.visited_battle_positions_count = 0
+        self.visited_battle_positions = []
 
     def count(self, reward: float, action: int, memory: bytes | None = None):
         self.last_action = action
@@ -115,7 +121,28 @@ class Data:
         else:
             self.useless_count = 0
 
+        if self.is_battle(self.pyboy.memory) and self.number_of_turns_in_current_battle(
+            memory
+        ) != self.number_of_turns_in_current_battle(self.pyboy.memory):
+            self.visited_battle_positions = []
+            self.visited_battle_positions_count = 0
+        elif (
+            self.is_battle(self.pyboy.memory)
+            and self.get_menu_position(self.pyboy.memory)
+            not in self.visited_battle_positions
+        ):
+            self.visited_battle_positions.append(
+                self.get_menu_position(self.pyboy.memory)
+            )
+            self.visited_battle_positions_count += 1
+
         self.last_game_mode_flags = self.game_mode_flags_data(memory)
+
+    def get_menu_position(self, memory: PyBoyMemoryView | bytes):
+        return (
+            self.menu_position_x(memory=memory),
+            self.menu_position_y(memory=memory),
+        )
 
     def inputs(self):
         return {
@@ -232,15 +259,6 @@ class Data:
         if self.is_battle(self.pyboy.memory):
             reward += self.reward_battle(memory)
 
-        if self.is_dialog(self.pyboy.memory):
-            reward += self.reward_dialog(memory)
-
-        if self.is_world(self.pyboy.memory):
-            reward += -0.001
-            reward += self.reward_position()
-            reward += self.reward_map(memory)
-            reward += self.reward_illegal_world_move(memory)
-
         if self.is_battle(self.pyboy.memory) and self.number_of_turns_in_current_battle(
             memory
         ) == self.number_of_turns_in_current_battle(self.pyboy.memory):
@@ -249,6 +267,15 @@ class Data:
         elif self.is_battle(self.pyboy.memory):
             reward += self.buffer_reward
             self.buffer_reward = 0.0
+
+        if self.is_dialog(self.pyboy.memory):
+            reward += self.reward_dialog(memory)
+
+        if self.is_world(self.pyboy.memory):
+            reward += -0.001
+            reward += self.reward_position()
+            reward += self.reward_map(memory)
+            reward += self.reward_illegal_world_move(memory)
 
         if (
             self.is_battle(self.pyboy.memory)
@@ -259,6 +286,20 @@ class Data:
             and self.is_dialog(memory)
         ):
             reward += self.reward_menu_illegal_move(memory)
+
+        if (
+            self.is_battle(self.pyboy.memory)
+            and self.get_menu_position(self.pyboy.memory)
+            not in self.visited_battle_positions
+        ):
+            reward += (
+                1
+                - min(
+                    self.visited_battle_positions_count
+                    / self.max_visited_battle_positions_count,
+                    1,
+                )
+            ) * self.visited_battle_positions_reward
 
         reward += self.reward_last_game_mode_flags(memory)
 
@@ -655,6 +696,11 @@ class Data:
                 self.critical_hit_flag(self.pyboy.memory),
                 self.one_hit_ko_flag(self.pyboy.memory),
                 self.hooked_pokemon_flag(self.pyboy.memory),
+                min(
+                    self.visited_battle_positions_count
+                    / self.max_visited_battle_positions_count,
+                    1,
+                ),
             ]
         )
         data_byte = self.data_normalizer(
