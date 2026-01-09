@@ -21,7 +21,7 @@ from math import inf
 
 @dataclass
 class TrainWorker:
-    max_workers: int = field(default_factory=lambda: 6)
+    max_workers: int = field(default_factory=lambda: 8)
     device: str = field(
         default_factory=lambda: "cuda" if torch.cuda.is_available() else "cpu"
     )
@@ -31,7 +31,7 @@ class TrainWorker:
     model_lock: RLock = field(default_factory=lambda: Manager().RLock())
     is_debug: Synchronized = field(default_factory=lambda: Manager().Value("b", False))
     buffer: PrioritizedReplayBuffer = field(
-        default_factory=lambda: PrioritizedReplayBuffer(capacity=200000)
+        default_factory=lambda: PrioritizedReplayBuffer(capacity=200000, alpha=0.0)
     )
     buffer_lock: RLock = field(default_factory=lambda: Manager().RLock())
     is_evaluation_window: Synchronized = field(

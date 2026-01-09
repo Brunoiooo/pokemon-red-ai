@@ -115,8 +115,10 @@ class Emulator:
         )
 
     def is_new_episode(self, memory: bytes):
-        return 0 < self.data.reward_event_flags(memory) or 0 < self.data.reward_badges(
-            memory
+        return (
+            0 < self.data.reward_event_flags(memory)
+            or 0 < self.data.reward_badges(memory)
+            or self.data.is_battle(memory) != self.data.is_battle(self.pyboy.memory)
         )
 
     def auto_mode(self, queue_logs: Queue):
