@@ -546,7 +546,6 @@ class Data:
     def core_data(self):
         data = []
 
-        data += [min(self.useless_count / self.max_useless_count, 1)]
         data += [max(min(self.last_reward, 1.0), -1.0)]
         data += self.last_game_mode_flags
         data += self.player_data()
