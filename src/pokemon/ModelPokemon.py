@@ -11,8 +11,6 @@ def get_model(device: str, name: str | None = None):
 
     inputs = emulator.data.inputs()
 
-    continuous_dim = len(inputs["continuous"])
-
     single_embed_dim = 16 + 16 + 4 + 16 + 16
 
     multi_embed_dim = (
@@ -26,10 +24,19 @@ def get_model(device: str, name: str | None = None):
         + len(inputs["sprite_data_facing_directions"]) * 4
     )
 
-    total_in_dim = continuous_dim + single_embed_dim + multi_embed_dim
+    total_in_dim = single_embed_dim + multi_embed_dim
 
     model = ModelPokemon(
         in_dim=total_in_dim,
+        core_in=len(inputs["core"]),
+        battle_in=len(inputs["battle"]),
+        menu_battle_dialog_in=len(inputs["menu_battle_dialog"]),
+        dialog_world_in=len(inputs["dialog_world"]),
+        progress_in=len(inputs["progress"]),
+        mode_in=len(inputs["mode"]),
+        nav_in=len(inputs["nav"]),
+        inv_in=len(inputs["inv"]),
+        party_in=len(inputs["party"]),
         outputs=len(emulator.buttons),
     ).to(device)
 
@@ -57,16 +64,50 @@ def get_model(device: str, name: str | None = None):
 
 
 class ModelPokemon(nn.Module):
+    FLOAT_INPUTS = {
+        "core",
+        "battle",
+        "menu_battle_dialog",
+        "dialog_world",
+        "progress",
+        "nav",
+        "inv",
+        "party",
+        "mode",
+    }
+
     def __init__(
         self,
         in_dim: int,
+        core_in: int,
+        battle_in: int,
+        menu_battle_dialog_in: int,
+        dialog_world_in: int,
+        progress_in: int,
+        mode_in: int,
+        nav_in: int,
+        inv_in: int,
+        party_in: int,
         outputs: int,
     ):
         super().__init__()
 
         last_action_output = int(math.sqrt(outputs))
 
-        in_dim = in_dim + last_action_output + 128
+        in_dim = (
+            in_dim
+            + last_action_output
+            + 128
+            + 64
+            + 64
+            + 64
+            + 64
+            + 64
+            + 32
+            + 64
+            + 64
+            + 128
+        )
 
         self.last_action = nn.Embedding(outputs, last_action_output)
         self.map_id = nn.Embedding(256, 16)
@@ -94,14 +135,80 @@ class ModelPokemon(nn.Module):
             nn.SiLU(),
         )
 
+        self.core_enc = nn.Sequential(
+            nn.Linear(core_in, 64),
+            nn.SiLU(),
+            nn.Linear(64, 64),
+            nn.SiLU(),
+        )
+
+        self.battle_enc = nn.Sequential(
+            nn.Linear(battle_in, 64),
+            nn.SiLU(),
+            nn.Linear(64, 64),
+            nn.SiLU(),
+        )
+
+        self.menu_battle_dialog_enc = nn.Sequential(
+            nn.Linear(menu_battle_dialog_in, 64),
+            nn.SiLU(),
+            nn.Linear(64, 64),
+            nn.SiLU(),
+        )
+
+        self.dialog_world_enc = nn.Sequential(
+            nn.Linear(dialog_world_in, 64),
+            nn.SiLU(),
+            nn.Linear(64, 64),
+            nn.SiLU(),
+        )
+
+        self.progress_enc = nn.Sequential(
+            nn.Linear(progress_in, 64),
+            nn.SiLU(),
+            nn.Linear(64, 64),
+            nn.SiLU(),
+        )
+
+        self.mode_enc = nn.Sequential(
+            nn.Linear(mode_in, 32),
+            nn.SiLU(),
+            nn.Linear(32, 32),
+            nn.SiLU(),
+        )
+
+        self.nav_enc = nn.Sequential(
+            nn.Linear(nav_in, 64),
+            nn.SiLU(),
+            nn.Linear(64, 64),
+            nn.SiLU(),
+        )
+
+        self.inv_enc = nn.Sequential(
+            nn.Linear(inv_in, 64),
+            nn.SiLU(),
+            nn.Linear(64, 64),
+            nn.SiLU(),
+        )
+
+        self.party_enc = nn.Sequential(
+            nn.Linear(party_in, 128),
+            nn.SiLU(),
+            nn.Linear(128, 128),
+            nn.SiLU(),
+        )
+
         self.trunk = nn.Sequential(
             nn.Linear(in_dim, 1024),
             nn.LayerNorm(1024),
             nn.SiLU(),
+            nn.Dropout(p=0.01),
             nn.Linear(1024, 512),
             nn.SiLU(),
+            nn.Dropout(p=0.01),
             nn.Linear(512, 256),
             nn.SiLU(),
+            nn.Dropout(p=0.01),
         )
 
         self.value = nn.Sequential(
@@ -141,7 +248,32 @@ class ModelPokemon(nn.Module):
     def forward(self, x):
         device = next(self.parameters()).device
 
-        cont = self._as_float_batch(x["continuous"], device)
+        core = self._as_float_batch(x["core"], device)
+        core = self.core_enc(core)
+
+        battle = self._as_float_batch(x["battle"], device)
+        battle = self.battle_enc(battle)
+
+        menu_battle_dialog = self._as_float_batch(x["menu_battle_dialog"], device)
+        menu_battle_dialog = self.menu_battle_dialog_enc(menu_battle_dialog)
+
+        dialog_world = self._as_float_batch(x["dialog_world"], device)
+        dialog_world = self.dialog_world_enc(dialog_world)
+
+        mode = self._as_float_batch(x["mode"], device)
+        mode = self.mode_enc(mode)
+
+        progress = self._as_float_batch(x["progress"], device)
+        progress = self.progress_enc(progress)
+
+        nav = self._as_float_batch(x["nav"], device)
+        nav = self.nav_enc(nav)
+
+        inv = self._as_float_batch(x["inv"], device)
+        inv = self.inv_enc(inv)
+
+        party = self._as_float_batch(x["party"], device)
+        party = self.party_enc(party)
 
         last_action_emb = self.last_action(
             self._as_long_scalar_batch(x["last_action"], device)
@@ -202,7 +334,15 @@ class ModelPokemon(nn.Module):
 
         h = torch.cat(
             [
-                cont,
+                core,
+                battle,
+                menu_battle_dialog,
+                dialog_world,
+                mode,
+                progress,
+                nav,
+                inv,
+                party,
                 last_action_emb,
                 map_id_emb,
                 dialog_id_emb,

@@ -119,11 +119,32 @@ class Data:
 
     def inputs(self):
         return {
-            "continuous": torch.tensor(self.data(), dtype=torch.float32),
             "screen_tiles": torch.tensor(
                 self.data_normalizer(self.screen_tiles(self.pyboy.memory)),
                 dtype=torch.float32,
             ).view(1, 18, 20),
+            "core": torch.tensor(self.core_data(), dtype=torch.float32),
+            "battle": torch.tensor(self.battle_data(), dtype=torch.float32),
+            "menu_battle_dialog": torch.tensor(
+                self.menu_battle_dialog_data(), dtype=torch.float32
+            ),
+            "dialog_world": torch.tensor(self.dialog_world_data(), dtype=torch.float32),
+            "mode": torch.tensor(
+                self.game_mode_flags_data(self.pyboy.memory), dtype=torch.float32
+            ),
+            "progress": torch.tensor(
+                self.event_flags_data(self.pyboy.memory)
+                + self.badges(self.pyboy.memory),
+                dtype=torch.float32,
+            ),
+            "nav": torch.tensor(self.world_data(), dtype=torch.float32),
+            "inv": torch.tensor(
+                self.inventory_data(self.pyboy.memory), dtype=torch.float32
+            ),
+            "party": torch.tensor(
+                self.stored_pokemon_data(self.pyboy.memory),
+                dtype=torch.float32,
+            ),
             "last_action": torch.tensor(self.last_action, dtype=torch.long),
             "map_id": torch.tensor(self.map_id(self.pyboy.memory), dtype=torch.long),
             "dialog_id": torch.tensor(
@@ -445,17 +466,6 @@ class Data:
             and self.position_y(self.pyboy.memory) == self.position_y(memory)
         )
 
-    def data(self):
-        data = []
-
-        data += self.core_data()
-        data += self.battle_data()
-        data += self.menu_battle_dialog_data()
-        data += self.dialog_world_data()
-        data += self.world_data()
-
-        return data
-
     def dialog_world_data(self):
         data = self.data_normalizer(
             [
@@ -538,19 +548,19 @@ class Data:
 
         data += [min(self.useless_count / self.max_useless_count, 1)]
         data += [max(min(self.last_reward, 1.0), -1.0)]
-        data += self.game_mode_flags_data(self.pyboy.memory)
         data += self.last_game_mode_flags
         data += self.player_data()
         data += self.pokedex_data()
-        data += self.data_normalizer(self.items_quantities(self.pyboy.memory))
-        data += self.data_normalizer(
-            [self.player_money(self.pyboy.memory)], max=0xFFFFFF
-        )
-        data += self.badges(self.pyboy.memory)
-        data += self.data_normalizer(self.stored_items_quantities(self.pyboy.memory))
-        data += self.data_normalizer([self.game_coins(self.pyboy.memory)], max=0xFFFF)
-        data += self.event_flags_data(self.pyboy.memory)
-        data += self.stored_pokemon_data(self.pyboy.memory)
+
+        return data
+
+    def inventory_data(self, memory: PyBoyMemoryView | bytes):
+        data = []
+
+        data += self.data_normalizer(self.items_quantities(memory))
+        data += self.data_normalizer([self.player_money(memory)], max=0xFFFFFF)
+        data += self.data_normalizer(self.stored_items_quantities(memory))
+        data += self.data_normalizer([self.game_coins(memory)], max=0xFFFF)
 
         return data
 

@@ -102,5 +102,9 @@ class TrainView(ttk.Frame):
         self.scrolled_logs.insert(
             "end", f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {log}\n"
         )
+        self.scrolled_logs.delete(
+            "1.0",
+            f"{max(1, int(self.scrolled_logs.index('end').split('.')[0]) - 1000)}.0",
+        )
         self.scrolled_logs.see("end")
         self.scrolled_logs.configure(state="disabled")

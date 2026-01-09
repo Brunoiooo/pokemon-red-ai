@@ -159,7 +159,7 @@ class ExperienceWorker:
             if torch.is_tensor(v):
                 v = v.detach().cpu()
 
-                if k == "continuous":
+                if k in self.model.FLOAT_INPUTS:
                     out[k] = v.numpy().copy()
                 else:
                     if v.numel() == 1:
