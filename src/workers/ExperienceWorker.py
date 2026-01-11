@@ -22,7 +22,7 @@ class ExperienceWorker:
     model_state_dict: dict[str, Any]
     epsilon: float
     td_error_steps = 5
-    start_save_chance = 0.0
+    start_save_chance = 1.0
 
     __last_save_path = "last"
 
@@ -95,7 +95,7 @@ class ExperienceWorker:
 
                 self.put_to_queue_data(terminated=terminated, truncated=truncated)
 
-                if truncated or terminated:
+                if truncated:
                     break
 
                 memory, inputs = next_memory, next_inputs

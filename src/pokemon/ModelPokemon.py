@@ -38,6 +38,7 @@ def get_model(device: str, name: str | None = None):
         inv_in=len(inputs["inv"]),
         party_in=len(inputs["party"]),
         outputs=len(emulator.buttons),
+        outputs_max=len(inputs["last_actions"]),
     ).to(device)
 
     emulator.pyboy.stop(False)
@@ -89,6 +90,7 @@ class ModelPokemon(nn.Module):
         inv_in: int,
         party_in: int,
         outputs: int,
+        outputs_max: int,
     ):
         super().__init__()
 
@@ -96,7 +98,6 @@ class ModelPokemon(nn.Module):
 
         in_dim = (
             in_dim
-            + last_action_output
             + 128
             + 64
             + 64
@@ -107,9 +108,10 @@ class ModelPokemon(nn.Module):
             + 64
             + 64
             + 128
+            + (outputs_max * last_action_output)
         )
 
-        self.last_action = nn.Embedding(outputs, last_action_output)
+        self.last_actions = nn.Embedding(outputs, last_action_output)
         self.map_id = nn.Embedding(256, 16)
         self.dialog_id = nn.Embedding(256, 16)
         self.index_of_current_pokemon_send_out = nn.Embedding(6, 4)
@@ -275,9 +277,11 @@ class ModelPokemon(nn.Module):
         party = self._as_float_batch(x["party"], device)
         party = self.party_enc(party)
 
-        last_action_emb = self.last_action(
-            self._as_long_scalar_batch(x["last_action"], device)
+        last_actions_emb = self.last_actions(
+            self._as_long_seq_batch(x["last_actions"], device)
         )
+        last_actions_emb = last_actions_emb.reshape(last_actions_emb.size(0), -1)
+
         map_id_emb = self.map_id(self._as_long_scalar_batch(x["map_id"], device))
         dialog_id_emb = self.dialog_id(
             self._as_long_scalar_batch(x["dialog_id"], device)
@@ -343,7 +347,7 @@ class ModelPokemon(nn.Module):
                 nav,
                 inv,
                 party,
-                last_action_emb,
+                last_actions_emb,
                 map_id_emb,
                 dialog_id_emb,
                 index_emb,

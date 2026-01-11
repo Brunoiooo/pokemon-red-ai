@@ -1,3 +1,4 @@
+from collections import deque
 import pickle
 from dataclasses import dataclass, field
 
@@ -27,13 +28,24 @@ class Data:
     visited_battle_positions_reward: int = 0.01
     __player_pokemon_size = 0x2C
     __pokemon_count = 6
-    last_action = 0
+    last_actions_maxlen = 8
     last_reward = 0
     buffer_reward = 0.0
     last_game_mode_flags = [0, 0, 0, 0]
 
     __stored_pokemon_size = 0x21
     __stored_pokemon_count = 20
+
+    __last_actions: deque[int] | None = None
+
+    @property
+    def last_actions(self):
+        if self.__last_actions is None:
+            self.__last_actions = deque(
+                [0] * self.last_actions_maxlen, maxlen=self.last_actions_maxlen
+            )
+
+        return self.__last_actions
 
     __visited_pokedex_own: list[int] | None = None
 
@@ -92,15 +104,14 @@ class Data:
         self.visited_maps_count = {}
         self.visited_positions_count = {}
         self.useless_count = 0
-        self.last_action = 0
         self.last_reward = 0
         self.buffer_reward = 0.0
         self.last_game_mode_flags = self.game_mode_flags_data(self.pyboy.memory)
         self.visited_battle_positions_count = 0
         self.visited_battle_positions = []
+        self.__last_actions = None
 
     def count(self, reward: float, action: int, memory: bytes | None = None):
-        self.last_action = action
         self.last_reward = reward
 
         if self.is_dialog(memory) and not self.is_menu_illegal_move(memory):
@@ -138,6 +149,8 @@ class Data:
 
         self.last_game_mode_flags = self.game_mode_flags_data(memory)
 
+        self.last_actions.append(action)
+
     def get_menu_position(self, memory: PyBoyMemoryView | bytes):
         return (
             self.menu_position_x(memory=memory),
@@ -172,7 +185,7 @@ class Data:
                 self.stored_pokemon_data(self.pyboy.memory),
                 dtype=torch.float32,
             ),
-            "last_action": torch.tensor(self.last_action, dtype=torch.long),
+            "last_actions": torch.tensor(list(self.last_actions), dtype=torch.long),
             "map_id": torch.tensor(self.map_id(self.pyboy.memory), dtype=torch.long),
             "dialog_id": torch.tensor(
                 self.dialog_id(self.pyboy.memory), dtype=torch.long
@@ -489,11 +502,7 @@ class Data:
         return reward
 
     def terminated(self, memory: bytes):
-        return (
-            True
-            if 0 < self.reward_badges(memory) or 0 < self.reward_event_flags(memory)
-            else False
-        )
+        return False
 
     def truncated(self, memory: bytes):
         return True if self.max_useless_count <= self.useless_count else False

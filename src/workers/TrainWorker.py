@@ -1,3 +1,4 @@
+from collections import deque
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from multiprocessing import Queue, Manager
@@ -5,6 +6,8 @@ import multiprocessing as mp
 from multiprocessing.sharedctypes import Synchronized
 from multiprocessing.synchronize import Event
 import os
+import queue
+import random
 from threading import RLock, Thread
 from time import sleep
 import traceback
@@ -30,9 +33,7 @@ class TrainWorker:
     queue_logs: Queue = field(default_factory=lambda: Manager().Queue())
     model_lock: RLock = field(default_factory=lambda: Manager().RLock())
     is_debug: Synchronized = field(default_factory=lambda: Manager().Value("b", False))
-    buffer: PrioritizedReplayBuffer = field(
-        default_factory=lambda: PrioritizedReplayBuffer(capacity=200000, alpha=0.0)
-    )
+    buffer: deque = field(default_factory=lambda: deque(maxlen=200000))
     buffer_lock: RLock = field(default_factory=lambda: Manager().RLock())
     is_evaluation_window: Synchronized = field(
         default_factory=lambda: Manager().Value("b", False)
@@ -48,10 +49,6 @@ class TrainWorker:
     gamma = 0.99
     criterion: torch.nn.SmoothL1Loss = field(default_factory=torch.nn.SmoothL1Loss)
     tau = 0.005
-    # loss tracking
-    running_loss_ema: float = 0.0
-    loss_ema_alpha: float = 0.001
-    last_loss: float = 0.0
     target_update_interval = 1000
     _opt_steps: int = 0
 
@@ -243,7 +240,7 @@ class TrainWorker:
                 if self.is_debug.value and self.count % 10 == 0:
                     with self.buffer_lock:
                         self.queue_logs.put_nowait(
-                            f"Count: {self.count} | Buffer: {len(self.buffer)} | Loss: {self.last_loss:.6f} | EMA Loss: {self.running_loss_ema:.6f}"
+                            f"Count: {self.count} | Buffer: {len(self.buffer)}"
                         )
 
                 self.count += 1
@@ -284,8 +281,13 @@ class TrainWorker:
             self.queue_logs.put_nowait("Queue handler started.")
 
             while self.event_start.is_set():
+                try:
+                    item = self.queue_data.get_nowait()
+                except queue.Empty:
+                    continue
+
                 with self.buffer_lock:
-                    self.buffer.add(self.queue_data.get())
+                    self.buffer.append(item)
         except Exception as e:
             self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
         finally:
@@ -317,24 +319,17 @@ class TrainWorker:
     def optimize_batch(self):
         try:
             with self.buffer_lock:
-                if len(self.buffer) < self.buffer.tree.capacity // 100:
+                if len(self.buffer) < self.buffer.maxlen // 100:
                     raise ValueError(
-                        f"Buffer too small: expected at least {self.buffer.tree.capacity // 100}, got {len(self.buffer)}"
+                        f"Buffer too small: expected at least {self.buffer.maxlen // 100}, got {len(self.buffer)}"
                     )
-        except Exception:
+        except ValueError as e:
+            self.queue_logs.put_nowait(str(e))
             sleep(1.0)
             return
 
         with self.buffer_lock:
-            batch, idxs, weights = self.buffer.sample(
-                self.batch_size,
-                min(
-                    1.0,
-                    self.per_beta_start
-                    + self.count * (1.0 - self.per_beta_start) / self.per_beta_frames,
-                ),
-            )
-        weights = torch.tensor(weights, device=self.device, dtype=torch.float32)
+            batch = random.sample(list(self.buffer), k=self.batch_size)
 
         (inputs, actions, next_inputs, rewards, terminateds, truncateds, steps) = zip(
             *batch
@@ -352,7 +347,6 @@ class TrainWorker:
         assert self.batch_size % self.grad_accum_steps == 0
 
         self.optimizer.zero_grad(set_to_none=True)
-        batch_loss = 0.0
 
         total_td_errors = np.zeros(self.batch_size)
 
@@ -365,7 +359,6 @@ class TrainWorker:
             te = terminateds[sl]
             tr = truncateds[sl]
             n = steps[sl]
-            w_slice = weights[sl]
 
             with self.model_lock:
                 q_all = self.model(s)
@@ -388,39 +381,22 @@ class TrainWorker:
                 bootstrap_mask = (~(te | tr)).float()
                 target = rN + bootstrap_mask * gamma_pow_n * next_q_target
 
+            loss = torch.nn.functional.smooth_l1_loss(q_sa, target, reduction="mean")
+            (loss / self.grad_accum_steps).backward()
+
             td_error = torch.abs(q_sa - target).detach()
             total_td_errors[sl] = td_error.cpu().numpy()
-
-            element_wise_loss = torch.nn.functional.smooth_l1_loss(
-                q_sa, target, reduction="none"
-            )
-            weighted_loss = (element_wise_loss * w_slice).mean()
-
-            loss = weighted_loss / self.grad_accum_steps
-            loss.backward()
-            batch_loss += float(loss.detach().item())
 
         with self.model_lock:
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
 
         self.optimizer.step()
 
-        self.buffer.update_priorities(idxs, total_td_errors)
-
         self._opt_steps += 1
         if self._opt_steps % self.target_update_interval == 0:
             self.hard_update_target()
 
         self.soft_update_target()
-
-        self.last_loss = batch_loss
-        if self.running_loss_ema == 0.0:
-            self.running_loss_ema = batch_loss
-        else:
-            self.running_loss_ema = (
-                self.loss_ema_alpha * batch_loss
-                + (1 - self.loss_ema_alpha) * self.running_loss_ema
-            )
 
     def collate_states(self, list_of_dicts: tuple[Any, ...]):
         batch = {}
