@@ -24,7 +24,7 @@ from math import inf
 
 @dataclass
 class TrainWorker:
-    max_workers: int = field(default_factory=lambda: 8)
+    max_workers: int = field(default_factory=lambda: 5)
     device: str = field(
         default_factory=lambda: "cuda" if torch.cuda.is_available() else "cpu"
     )
@@ -195,14 +195,20 @@ class TrainWorker:
                     queue_data=self.queue_data,
                     gamma=self.gamma,
                     model_state_dict=model_state_dict,
-                    epsilon=(i + 1) / self.max_workers * self.max_epsilon,
                     window=self.train_use_sdl,
                 )
-                for i in range(self.max_workers)
+                for _ in range(self.max_workers)
             ]
+
+        with self.buffer_lock:
+            buffer_len = len(self.buffer)
+            buffer_maxlen = self.buffer.maxlen
+
+        epsilon = max(1.0 - buffer_len / buffer_maxlen, self.max_epsilon)
 
         for x in self.__experienceWorkers:
             x.model_state_dict = model_state_dict
+            x.epsilon = epsilon
 
         return self.__experienceWorkers
 

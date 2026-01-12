@@ -20,8 +20,8 @@ class ExperienceWorker:
     window: Synchronized
     gamma: float
     model_state_dict: dict[str, Any]
-    epsilon: float
-    td_error_steps = 5
+    epsilon: float = 1.0
+    td_error_steps = 50
     start_save_chance = 1.0
 
     __last_save_path = "last"
