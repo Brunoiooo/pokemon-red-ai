@@ -98,16 +98,16 @@ class ModelPokemon(nn.Module):
 
         in_dim = (
             in_dim
-            + 128
-            + 64
-            + 64
-            + 64
-            + 64
-            + 64
             + 32
-            + 64
-            + 64
-            + 128
+            + 32
+            + 32
+            + 32
+            + 32
+            + 32
+            + 32
+            + 32
+            + 32
+            + 32
             + (outputs_max * last_action_output)
         )
 
@@ -133,70 +133,87 @@ class ModelPokemon(nn.Module):
             nn.Conv2d(8, 16, 3, padding=1),
             nn.SiLU(),
             nn.Flatten(),
-            nn.Linear(16 * 18 * 20, 128),
+            nn.Linear(16 * 18 * 20, 32),
             nn.SiLU(),
         )
 
         self.core_enc = nn.Sequential(
-            nn.Linear(core_in, 64),
+            nn.Linear(core_in, 128),
             nn.SiLU(),
-            nn.Linear(64, 64),
+            nn.Linear(128, 64),
+            nn.SiLU(),
+            nn.Linear(64, 32),
             nn.SiLU(),
         )
 
         self.battle_enc = nn.Sequential(
-            nn.Linear(battle_in, 64),
+            nn.Linear(battle_in, 128),
             nn.SiLU(),
-            nn.Linear(64, 64),
+            nn.Linear(128, 64),
+            nn.SiLU(),
+            nn.Linear(64, 32),
             nn.SiLU(),
         )
-
         self.menu_battle_dialog_enc = nn.Sequential(
-            nn.Linear(menu_battle_dialog_in, 64),
+            nn.Linear(menu_battle_dialog_in, 128),
             nn.SiLU(),
-            nn.Linear(64, 64),
+            nn.Linear(128, 64),
+            nn.SiLU(),
+            nn.Linear(64, 32),
             nn.SiLU(),
         )
 
         self.dialog_world_enc = nn.Sequential(
-            nn.Linear(dialog_world_in, 64),
+            nn.Linear(dialog_world_in, 128),
             nn.SiLU(),
-            nn.Linear(64, 64),
+            nn.Linear(128, 64),
+            nn.SiLU(),
+            nn.Linear(64, 32),
             nn.SiLU(),
         )
 
         self.progress_enc = nn.Sequential(
-            nn.Linear(progress_in, 64),
+            nn.Linear(progress_in, 128),
             nn.SiLU(),
-            nn.Linear(64, 64),
+            nn.Linear(128, 64),
+            nn.SiLU(),
+            nn.Linear(64, 32),
             nn.SiLU(),
         )
 
         self.mode_enc = nn.Sequential(
-            nn.Linear(mode_in, 32),
+            nn.Linear(mode_in, 128),
             nn.SiLU(),
-            nn.Linear(32, 32),
+            nn.Linear(128, 64),
+            nn.SiLU(),
+            nn.Linear(64, 32),
             nn.SiLU(),
         )
 
         self.nav_enc = nn.Sequential(
-            nn.Linear(nav_in, 64),
+            nn.Linear(nav_in, 128),
             nn.SiLU(),
-            nn.Linear(64, 64),
+            nn.Linear(128, 64),
+            nn.SiLU(),
+            nn.Linear(64, 32),
             nn.SiLU(),
         )
 
         self.inv_enc = nn.Sequential(
-            nn.Linear(inv_in, 64),
+            nn.Linear(inv_in, 128),
             nn.SiLU(),
-            nn.Linear(64, 64),
+            nn.Linear(128, 64),
+            nn.SiLU(),
+            nn.Linear(64, 32),
             nn.SiLU(),
         )
 
         self.party_enc = nn.Sequential(
             nn.Linear(party_in, 128),
             nn.SiLU(),
-            nn.Linear(128, 128),
+            nn.Linear(128, 64),
+            nn.SiLU(),
+            nn.Linear(64, 32),
             nn.SiLU(),
         )
 
