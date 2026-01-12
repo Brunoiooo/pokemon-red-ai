@@ -201,28 +201,28 @@ class ModelPokemon(nn.Module):
         )
 
         self.trunk = nn.Sequential(
-            nn.Linear(in_dim, 1024),
-            nn.LayerNorm(1024),
+            nn.Linear(in_dim, 2048),
+            nn.LayerNorm(2048),
+            nn.SiLU(),
+            nn.Dropout(p=0.01),
+            nn.Linear(2048, 1024),
             nn.SiLU(),
             nn.Dropout(p=0.01),
             nn.Linear(1024, 512),
             nn.SiLU(),
             nn.Dropout(p=0.01),
-            nn.Linear(512, 256),
-            nn.SiLU(),
-            nn.Dropout(p=0.01),
         )
 
         self.value = nn.Sequential(
-            nn.Linear(256, 128),
+            nn.Linear(512, 256),
             nn.SiLU(),
-            nn.Linear(128, 1),
+            nn.Linear(256, 1),
         )
 
         self.advantage = nn.Sequential(
-            nn.Linear(256, 128),
+            nn.Linear(512, 256),
             nn.SiLU(),
-            nn.Linear(128, outputs),
+            nn.Linear(256, outputs),
         )
 
     def _as_float_batch(self, t, device):
