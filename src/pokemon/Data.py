@@ -114,18 +114,22 @@ class Data:
     def count(self, reward: float, action: int, memory: bytes | None = None):
         self.last_reward = reward
 
+        self.visited_pokedex_own = self.pokedex_own(memory)
+        self.visited_pokedex_seen = self.pokedex_seen(memory)
+
         if self.is_dialog(memory) and not self.is_menu_illegal_move(memory):
             self.visited_dialogs_count.setdefault(self.dialog_id(memory), 0)
             self.visited_dialogs_count[self.dialog_id(memory)] += 1
 
-        self.visited_pokedex_own = self.pokedex_own(memory)
-        self.visited_pokedex_seen = self.pokedex_seen(memory)
+        if self.is_battle(self.pyboy.memory) and not self.is_menu_illegal_move(memory):
+            self.visited_battle_positions_count += 1
 
-        self.visited_positions_count.setdefault(self.get_position(), 0)
-        self.visited_positions_count[self.get_position()] += 1
+        if self.is_world(self.pyboy.memory) and not self.is_illegal_world_move(memory):
+            self.visited_positions_count.setdefault(self.get_position(), 0)
+            self.visited_positions_count[self.get_position()] += 1
 
-        self.visited_maps_count.setdefault(self.map_id(memory), 0)
-        self.visited_maps_count[self.map_id(memory)] += 1
+            self.visited_maps_count.setdefault(self.map_id(memory), 0)
+            self.visited_maps_count[self.map_id(memory)] += 1
 
         if reward <= 0.0:
             self.useless_count += 1
@@ -145,7 +149,6 @@ class Data:
             self.visited_battle_positions.append(
                 self.get_menu_position(self.pyboy.memory)
             )
-            self.visited_battle_positions_count += 1
 
         self.last_game_mode_flags = self.game_mode_flags_data(memory)
 
@@ -286,7 +289,7 @@ class Data:
 
         if self.is_world(self.pyboy.memory):
             reward += -0.001
-            reward += self.reward_position()
+            reward += self.reward_position(memory)
             reward += self.reward_map(memory)
             reward += self.reward_illegal_world_move(memory)
 
@@ -370,7 +373,8 @@ class Data:
     def reward_map(self, memory: bytes):
         return (
             self.max_visited_maps_count_reward
-            if self.visited_maps_count.get(self.map_id(memory), 0) == 0
+            if self.visited_maps_count.get(self.map_id(self.pyboy.memory), 0) == 0
+            and not self.is_illegal_world_move(memory)
             else 0.0
         )
 
@@ -1350,15 +1354,19 @@ class Data:
 
         return reward
 
-    def reward_position(self):
+    def reward_position(self, memory: bytes):
         return (
-            self.max_visited_positions_count_reward
-            - min(
-                self.visited_positions_count.get(self.get_position(), 0)
-                / self.visited_positions_count_max,
-                1,
+            (
+                self.max_visited_positions_count_reward
+                - min(
+                    self.visited_positions_count.get(self.get_position(), 0)
+                    / self.visited_positions_count_max,
+                    1,
+                )
+                * self.max_visited_positions_count_reward
             )
-            * self.max_visited_positions_count_reward
+            if not self.is_illegal_world_move(memory)
+            else 0.0
         )
 
     def reward_players_substitute_hp(self, memory: bytes):

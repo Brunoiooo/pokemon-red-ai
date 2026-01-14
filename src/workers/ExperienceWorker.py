@@ -111,7 +111,11 @@ class ExperienceWorker:
             )
 
     def get_action(self, inputs: dict[float]):
-        if random.random() < self.epsilon:
+        epsilon = (
+            self.emulator.data.useless_count / self.emulator.data.max_useless_count
+        )
+
+        if random.random() < epsilon:
             action = random.randint(0, len(self.emulator.buttons) - 1)
         else:
             with torch.inference_mode():
