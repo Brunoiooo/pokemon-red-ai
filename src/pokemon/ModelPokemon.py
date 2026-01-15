@@ -230,16 +230,22 @@ class ModelPokemon(nn.Module):
             nn.Dropout(p=0.01),
         )
 
-        self.value = nn.Sequential(
-            nn.Linear(512, 256),
-            nn.SiLU(),
-            nn.Linear(256, 1),
+        self.value_heads = nn.ModuleList(
+            [
+                nn.Sequential(nn.Linear(512, 256), nn.SiLU(), nn.Linear(256, 1)),
+                nn.Sequential(nn.Linear(512, 256), nn.SiLU(), nn.Linear(256, 1)),
+                nn.Sequential(nn.Linear(512, 256), nn.SiLU(), nn.Linear(256, 1)),
+                nn.Sequential(nn.Linear(512, 256), nn.SiLU(), nn.Linear(256, 1)),
+            ]
         )
 
-        self.advantage = nn.Sequential(
-            nn.Linear(512, 256),
-            nn.SiLU(),
-            nn.Linear(256, outputs),
+        self.advantage_heads = nn.ModuleList(
+            [
+                nn.Sequential(nn.Linear(512, 256), nn.SiLU(), nn.Linear(256, outputs)),
+                nn.Sequential(nn.Linear(512, 256), nn.SiLU(), nn.Linear(256, outputs)),
+                nn.Sequential(nn.Linear(512, 256), nn.SiLU(), nn.Linear(256, outputs)),
+                nn.Sequential(nn.Linear(512, 256), nn.SiLU(), nn.Linear(256, outputs)),
+            ]
         )
 
     def _as_float_batch(self, t, device):
@@ -384,8 +390,24 @@ class ModelPokemon(nn.Module):
         )
 
         z = self.trunk(h)
-        v = self.value(z)
-        a = self.advantage(z)
-        q = v + (a - a.mean(dim=1, keepdim=True))
+
+        raw_mode = self._as_float_batch(x["mode"], device)
+        mode_sum = raw_mode.sum(dim=1)
+
+        mode_idx = raw_mode.argmax(dim=1)
+        mode_idx = torch.where(mode_sum == 0, torch.full_like(mode_idx, 3), mode_idx)
+
+        q = torch.empty(
+            (z.size(0), self.advantage_heads[0][-1].out_features), device=device
+        )
+
+        for i in range(4):
+            mask = mode_idx == i
+            if mask.any():
+                z_i = z[mask]
+                v_i = self.value_heads[i](z_i)
+                a_i = self.advantage_heads[i](z_i)
+                q_i = v_i + (a_i - a_i.mean(dim=1, keepdim=True))
+                q[mask] = q_i
 
         return q
