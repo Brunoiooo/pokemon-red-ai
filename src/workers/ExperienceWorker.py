@@ -22,7 +22,8 @@ class ExperienceWorker:
     model_state_dict: dict[str, Any]
     epsilon: float = 1.0
     td_error_steps = 50
-    start_save_chance = 1.0
+    start_save_chance = 0.0
+    max_stuck_epsilon = 0.25
 
     __last_save_path = "last"
 
@@ -111,11 +112,13 @@ class ExperienceWorker:
             )
 
     def get_action(self, inputs: dict[float]):
-        epsilon = (
-            self.emulator.data.useless_count / self.emulator.data.max_useless_count
-        )
-
-        if random.random() < epsilon:
+        if (
+            random.random()
+            < self.epsilon
+            + self.emulator.data.useless_count
+            / self.emulator.data.max_useless_count
+            * self.max_stuck_epsilon
+        ):
             action = random.randint(0, len(self.emulator.buttons) - 1)
         else:
             with torch.inference_mode():
