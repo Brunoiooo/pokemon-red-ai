@@ -158,6 +158,7 @@ class Data:
         return (
             self.menu_position_x(memory=memory),
             self.menu_position_y(memory=memory),
+            self.current_menu_selected_item(memory=memory),
         )
 
     def inputs(self):
