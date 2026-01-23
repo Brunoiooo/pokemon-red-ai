@@ -21,7 +21,7 @@ class Data:
     useless_count: int = 0
     max_useless_count: int = 128
     punish_world_reward: float = -0.001
-    punish_dialog_menu_battle_reward: float = -0.001
+    punish_dialog_menu_battle_reward: float = -0.01
     visited_battle_positions: list[str] = field(default_factory=list)
     visited_battle_positions_count: int = 0
     max_visited_battle_positions_count: int = 16
@@ -269,7 +269,7 @@ class Data:
         return [memory[i] for i in range(0xC3A0, 0xC508)]
 
     def reward(self, memory: bytes):
-        reward = 0.0
+        reward = -0.001
 
         reward += self.reward_core(memory)
 
@@ -289,7 +289,6 @@ class Data:
             reward += self.reward_dialog(memory)
 
         if self.is_world(self.pyboy.memory):
-            reward += -0.001
             reward += self.reward_position(memory)
             reward += self.reward_map(memory)
             reward += self.reward_illegal_world_move(memory)
@@ -512,7 +511,11 @@ class Data:
         return reward
 
     def terminated(self, memory: bytes):
-        return False
+        return (
+            0 < self.reward_badges(memory)
+            or 0 < self.reward_event_flags(memory)
+            or self.is_battle(self.pyboy.memory) != self.is_battle(memory)
+        )
 
     def truncated(self, memory: bytes):
         return True if self.max_useless_count <= self.useless_count else False

@@ -1,5 +1,6 @@
 from collections import deque
 from dataclasses import dataclass
+import hashlib
 from multiprocessing import Queue
 from multiprocessing.sharedctypes import Synchronized
 import os
@@ -8,6 +9,7 @@ import random
 import time
 import traceback
 from typing import Any
+import numpy as np
 import torch
 from pokemon.Emulator import Emulator
 from pokemon.ModelPokemon import ModelPokemon, get_model
@@ -21,8 +23,8 @@ class ExperienceWorker:
     gamma: float
     model_state_dict: dict[str, Any]
     epsilon: float = 1.0
-    td_error_steps = 50
-    start_save_chance = 0.0
+    td_error_steps = 10
+    start_save_chance = 0.25
     max_stuck_epsilon = 0.25
 
     __last_save_path = "last"
@@ -114,8 +116,7 @@ class ExperienceWorker:
     def get_action(self, inputs: dict[float]):
         if (
             random.random()
-            < self.epsilon
-            + self.emulator.data.useless_count
+            < self.emulator.data.useless_count
             / self.emulator.data.max_useless_count
             * self.max_stuck_epsilon
         ):
@@ -139,17 +140,39 @@ class ExperienceWorker:
                     discount *= self.gamma
 
                 try:
-                    self.queue_data.put_nowait(
-                        (
-                            self.detach_to_cpu(self.buffer[0]["inputs"]),
-                            self.buffer[0]["action"],
-                            self.detach_to_cpu(self.buffer[-1]["next_inputs"]),
+                    if (
+                        reward <= 0
+                        and random.random() < 0.5
+                        or 0 < reward
+                        or terminated
+                        or truncated
+                    ):
+                        inputs0 = self.detach_to_cpu(self.buffer[0]["inputs"])
+                        next_inputs = self.detach_to_cpu(self.buffer[-1]["next_inputs"])
+                        action = self.buffer[0]["action"]
+
+                        hkey = self.transition_hash(
+                            inputs0,
+                            action,
+                            next_inputs,
                             reward,
                             terminated,
                             truncated,
-                            len(self.buffer),
+                            eps=1e-3,
                         )
-                    )
+
+                        self.queue_data.put_nowait(
+                            (
+                                inputs0,
+                                action,
+                                next_inputs,
+                                reward,
+                                terminated,
+                                truncated,
+                                len(self.buffer),
+                                hkey,
+                            )
+                        )
                 except Full:
                     time.sleep(0.01)
                     pass
@@ -158,6 +181,81 @@ class ExperienceWorker:
                     self.buffer.popleft()
                 else:
                     break
+
+    def _stable_hash_obj(self, x, eps: float | None = 1e-3, h=None):
+        if h is None:
+            h = hashlib.blake2b(digest_size=16)
+
+        # torch tensor
+        if torch is not None and hasattr(x, "detach"):
+            x = x.detach().to("cpu")
+            x = x.contiguous().numpy()
+
+        # numpy array
+        if isinstance(x, np.ndarray):
+            a = np.ascontiguousarray(x)
+            if eps is not None and np.issubdtype(a.dtype, np.floating):
+                a = np.round(a / eps).astype(np.int32)
+            h.update(b"nd")
+            h.update(str(a.shape).encode("utf-8"))
+            h.update(str(a.dtype).encode("utf-8"))
+            h.update(a.tobytes())
+            return h
+
+        # dict
+        if isinstance(x, dict):
+            h.update(b"{")
+            for k in sorted(x.keys(), key=lambda k: repr(k)):
+                self._stable_hash_obj(k, eps=eps, h=h)
+                h.update(b":")
+                self._stable_hash_obj(x[k], eps=eps, h=h)
+                h.update(b",")
+            h.update(b"}")
+            return h
+
+        # list/tuple
+        if isinstance(x, (list, tuple)):
+            h.update(b"[")
+            for it in x:
+                self._stable_hash_obj(it, eps=eps, h=h)
+                h.update(b",")
+            h.update(b"]")
+            return h
+
+        # primitives
+        if isinstance(x, (str, int, float, bool)) or x is None:
+            h.update(b"p")
+            h.update(repr(x).encode("utf-8"))
+            return h
+
+        # fallback
+        h.update(b"o")
+        h.update(repr(x).encode("utf-8"))
+        return h
+
+    def transition_hash(
+        self,
+        inputs,
+        action,
+        next_inputs,
+        reward,
+        terminated,
+        truncated,
+        eps: float | None = 1e-3,
+    ) -> str:
+        h = hashlib.blake2b(digest_size=16)
+        self._stable_hash_obj(inputs, eps=eps, h=h)
+        h.update(b"|a|")
+        self._stable_hash_obj(action, eps=eps, h=h)
+        h.update(b"|n|")
+        self._stable_hash_obj(next_inputs, eps=eps, h=h)
+        h.update(b"|r|")
+        self._stable_hash_obj(reward, eps=eps, h=h)
+        h.update(b"|t|")
+        self._stable_hash_obj(terminated, eps=eps, h=h)
+        h.update(b"|tr|")
+        self._stable_hash_obj(truncated, eps=eps, h=h)
+        return h.hexdigest()
 
     def detach_to_cpu(self, inputs):
         out = {}

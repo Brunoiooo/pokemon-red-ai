@@ -1,6 +1,8 @@
 from collections import deque
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
+import hashlib
+import json
 from multiprocessing import Queue, Manager
 import multiprocessing as mp
 from multiprocessing.sharedctypes import Synchronized
@@ -33,6 +35,7 @@ class TrainWorker:
     queue_logs: Queue = field(default_factory=lambda: Manager().Queue())
     model_lock: RLock = field(default_factory=lambda: Manager().RLock())
     is_debug: Synchronized = field(default_factory=lambda: Manager().Value("b", False))
+    hash_buffer: deque = field(default_factory=lambda: deque(maxlen=200000))
     buffer: deque = field(default_factory=lambda: deque(maxlen=200000))
     buffer_lock: RLock = field(default_factory=lambda: Manager().RLock())
     is_evaluation_window: Synchronized = field(
@@ -286,14 +289,25 @@ class TrainWorker:
         try:
             self.queue_logs.put_nowait("Queue handler started.")
 
+            count = 0
+
             while self.event_start.is_set():
                 try:
                     item = self.queue_data.get_nowait()
                 except queue.Empty:
                     continue
 
+                if item[7] in self.hash_buffer:
+                    count += 1
+                    if count % 1000 == 0:
+                        self.queue_logs.put_nowait(
+                            f"Duplicate experience skipped: {count}"
+                        )
+                    continue
+
                 with self.buffer_lock:
                     self.buffer.append(item)
+                    self.hash_buffer.append(item[7])
         except Exception as e:
             self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
         finally:
@@ -337,9 +351,16 @@ class TrainWorker:
         with self.buffer_lock:
             batch = random.sample(list(self.buffer), k=self.batch_size)
 
-        (inputs, actions, next_inputs, rewards, terminateds, truncateds, steps) = zip(
-            *batch
-        )
+        (
+            inputs,
+            actions,
+            next_inputs,
+            rewards,
+            terminateds,
+            truncateds,
+            steps,
+            keys,
+        ) = zip(*batch)
 
         inputs = self.collate_states(inputs)
         actions = torch.tensor(actions, device=self.device, dtype=torch.long)
