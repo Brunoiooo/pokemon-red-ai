@@ -130,11 +130,14 @@ class ModelPokemon(nn.Module):
         self.screen_enc = nn.Sequential(
             nn.Conv2d(1, 8, 3, padding=1),
             nn.SiLU(),
+            nn.Dropout2d(p=0.05),
             nn.Conv2d(8, 16, 3, padding=1),
             nn.SiLU(),
+            nn.Dropout2d(p=0.05),
             nn.Flatten(),
             nn.Linear(16 * 18 * 20, 32),
             nn.SiLU(),
+            nn.Dropout(p=0.1),
         )
 
         self.core_enc = nn.Sequential(
@@ -144,6 +147,7 @@ class ModelPokemon(nn.Module):
             nn.SiLU(),
             nn.Linear(64, 32),
             nn.SiLU(),
+            nn.Dropout(p=0.05),
         )
 
         self.battle_enc = nn.Sequential(
@@ -153,6 +157,7 @@ class ModelPokemon(nn.Module):
             nn.SiLU(),
             nn.Linear(64, 32),
             nn.SiLU(),
+            nn.Dropout(p=0.05),
         )
         self.menu_battle_dialog_enc = nn.Sequential(
             nn.Linear(menu_battle_dialog_in, 128),
@@ -161,6 +166,7 @@ class ModelPokemon(nn.Module):
             nn.SiLU(),
             nn.Linear(64, 32),
             nn.SiLU(),
+            nn.Dropout(p=0.05),
         )
 
         self.dialog_world_enc = nn.Sequential(
@@ -170,6 +176,7 @@ class ModelPokemon(nn.Module):
             nn.SiLU(),
             nn.Linear(64, 32),
             nn.SiLU(),
+            nn.Dropout(p=0.05),
         )
 
         self.progress_enc = nn.Sequential(
@@ -179,6 +186,7 @@ class ModelPokemon(nn.Module):
             nn.SiLU(),
             nn.Linear(64, 32),
             nn.SiLU(),
+            nn.Dropout(p=0.05),
         )
 
         self.mode_enc = nn.Sequential(
@@ -188,6 +196,7 @@ class ModelPokemon(nn.Module):
             nn.SiLU(),
             nn.Linear(64, 32),
             nn.SiLU(),
+            nn.Dropout(p=0.05),
         )
 
         self.nav_enc = nn.Sequential(
@@ -197,6 +206,7 @@ class ModelPokemon(nn.Module):
             nn.SiLU(),
             nn.Linear(64, 32),
             nn.SiLU(),
+            nn.Dropout(p=0.05),
         )
 
         self.inv_enc = nn.Sequential(
@@ -206,6 +216,7 @@ class ModelPokemon(nn.Module):
             nn.SiLU(),
             nn.Linear(64, 32),
             nn.SiLU(),
+            nn.Dropout(p=0.05),
         )
 
         self.party_enc = nn.Sequential(
@@ -215,6 +226,7 @@ class ModelPokemon(nn.Module):
             nn.SiLU(),
             nn.Linear(64, 32),
             nn.SiLU(),
+            nn.Dropout(p=0.05),
         )
 
         self.trunk = nn.Sequential(
