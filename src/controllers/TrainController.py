@@ -34,6 +34,7 @@ class TrainController:
 
         self.__refresh()
         self.__run_logs()
+        self.__run_dots()
 
     def __refresh(self):
         self.__view.button_start.configure(
@@ -99,6 +100,23 @@ class TrainController:
         self.__view.after(
             self.__view.int_var_logs_per_run.get(),
             self.__run_logs,
+        )
+
+    def __run_dots(self):
+        try:
+            for _ in range(self.__view.int_var_logs_per_run.get()):
+                self.__model.dots.append(
+                    self.__model.train_worker.queue_dots.get_nowait()
+                )
+                self.__view.set_scatter_data(
+                    self.__model.dots.copy(),
+                )
+        except queue.Empty:
+            pass
+
+        self.__view.after(
+            1000,
+            self.__run_dots,
         )
 
     def handle_boolean_var_settings_debug(self, *args):

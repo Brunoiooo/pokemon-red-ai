@@ -33,6 +33,7 @@ class TrainWorker:
     queue_data: Queue = field(default_factory=lambda: Manager().Queue())
     event_start: Event = field(default_factory=lambda: Manager().Event())
     queue_logs: Queue = field(default_factory=lambda: Manager().Queue())
+    queue_dots: Queue = field(default_factory=lambda: Manager().Queue())
     model_lock: RLock = field(default_factory=lambda: Manager().RLock())
     is_debug: Synchronized = field(default_factory=lambda: Manager().Value("b", False))
     hash_buffer: deque = field(default_factory=lambda: deque(maxlen=200000))
@@ -331,6 +332,8 @@ class TrainWorker:
 
         if self.best_eval_return < avg_ret:
             self.save_best(avg_ret)
+
+        self.queue_dots.put_nowait((avg_ret, self.era_count))
 
         self.queue_logs.put_nowait(f"Finished evaluation {avg_ret:.6f}.")
 

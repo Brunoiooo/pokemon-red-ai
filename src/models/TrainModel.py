@@ -13,15 +13,18 @@ class TrainModel:
     __FILE_SETTINGS = "settings.json"
     evaluate_process: None | Process = None
     auto_mode_process: None | Process = None
+    dots: list[tuple[float, float]] = []
 
     def __init__(self):
+        manager = Manager()
         self.train_worker = TrainWorker(
-            queue_logs=Manager().Queue(),
-            queue_data=Manager().Queue(),
-            event_start=Manager().Event(),
-            is_debug=Manager().Value("b", False),
-            is_evaluation_window=Manager().Value("b", False),
-            train_use_sdl=Manager().Value("b", False),
+            queue_logs=manager.Queue(),
+            queue_dots=manager.Queue(),
+            queue_data=manager.Queue(),
+            event_start=manager.Event(),
+            is_debug=manager.Value("b", False),
+            is_evaluation_window=manager.Value("b", False),
+            train_use_sdl=manager.Value("b", False),
         )
 
     @property

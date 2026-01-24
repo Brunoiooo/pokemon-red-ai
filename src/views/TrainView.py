@@ -2,6 +2,8 @@ from datetime import datetime
 from tkinter import BooleanVar, IntVar, Misc
 from tkinter.scrolledtext import ScrolledText
 from tkinter import ttk
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 
 class TrainView(ttk.Frame):
@@ -87,15 +89,45 @@ class TrainView(ttk.Frame):
             row=1, column=0, sticky="ew", padx=4, pady=(0, 4)
         )
 
-        logs_frame = ttk.LabelFrame(self, text="Logi")
-        logs_frame.grid(
+        self.paned_bottom = ttk.Panedwindow(self, orient="vertical")
+        self.paned_bottom.grid(
             row=2, column=0, sticky="nsew", padx=self.PAD, pady=(0, self.PAD)
         )
-        logs_frame.rowconfigure(0, weight=1)
-        logs_frame.columnconfigure(0, weight=1)
+        self.paned_bottom.columnconfigure(0, weight=1)
 
-        self.scrolled_logs = ScrolledText(logs_frame, wrap="word", state="disabled")
+        self.scatter_frame = ttk.LabelFrame(self.paned_bottom, text="Graf kropkowy")
+        self.scatter_frame.rowconfigure(0, weight=1)
+        self.scatter_frame.columnconfigure(0, weight=1)
+
+        self._fig = Figure(figsize=(5, 3), dpi=100)
+        self._ax = self._fig.add_subplot(111)
+        self._ax.set_title("Podgląd")
+        self._ax.grid(True)
+
+        self._scatter = self._ax.scatter([], [], s=40)
+        self._canvas = FigureCanvasTkAgg(self._fig, master=self.scatter_frame)
+        self._canvas_widget = self._canvas.get_tk_widget()
+        self._canvas_widget.grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
+        self._canvas.draw()
+
+        self.logs_frame = ttk.LabelFrame(self.paned_bottom, text="Logi")
+        self.logs_frame.rowconfigure(0, weight=1)
+        self.logs_frame.columnconfigure(0, weight=1)
+
+        self.scrolled_logs = ScrolledText(
+            self.logs_frame, wrap="word", state="disabled"
+        )
         self.scrolled_logs.grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
+
+        self.paned_bottom.add(self.scatter_frame, weight=1)
+        self.paned_bottom.add(self.logs_frame, weight=1)
+
+        self.after(50, self._set_paned_half)
+
+    def _set_paned_half(self):
+        h = self.paned_bottom.winfo_height()
+        if h > 10:
+            self.paned_bottom.sashpos(0, h // 2)
 
     def add_log(self, log: str):
         self.scrolled_logs.configure(state="normal")
@@ -108,3 +140,38 @@ class TrainView(ttk.Frame):
         )
         self.scrolled_logs.see("end")
         self.scrolled_logs.configure(state="disabled")
+
+    def set_scatter_data(self, xys: list[tuple[float, float]], redraw: bool = True):
+        pts = [(float(x), float(y)) for (x, y) in xys] if xys else []
+
+        if not pts:
+            self._scatter.set_offsets([])
+            if redraw:
+                self._canvas.draw_idle()
+            return
+
+        # 2) ustaw offsety
+        self._scatter.set_offsets(pts)
+
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+
+        xmin, xmax = min(xs), max(xs)
+        ymin, ymax = min(ys), max(ys)
+
+        # 3) padding zawsze niezerowy
+        def pad(lo, hi):
+            span = hi - lo
+            if span == 0:
+                span = 1.0
+            p = span * 0.25  # większy padding żeby na pewno było widać
+            return lo - p, hi + p
+
+        x0, x1 = pad(xmin, xmax)
+        y0, y1 = pad(ymin, ymax)
+
+        self._ax.set_xlim(x0, x1)
+        self._ax.set_ylim(y0, y1)
+
+        if redraw:
+            self._canvas.draw()
