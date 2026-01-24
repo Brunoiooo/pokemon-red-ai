@@ -333,7 +333,7 @@ class TrainWorker:
         if self.best_eval_return < avg_ret:
             self.save_best(avg_ret)
 
-        self.queue_dots.put_nowait((avg_ret, self.era_count))
+        self.queue_dots.put_nowait((self.era_count, avg_ret))
 
         self.queue_logs.put_nowait(f"Finished evaluation {avg_ret:.6f}.")
 
