@@ -610,6 +610,7 @@ class Data:
         data = []
 
         data += [max(min(self.last_reward, 1.0), -1.0)]
+        data += self.data_normalizer(self.useless_count, max=self.max_useless_count)
         data += self.last_game_mode_flags
         data += self.player_data()
         data += self.pokedex_data()
