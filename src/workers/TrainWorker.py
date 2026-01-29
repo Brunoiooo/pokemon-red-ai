@@ -52,7 +52,7 @@ class TrainWorker:
     weight_decay = 1e-5
     gamma = 0.99
     criterion: torch.nn.SmoothL1Loss = field(default_factory=torch.nn.SmoothL1Loss)
-    tau = 0.005
+    tau = 0.0005
     target_update_interval = 1000
     _opt_steps: int = 0
 
@@ -264,24 +264,22 @@ class TrainWorker:
         try:
             self.queue_logs.put_nowait("Workers started.")
 
-            while self.event_start.is_set():
-                if self.era_count % self.era == 0:
-                    for _ in range(self.max_workers):
-                        self.evaluate_greedy()
+            with ProcessPoolExecutor(
+                max_workers=self.max_workers, mp_context=mp.get_context("spawn")
+            ) as pool:
+                while self.event_start.is_set():
+                    if self.era_count % self.era == 0:
+                        for _ in range(self.max_workers):
+                            self.evaluate_greedy()
 
-                self.queue_logs.put_nowait(f"Episode {self.era_count}.")
+                    self.queue_logs.put_nowait(f"Episode {self.era_count}.")
 
-                with ProcessPoolExecutor(
-                    max_workers=self.max_workers, mp_context=mp.get_context("spawn")
-                ) as pool:
                     futures = [pool.submit(x.run) for x in self.experienceWorkers]
 
                     for future in futures:
                         future.result()
 
-                    futures.clear()
-
-                self.era_count += 1
+                    self.era_count += 1
 
         except Exception as e:
             self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
@@ -355,7 +353,8 @@ class TrainWorker:
             return
 
         with self.buffer_lock:
-            batch = random.sample(list(self.buffer), k=self.batch_size)
+            idx = np.random.randint(0, len(self.buffer), size=self.batch_size)
+            batch = [self.buffer[i] for i in idx]
 
         (
             inputs,

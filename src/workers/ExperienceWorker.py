@@ -140,39 +140,32 @@ class ExperienceWorker:
                     discount *= self.gamma
 
                 try:
-                    if (
-                        reward <= 0
-                        and random.random() < 0.5
-                        or 0 < reward
-                        or terminated
-                        or truncated
-                    ):
-                        inputs0 = self.detach_to_cpu(self.buffer[0]["inputs"])
-                        next_inputs = self.detach_to_cpu(self.buffer[-1]["next_inputs"])
-                        action = self.buffer[0]["action"]
+                    inputs0 = self.detach_to_cpu(self.buffer[0]["inputs"])
+                    next_inputs = self.detach_to_cpu(self.buffer[-1]["next_inputs"])
+                    action = self.buffer[0]["action"]
 
-                        hkey = self.transition_hash(
+                    hkey = self.transition_hash(
+                        inputs0,
+                        action,
+                        next_inputs,
+                        reward,
+                        terminated,
+                        truncated,
+                        eps=1e-3,
+                    )
+
+                    self.queue_data.put_nowait(
+                        (
                             inputs0,
                             action,
                             next_inputs,
                             reward,
                             terminated,
                             truncated,
-                            eps=1e-3,
+                            len(self.buffer),
+                            hkey,
                         )
-
-                        self.queue_data.put_nowait(
-                            (
-                                inputs0,
-                                action,
-                                next_inputs,
-                                reward,
-                                terminated,
-                                truncated,
-                                len(self.buffer),
-                                hkey,
-                            )
-                        )
+                    )
                 except Full:
                     time.sleep(0.01)
                     pass
