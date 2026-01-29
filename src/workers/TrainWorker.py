@@ -345,9 +345,9 @@ class TrainWorker:
     def optimize_batch(self):
         try:
             with self.buffer_lock:
-                if len(self.buffer) < self.buffer.maxlen // 100:
+                if len(self.buffer) < self.batch_size:
                     raise ValueError(
-                        f"Buffer too small: expected at least {self.buffer.maxlen // 100}, got {len(self.buffer)}"
+                        f"Buffer too small: expected at least {self.batch_size}, got {len(self.buffer)}"
                     )
         except ValueError as e:
             self.queue_logs.put_nowait(str(e))
