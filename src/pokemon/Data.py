@@ -110,6 +110,7 @@ class Data:
         self.visited_battle_positions_count = 0
         self.visited_battle_positions = []
         self.__last_actions = None
+        self.illegal_moves_count = 0
 
     def count(self, reward: float, action: int, memory: bytes | None = None):
         self.last_reward = reward
@@ -121,8 +122,16 @@ class Data:
             self.visited_dialogs_count.setdefault(self.dialog_id(memory), 0)
             self.visited_dialogs_count[self.dialog_id(memory)] += 1
 
+            self.illegal_moves_count = 0
+        elif self.is_dialog(memory) and self.is_menu_illegal_move(memory):
+            self.illegal_moves_count += 1
+
         if self.is_battle(self.pyboy.memory) and not self.is_menu_illegal_move(memory):
             self.visited_battle_positions_count += 1
+
+            self.illegal_moves_count = 0
+        elif self.is_battle(self.pyboy.memory) and self.is_menu_illegal_move(memory):
+            self.illegal_moves_count += 1
 
         if self.is_world(self.pyboy.memory) and not self.is_illegal_world_move(memory):
             self.visited_positions_count.setdefault(self.get_position(), 0)
@@ -130,6 +139,10 @@ class Data:
 
             self.visited_maps_count.setdefault(self.map_id(memory), 0)
             self.visited_maps_count[self.map_id(memory)] += 1
+
+            self.illegal_moves_count = 0
+        elif self.is_world(self.pyboy.memory) and self.is_illegal_world_move(memory):
+            self.illegal_moves_count += 1
 
         if reward <= 0.0:
             self.useless_count += 1
@@ -518,7 +531,12 @@ class Data:
         )
 
     def truncated(self, memory: bytes):
-        return True if self.max_useless_count <= self.useless_count else False
+        return (
+            True
+            if self.max_useless_count <= self.useless_count
+            or self.last_actions_maxlen <= self.illegal_moves_count
+            else False
+        )
 
     def is_illegal_world_move(self, memory: bytes):
         return (
@@ -762,7 +780,12 @@ class Data:
             max=65535,
         )
 
-        data = data_bit + data_byte + data_2bytes
+        data = (
+            data_bit
+            + data_byte
+            + data_2bytes
+            + [self.illegal_moves_count / self.last_actions_maxlen]
+        )
 
         return data if self.is_battle(self.pyboy.memory) else [0] * len(data)
 
@@ -1349,7 +1372,6 @@ class Data:
     def reward_battle(self, memory: bytes):
         reward = 0.0
 
-        reward += self.reward_players_substitute_hp(memory)
         reward += self.reward_enemy_hp(memory)
         reward += self.reward_enemy_status(memory)
         reward += self.reward_pokemon_current_hp(memory)
@@ -1373,18 +1395,6 @@ class Data:
             if not self.is_illegal_world_move(memory)
             else 0.0
         )
-
-    def reward_players_substitute_hp(self, memory: bytes):
-        return (
-            self.players_substitute_hp(self.pyboy.memory)
-            - self.players_substitute_hp(memory)
-        ) / 255
-
-    def reward_enemy_substitute_hp(self, memory: bytes):
-        return (
-            self.enemy_substitute_hp(memory)
-            - self.enemy_substitute_hp(self.pyboy.memory)
-        ) / 255
 
     def reward_enemy_hp(self, memory: bytes):
         return (
