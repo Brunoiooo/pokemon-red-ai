@@ -32,6 +32,7 @@ class Data:
     last_reward = 0
     buffer_reward = 0.0
     last_game_mode_flags = [0, 0, 0, 0]
+    illegal_moves_count = 0
 
     __stored_pokemon_size = 0x21
     __stored_pokemon_count = 20
