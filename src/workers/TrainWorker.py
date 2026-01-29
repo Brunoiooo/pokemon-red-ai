@@ -266,7 +266,8 @@ class TrainWorker:
 
             while self.event_start.is_set():
                 if self.era_count % self.era == 0:
-                    self.evaluate_greedy()
+                    for _ in range(self.max_workers):
+                        self.evaluate_greedy()
 
                 self.queue_logs.put_nowait(f"Episode {self.era_count}.")
 
@@ -277,6 +278,8 @@ class TrainWorker:
 
                     for future in futures:
                         future.result()
+
+                    futures.clear()
 
                 self.era_count += 1
 
@@ -323,7 +326,7 @@ class TrainWorker:
 
         self.save_latest()
 
-        avg_ret = Emulator().evaluate_greedy(
+        avg_ret, count = Emulator().evaluate_greedy(
             model_state_dict=model_state_dict,
             queue_logs=self.queue_logs,
             is_debug=False,
@@ -333,7 +336,7 @@ class TrainWorker:
         if self.best_eval_return < avg_ret:
             self.save_best(avg_ret)
 
-        self.queue_dots.put_nowait((self.era_count, avg_ret))
+        self.queue_dots.put_nowait((self.era_count, count))
 
         self.queue_logs.put_nowait(f"Finished evaluation {avg_ret:.6f}.")
 
