@@ -151,8 +151,6 @@ class Data:
 
         if reward <= 0.0:
             self.useless_count += 1
-        else:
-            self.useless_count = 0
 
         if self.is_battle(self.pyboy.memory) and self.number_of_turns_in_current_battle(
             memory
