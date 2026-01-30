@@ -95,7 +95,7 @@ class Emulator:
     def step(self, memory: bytes, action: int):
         self.ticks(action)
 
-        reward = self.data.reward(memory)
+        reward = self.data.reward(memory=memory, action=action)
 
         terminated = self.data.terminated(memory)
 
@@ -215,7 +215,10 @@ class Emulator:
 
         self.save_last_checkpoint("saves/last")
 
+        count = 0
         while True:
+            count += 1
+
             with torch.inference_mode():
                 q = model(inputs)
                 q = q.squeeze(0)
@@ -248,7 +251,7 @@ class Emulator:
 
         self.pyboy.stop(False)
 
-        return total_reward
+        return total_reward, count
 
     def save_last_checkpoint(self, path: str):
         os.makedirs(path, exist_ok=True)

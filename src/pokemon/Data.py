@@ -134,7 +134,9 @@ class Data:
         elif self.is_battle(self.pyboy.memory) and self.is_menu_illegal_move(memory):
             self.illegal_moves_count += 1
 
-        if self.is_world(self.pyboy.memory) and not self.is_illegal_world_move(memory):
+        if self.is_world(self.pyboy.memory) and not self.is_illegal_world_move(
+            memory=memory, action=action
+        ):
             self.visited_positions_count.setdefault(self.get_position(), 0)
             self.visited_positions_count[self.get_position()] += 1
 
@@ -142,7 +144,9 @@ class Data:
             self.visited_maps_count[self.map_id(memory)] += 1
 
             self.illegal_moves_count = 0
-        elif self.is_world(self.pyboy.memory) and self.is_illegal_world_move(memory):
+        elif self.is_world(self.pyboy.memory) and self.is_illegal_world_move(
+            memory=memory, action=action
+        ):
             self.illegal_moves_count += 1
 
         if reward <= 0.0:
@@ -282,7 +286,7 @@ class Data:
     def screen_tiles(self, memory: PyBoyMemoryView | bytes):
         return [memory[i] for i in range(0xC3A0, 0xC508)]
 
-    def reward(self, memory: bytes):
+    def reward(self, memory: bytes, action: int):
         reward = -0.001
 
         reward += self.reward_core(memory)
@@ -303,9 +307,9 @@ class Data:
             reward += self.reward_dialog(memory)
 
         if self.is_world(self.pyboy.memory):
-            reward += self.reward_position(memory)
-            reward += self.reward_map(memory)
-            reward += self.reward_illegal_world_move(memory)
+            reward += self.reward_position(memory=memory, action=action)
+            reward += self.reward_map(memory=memory, action=action)
+            reward += self.reward_illegal_world_move(memory=memory, action=action)
 
         if (
             self.is_battle(self.pyboy.memory)
@@ -315,7 +319,7 @@ class Data:
             or self.is_dialog(self.pyboy.memory)
             and self.is_dialog(memory)
         ):
-            reward += self.reward_menu_illegal_move(memory)
+            reward += self.reward_menu_illegal_move(memory=memory)
 
         if (
             self.is_battle(self.pyboy.memory)
@@ -360,8 +364,12 @@ class Data:
             else 0.0
         )
 
-    def reward_illegal_world_move(self, memory: bytes):
-        return self.punish_world_reward if self.is_illegal_world_move(memory) else 0.0
+    def reward_illegal_world_move(self, memory: bytes, action: int):
+        return (
+            self.punish_world_reward
+            if self.is_illegal_world_move(memory=memory, action=action)
+            else 0.0
+        )
 
     def reward_core(self, memory: bytes):
         reward = 0.0
@@ -384,11 +392,11 @@ class Data:
 
         return reward
 
-    def reward_map(self, memory: bytes):
+    def reward_map(self, memory: bytes, action: int):
         return (
             self.max_visited_maps_count_reward
             if self.visited_maps_count.get(self.map_id(self.pyboy.memory), 0) == 0
-            and not self.is_illegal_world_move(memory)
+            and not self.is_illegal_world_move(memory=memory, action=action)
             else 0.0
         )
 
@@ -539,13 +547,14 @@ class Data:
             else False
         )
 
-    def is_illegal_world_move(self, memory: bytes):
+    def is_illegal_world_move(self, memory: bytes, action: int):
         return (
             self.is_world(self.pyboy.memory)
             and self.is_world(memory)
             and self.map_id(self.pyboy.memory) == self.map_id(memory)
             and self.position_x(self.pyboy.memory) == self.position_x(memory)
             and self.position_y(self.pyboy.memory) == self.position_y(memory)
+            or self.last_actions[self.last_actions_maxlen - 2] == action
         )
 
     def dialog_world_data(self):
@@ -1382,7 +1391,7 @@ class Data:
 
         return reward
 
-    def reward_position(self, memory: bytes):
+    def reward_position(self, memory: bytes, action: int):
         return (
             (
                 self.max_visited_positions_count_reward
@@ -1393,7 +1402,7 @@ class Data:
                 )
                 * self.max_visited_positions_count_reward
             )
-            if not self.is_illegal_world_move(memory)
+            if not self.is_illegal_world_move(memory=memory, action=action)
             else 0.0
         )
 

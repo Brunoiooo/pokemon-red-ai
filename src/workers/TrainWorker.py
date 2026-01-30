@@ -52,7 +52,7 @@ class TrainWorker:
     weight_decay = 1e-5
     gamma = 0.99
     criterion: torch.nn.SmoothL1Loss = field(default_factory=torch.nn.SmoothL1Loss)
-    tau = 0.0005
+    tau = 0.0001
     target_update_interval = 1000
     _opt_steps: int = 0
 
