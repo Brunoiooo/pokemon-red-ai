@@ -6,7 +6,9 @@ import torch.nn as nn
 from pokemon import Emulator
 
 
-def get_model(device: str, name: str | None = None):
+def get_model(
+    device: str, name: str | None = None, gru_hidden: int = 512, gru_layers: int = 1
+):
     emulator = Emulator.Emulator()
 
     inputs = emulator.data.inputs()
@@ -39,6 +41,8 @@ def get_model(device: str, name: str | None = None):
         party_in=len(inputs["party"]),
         outputs=len(emulator.buttons),
         outputs_max=len(inputs["last_actions"]),
+        gru_hidden=gru_hidden,
+        gru_layers=gru_layers,
     ).to(device)
 
     emulator.pyboy.stop(False)
@@ -91,24 +95,31 @@ class ModelPokemon(nn.Module):
         party_in: int,
         outputs: int,
         outputs_max: int,
+        gru_hidden: int = 512,
+        gru_layers: int = 1,
     ):
         super().__init__()
 
         last_action_output = int(math.sqrt(outputs))
 
-        in_dim = (
+        per_step_in_dim = (
             in_dim
-            + 32
-            + 32
-            + 32
-            + 32
-            + 32
-            + 32
-            + 32
-            + 32
-            + 32
-            + 32
-            + (outputs_max * last_action_output)
+            + 32  # core_enc
+            + 32  # battle_enc
+            + 32  # menu_battle_dialog_enc
+            + 32  # dialog_world_enc
+            + 32  # progress_enc
+            + 32  # mode_enc
+            + 32  # nav_enc
+            + 32  # inv_enc
+            + 32  # party_enc
+            + (outputs_max * last_action_output)  # last_actions emb (historia w kroku)
+            + 16  # map_id
+            + 16  # dialog_id
+            + 4  # index_of_current_pokemon_send_out
+            + 16  # type_of_battle
+            + 16  # move_menu_type
+            + 32  # screen_feat
         )
 
         self.last_actions = nn.Embedding(outputs, last_action_output)
@@ -140,101 +151,19 @@ class ModelPokemon(nn.Module):
             nn.Dropout(p=0.1),
         )
 
-        self.core_enc = nn.Sequential(
-            nn.Linear(core_in, 128),
-            nn.SiLU(),
-            nn.Linear(128, 64),
-            nn.SiLU(),
-            nn.Linear(64, 32),
-            nn.SiLU(),
-            nn.Dropout(p=0.05),
-        )
+        self.core_enc = self.mlp_enc(core_in)
+        self.battle_enc = self.mlp_enc(battle_in)
+        self.menu_battle_dialog_enc = self.mlp_enc(menu_battle_dialog_in)
+        self.dialog_world_enc = self.mlp_enc(dialog_world_in)
+        self.progress_enc = self.mlp_enc(progress_in)
+        self.mode_enc = self.mlp_enc(mode_in)
+        self.nav_enc = self.mlp_enc(nav_in)
+        self.inv_enc = self.mlp_enc(inv_in)
+        self.party_enc = self.mlp_enc(party_in)
 
-        self.battle_enc = nn.Sequential(
-            nn.Linear(battle_in, 128),
-            nn.SiLU(),
-            nn.Linear(128, 64),
-            nn.SiLU(),
-            nn.Linear(64, 32),
-            nn.SiLU(),
-            nn.Dropout(p=0.05),
-        )
-        self.menu_battle_dialog_enc = nn.Sequential(
-            nn.Linear(menu_battle_dialog_in, 128),
-            nn.SiLU(),
-            nn.Linear(128, 64),
-            nn.SiLU(),
-            nn.Linear(64, 32),
-            nn.SiLU(),
-            nn.Dropout(p=0.05),
-        )
-
-        self.dialog_world_enc = nn.Sequential(
-            nn.Linear(dialog_world_in, 128),
-            nn.SiLU(),
-            nn.Linear(128, 64),
-            nn.SiLU(),
-            nn.Linear(64, 32),
-            nn.SiLU(),
-            nn.Dropout(p=0.05),
-        )
-
-        self.progress_enc = nn.Sequential(
-            nn.Linear(progress_in, 128),
-            nn.SiLU(),
-            nn.Linear(128, 64),
-            nn.SiLU(),
-            nn.Linear(64, 32),
-            nn.SiLU(),
-            nn.Dropout(p=0.05),
-        )
-
-        self.mode_enc = nn.Sequential(
-            nn.Linear(mode_in, 128),
-            nn.SiLU(),
-            nn.Linear(128, 64),
-            nn.SiLU(),
-            nn.Linear(64, 32),
-            nn.SiLU(),
-            nn.Dropout(p=0.05),
-        )
-
-        self.nav_enc = nn.Sequential(
-            nn.Linear(nav_in, 128),
-            nn.SiLU(),
-            nn.Linear(128, 64),
-            nn.SiLU(),
-            nn.Linear(64, 32),
-            nn.SiLU(),
-            nn.Dropout(p=0.05),
-        )
-
-        self.inv_enc = nn.Sequential(
-            nn.Linear(inv_in, 128),
-            nn.SiLU(),
-            nn.Linear(128, 64),
-            nn.SiLU(),
-            nn.Linear(64, 32),
-            nn.SiLU(),
-            nn.Dropout(p=0.05),
-        )
-
-        self.party_enc = nn.Sequential(
-            nn.Linear(party_in, 128),
-            nn.SiLU(),
-            nn.Linear(128, 64),
-            nn.SiLU(),
-            nn.Linear(64, 32),
-            nn.SiLU(),
-            nn.Dropout(p=0.05),
-        )
-
-        self.trunk = nn.Sequential(
-            nn.Linear(in_dim, 2048),
-            nn.LayerNorm(2048),
-            nn.SiLU(),
-            nn.Dropout(p=0.01),
-            nn.Linear(2048, 1024),
+        self.pre_gru = nn.Sequential(
+            nn.Linear(per_step_in_dim, 1024),
+            nn.LayerNorm(1024),
             nn.SiLU(),
             nn.Dropout(p=0.01),
             nn.Linear(1024, 512),
@@ -242,136 +171,111 @@ class ModelPokemon(nn.Module):
             nn.Dropout(p=0.01),
         )
 
+        self.gru = nn.GRU(
+            input_size=512,
+            hidden_size=gru_hidden,
+            num_layers=gru_layers,
+            batch_first=True,
+            dropout=0.0 if gru_layers == 1 else 0.01,
+        )
+
         self.value_heads = nn.ModuleList(
             [
-                nn.Sequential(nn.Linear(512, 256), nn.SiLU(), nn.Linear(256, 1)),
-                nn.Sequential(nn.Linear(512, 256), nn.SiLU(), nn.Linear(256, 1)),
-                nn.Sequential(nn.Linear(512, 256), nn.SiLU(), nn.Linear(256, 1)),
-                nn.Sequential(nn.Linear(512, 256), nn.SiLU(), nn.Linear(256, 1)),
+                nn.Sequential(nn.Linear(gru_hidden, 256), nn.SiLU(), nn.Linear(256, 1))
+                for _ in range(4)
             ]
         )
-
         self.advantage_heads = nn.ModuleList(
             [
-                nn.Sequential(nn.Linear(512, 256), nn.SiLU(), nn.Linear(256, outputs)),
-                nn.Sequential(nn.Linear(512, 256), nn.SiLU(), nn.Linear(256, outputs)),
-                nn.Sequential(nn.Linear(512, 256), nn.SiLU(), nn.Linear(256, outputs)),
-                nn.Sequential(nn.Linear(512, 256), nn.SiLU(), nn.Linear(256, outputs)),
+                nn.Sequential(
+                    nn.Linear(gru_hidden, 256), nn.SiLU(), nn.Linear(256, outputs)
+                )
+                for _ in range(4)
             ]
         )
 
-    def _as_float_batch(self, t, device):
-        t = t.to(device)
-        if t.dim() == 1:
-            t = t.unsqueeze(0)
-        return t.float()
+    def mlp_enc(self, in_f: int):
+        return nn.Sequential(
+            nn.Linear(in_f, 128),
+            nn.SiLU(),
+            nn.Linear(128, 64),
+            nn.SiLU(),
+            nn.Linear(64, 32),
+            nn.SiLU(),
+            nn.Dropout(p=0.05),
+        )
 
-    def _as_long_scalar_batch(self, t, device):
-        t = t.to(device)
-        if t.dtype != torch.long:
-            t = t.long()
-        if t.dim() == 0:
-            t = t.unsqueeze(0)
-        return t
+    def _as_float(self, t, device):
+        return t.to(device).float()
 
-    def _as_long_seq_batch(self, t, device):
+    def _as_long(self, t, device):
         t = t.to(device)
-        if t.dtype != torch.long:
-            t = t.long()
-        if t.dim() == 1:
-            t = t.unsqueeze(0)
-        return t
+        return t.long() if t.dtype != torch.long else t
 
-    def forward(self, x):
+    def forward(self, x, h0=None, return_seq=False):
         device = next(self.parameters()).device
 
-        core = self._as_float_batch(x["core"], device)
-        core = self.core_enc(core)
+        B, T = x["core"].shape[0], x["core"].shape[1]
 
-        battle = self._as_float_batch(x["battle"], device)
-        battle = self.battle_enc(battle)
+        def enc_float(key, enc):
+            t = self._as_float(x[key], device)
+            t2 = t.reshape(B * T, t.size(-1))
+            e = enc(t2)
+            return e.reshape(B, T, -1)
 
-        menu_battle_dialog = self._as_float_batch(x["menu_battle_dialog"], device)
-        menu_battle_dialog = self.menu_battle_dialog_enc(menu_battle_dialog)
-
-        dialog_world = self._as_float_batch(x["dialog_world"], device)
-        dialog_world = self.dialog_world_enc(dialog_world)
-
-        mode = self._as_float_batch(x["mode"], device)
-        mode = self.mode_enc(mode)
-
-        progress = self._as_float_batch(x["progress"], device)
-        progress = self.progress_enc(progress)
-
-        nav = self._as_float_batch(x["nav"], device)
-        nav = self.nav_enc(nav)
-
-        inv = self._as_float_batch(x["inv"], device)
-        inv = self.inv_enc(inv)
-
-        party = self._as_float_batch(x["party"], device)
-        party = self.party_enc(party)
-
-        last_actions_emb = self.last_actions(
-            self._as_long_seq_batch(x["last_actions"], device)
+        core = enc_float("core", self.core_enc)
+        battle = enc_float("battle", self.battle_enc)
+        menu_battle_dialog = enc_float(
+            "menu_battle_dialog", self.menu_battle_dialog_enc
         )
-        last_actions_emb = last_actions_emb.reshape(last_actions_emb.size(0), -1)
+        dialog_world = enc_float("dialog_world", self.dialog_world_enc)
+        mode = enc_float("mode", self.mode_enc)
+        progress = enc_float("progress", self.progress_enc)
+        nav = enc_float("nav", self.nav_enc)
+        inv = enc_float("inv", self.inv_enc)
+        party = enc_float("party", self.party_enc)
 
-        map_id_emb = self.map_id(self._as_long_scalar_batch(x["map_id"], device))
-        dialog_id_emb = self.dialog_id(
-            self._as_long_scalar_batch(x["dialog_id"], device)
-        )
-        index_emb = self.index_of_current_pokemon_send_out(
-            self._as_long_scalar_batch(x["index_of_current_pokemon_send_out"], device)
-        )
-        type_battle_emb = self.type_of_battle(
-            self._as_long_scalar_batch(x["type_of_battle"], device)
-        )
-        move_menu_emb = self.move_menu_type(
-            self._as_long_scalar_batch(x["move_menu_type"], device)
-        )
-        move_id_full = self.move_id(self._as_long_seq_batch(x["move_id"], device))
-        move_id_emb = move_id_full.reshape(move_id_full.size(0), -1)
+        last_actions = self._as_long(x["last_actions"], device)
+        la_emb = self.last_actions(last_actions)
+        la_emb = la_emb.reshape(B, T, -1)
 
-        move_type_full = self.move_type(self._as_long_seq_batch(x["move_type"], device))
-        move_type_emb = move_type_full.reshape(move_type_full.size(0), -1)
+        def emb_scalar(key, emb):
+            ids = self._as_long(x[key], device)
+            return emb(ids)
 
-        pokemon_id_full = self.pokemon_id(
-            self._as_long_seq_batch(x["pokemon_id"], device)
+        map_id_emb = emb_scalar("map_id", self.map_id)
+        dialog_id_emb = emb_scalar("dialog_id", self.dialog_id)
+        index_emb = emb_scalar(
+            "index_of_current_pokemon_send_out", self.index_of_current_pokemon_send_out
         )
-        pokemon_id_emb = pokemon_id_full.reshape(pokemon_id_full.size(0), -1)
+        type_battle_emb = emb_scalar("type_of_battle", self.type_of_battle)
+        move_menu_emb = emb_scalar("move_menu_type", self.move_menu_type)
 
-        pokemon_type_full = self.pokemon_type(
-            self._as_long_seq_batch(x["pokemon_type"], device)
+        def emb_seq(key, emb):
+            ids = self._as_long(x[key], device)
+            e = emb(ids)
+            return e.reshape(B, T, -1)
+
+        move_id_emb = emb_seq("move_id", self.move_id)
+        move_type_emb = emb_seq("move_type", self.move_type)
+        pokemon_id_emb = emb_seq("pokemon_id", self.pokemon_id)
+        pokemon_type_emb = emb_seq("pokemon_type", self.pokemon_type)
+        sprite_id_emb = emb_seq("sprite_id", self.sprite_id)
+        item_id_emb = emb_seq("item_id", self.item_id)
+        sprite_data_movement_statuses_emb = emb_seq(
+            "sprite_data_movement_statuses", self.sprite_data_movement_statuses
         )
-        pokemon_type_emb = pokemon_type_full.reshape(pokemon_type_full.size(0), -1)
-
-        sprite_id_full = self.sprite_id(self._as_long_seq_batch(x["sprite_id"], device))
-        sprite_id_emb = sprite_id_full.reshape(sprite_id_full.size(0), -1)
-
-        item_id_full = self.item_id(self._as_long_seq_batch(x["item_id"], device))
-        item_id_emb = item_id_full.reshape(item_id_full.size(0), -1)
-
-        sprite_data_movement_statuses_full = self.sprite_data_movement_statuses(
-            self._as_long_seq_batch(x["sprite_data_movement_statuses"], device)
-        )
-        sprite_data_movement_statuses_emb = sprite_data_movement_statuses_full.reshape(
-            sprite_data_movement_statuses_full.size(0), -1
+        sprite_data_facing_directions_emb = emb_seq(
+            "sprite_data_facing_directions", self.sprite_data_facing_directions
         )
 
-        sprite_data_facing_directions_full = self.sprite_data_facing_directions(
-            self._as_long_seq_batch(x["sprite_data_facing_directions"], device)
-        )
-        sprite_data_facing_directions_emb = sprite_data_facing_directions_full.reshape(
-            sprite_data_facing_directions_full.size(0), -1
-        )
+        screen = self._as_float(x["screen_tiles"], device)
+        if screen.dim() == 4:
+            screen = screen.unsqueeze(2)
+        screen2 = screen.reshape(B * T, 1, screen.size(-2), screen.size(-1))
+        screen_feat = self.screen_enc(screen2).reshape(B, T, -1)
 
-        screen = self._as_float_batch(x["screen_tiles"], device)
-        if screen.dim() == 3:
-            screen = screen.unsqueeze(1)
-        screen_feat = self.screen_enc(screen)
-
-        h = torch.cat(
+        h_step = torch.cat(
             [
                 core,
                 battle,
@@ -382,7 +286,7 @@ class ModelPokemon(nn.Module):
                 nav,
                 inv,
                 party,
-                last_actions_emb,
+                la_emb,
                 map_id_emb,
                 dialog_id_emb,
                 index_emb,
@@ -398,28 +302,40 @@ class ModelPokemon(nn.Module):
                 sprite_data_facing_directions_emb,
                 screen_feat,
             ],
-            dim=1,
+            dim=2,
         )
 
-        z = self.trunk(h)
+        h2 = self.pre_gru(h_step.reshape(B * T, -1)).reshape(B, T, -1)
 
-        raw_mode = self._as_float_batch(x["mode"], device)
-        mode_sum = raw_mode.sum(dim=1)
+        z_seq, hT = self.gru(h2, h0)
 
-        mode_idx = raw_mode.argmax(dim=1)
+        raw_mode = self._as_float(x["mode"], device)
+        last_raw_mode = raw_mode[:, -1, :]
+        mode_sum = last_raw_mode.sum(dim=1)
+        mode_idx = last_raw_mode.argmax(dim=1)
         mode_idx = torch.where(mode_sum == 0, torch.full_like(mode_idx, 3), mode_idx)
 
-        q = torch.empty(
-            (z.size(0), self.advantage_heads[0][-1].out_features), device=device
-        )
+        def dueling_heads(z_last):
+            q = torch.empty(
+                (z_last.size(0), self.advantage_heads[0][-1].out_features),
+                device=device,
+            )
+            for i in range(4):
+                mask = mode_idx == i
+                if mask.any():
+                    z_i = z_last[mask]
+                    v_i = self.value_heads[i](z_i)
+                    a_i = self.advantage_heads[i](z_i)
+                    q_i = v_i + (a_i - a_i.mean(dim=1, keepdim=True))
+                    q[mask] = q_i
+            return q
 
-        for i in range(4):
-            mask = mode_idx == i
-            if mask.any():
-                z_i = z[mask]
-                v_i = self.value_heads[i](z_i)
-                a_i = self.advantage_heads[i](z_i)
-                q_i = v_i + (a_i - a_i.mean(dim=1, keepdim=True))
-                q[mask] = q_i
+        if return_seq:
+            qs = []
+            for t in range(T):
+                qs.append(dueling_heads(z_seq[:, t, :]).unsqueeze(1))
+            q_all = torch.cat(qs, dim=1)
+            return q_all, hT
 
-        return q
+        q_last = dueling_heads(z_seq[:, -1, :])
+        return q_last, hT

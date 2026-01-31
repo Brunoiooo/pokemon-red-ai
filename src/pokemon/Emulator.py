@@ -198,10 +198,12 @@ class Emulator:
         queue_logs: Queue,
         is_debug: bool,
         is_evaluation_window: bool,
+        gru_hidden: int,
+        gru_layers: int,
     ):
         self.use_sdl = is_evaluation_window
 
-        model = get_model(device="cpu")
+        model = get_model(device="cpu", gru_hidden=gru_hidden, gru_layers=gru_layers)
         model.load_state_dict(model_state_dict)
         model.eval()
 

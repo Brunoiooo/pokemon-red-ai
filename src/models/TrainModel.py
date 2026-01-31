@@ -69,7 +69,10 @@ class TrainModel:
             target=Emulator().evaluate_greedy,
             kwargs={
                 "model_state_dict": get_model(
-                    "cpu", "best" if best_model else "latest"
+                    "cpu",
+                    "best" if best_model else "latest",
+                    gru_hidden=self.train_worker.gru_hidden,
+                    gru_layers=self.train_worker.gru_layers,
                 ).state_dict(),
                 "queue_logs": self.train_worker.queue_logs,
                 "is_debug": self.train_worker.is_debug.value,

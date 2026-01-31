@@ -22,6 +22,8 @@ class ExperienceWorker:
     window: Synchronized
     gamma: float
     model_state_dict: dict[str, Any]
+    gru_hidden: int
+    gru_layers: int
     epsilon: float = 1.0
     td_error_steps = 10
     start_save_chance = 0.25
@@ -42,7 +44,9 @@ class ExperienceWorker:
     @property
     def model(self):
         if not self.__model:
-            self.__model = get_model(device="cpu")
+            self.__model = get_model(
+                device="cpu", gru_hidden=self.gru_hidden, gru_layers=self.gru_layers
+            )
 
             self.__model.load_state_dict(self.model_state_dict)
 

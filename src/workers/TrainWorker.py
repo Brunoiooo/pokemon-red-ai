@@ -67,6 +67,9 @@ class TrainWorker:
 
     count: int = 0
 
+    gru_hidden: int = 512
+    gru_layers: int = 1
+
     __model: None | ModelPokemon = None
 
     @property
@@ -78,7 +81,12 @@ class TrainWorker:
             elif os.path.exists("models/best.pth"):
                 name = "best"
 
-            self.__model = get_model(device=self.device, name=name)
+            self.__model = get_model(
+                device=self.device,
+                name=name,
+                gru_hidden=self.gru_hidden,
+                gru_layers=self.gru_layers,
+            )
 
             self.__model.train()
 
@@ -89,7 +97,9 @@ class TrainWorker:
     @property
     def target_model(self):
         if not self.__target_model:
-            self.__target_model = get_model(self.device)
+            self.__target_model = get_model(
+                self.device, gru_hidden=self.gru_hidden, gru_layers=self.gru_layers
+            )
 
             with self.model_lock:
                 self.__target_model.load_state_dict(self.model.state_dict())
