@@ -5,3 +5,6 @@ recordings
 debuger
 __pycache__
 winserwer
+v*/
+saves/last
+saves/manual
