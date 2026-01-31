@@ -228,6 +228,7 @@ class Emulator:
 
             if was_saved is False and 0 < self.data.useless_count:
                 self.save_last_checkpoint("saves/last")
+                queue_logs.put_nowait(f"saved checkpoint {count}")
                 was_saved = True
             elif 0 == self.data.useless_count:
                 was_saved = False
