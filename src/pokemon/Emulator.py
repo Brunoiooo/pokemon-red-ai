@@ -226,7 +226,10 @@ class Emulator:
                 memory=memory, action=action
             )
 
-            if was_saved is False and 0 < self.data.useless_count:
+            if (
+                was_saved is False
+                and self.data.max_useless_count * 0.1 < self.data.useless_count
+            ):
                 self.save_last_checkpoint("saves/last")
                 queue_logs.put_nowait(f"saved checkpoint {count}")
                 was_saved = True
