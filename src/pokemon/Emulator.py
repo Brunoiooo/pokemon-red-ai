@@ -123,11 +123,7 @@ class Emulator:
         )
 
     def is_new_episode(self, memory: bytes):
-        return (
-            0 < self.data.reward_event_flags(memory)
-            or 0 < self.data.reward_badges(memory)
-            or self.data.is_battle(memory) != self.data.is_battle(self.pyboy.memory)
-        )
+        return ()
 
     def auto_mode(self, queue_logs: Queue):
         self.use_sdl = True
@@ -216,6 +212,7 @@ class Emulator:
         self.save_last_checkpoint("saves/last")
 
         count = 0
+        was_saved = False
         while True:
             count += 1
 
@@ -229,8 +226,11 @@ class Emulator:
                 memory=memory, action=action
             )
 
-            if self.is_new_episode(memory):
+            if was_saved is False and 0 < self.data.useless_count:
                 self.save_last_checkpoint("saves/last")
+                was_saved = True
+            elif 0 == self.data.useless_count:
+                was_saved = False
 
             if terminated:
                 queue_logs.put_nowait(

@@ -87,6 +87,22 @@ class Data:
             pickle.dump(self.visited_dialogs_count, f)
         with open(f"{path}/visited_positions_count.pkl", "wb") as f:
             pickle.dump(self.visited_positions_count, f)
+        with open(f"{path}/visited_maps_count.pkl", "wb") as f:
+            pickle.dump(self.visited_maps_count, f)
+        with open(f"{path}/last_reward.pkl", "wb") as f:
+            pickle.dump(self.last_reward, f)
+        with open(f"{path}/buffer_reward.pkl", "wb") as f:
+            pickle.dump(self.buffer_reward, f)
+        with open(f"{path}/last_game_mode_flags.pkl", "wb") as f:
+            pickle.dump(self.last_game_mode_flags, f)
+        with open(f"{path}/visited_battle_positions_count.pkl", "wb") as f:
+            pickle.dump(self.visited_battle_positions_count, f)
+        with open(f"{path}/visited_battle_positions.pkl", "wb") as f:
+            pickle.dump(self.visited_battle_positions, f)
+        with open(f"{path}/__last_actions.pkl", "wb") as f:
+            pickle.dump(self.__last_actions, f)
+        with open(f"{path}/illegal_moves_count.pkl", "wb") as f:
+            pickle.dump(self.illegal_moves_count, f)
 
     def load(self, path: str):
         with open(f"{path}/__visited_pokedex_own.pkl", "rb") as f:
@@ -97,6 +113,22 @@ class Data:
             self.visited_dialogs_count = pickle.load(f)
         with open(f"{path}/visited_positions_count.pkl", "rb") as f:
             self.visited_positions_count = pickle.load(f)
+        with open(f"{path}/visited_maps_count.pkl", "rb") as f:
+            self.visited_maps_count = pickle.load(f)
+        with open(f"{path}/last_reward.pkl", "rb") as f:
+            self.last_reward = pickle.load(f)
+        with open(f"{path}/buffer_reward.pkl", "rb") as f:
+            self.buffer_reward = pickle.load(f)
+        with open(f"{path}/last_game_mode_flags.pkl", "rb") as f:
+            self.last_game_mode_flags = pickle.load(f)
+        with open(f"{path}/visited_battle_positions_count.pkl", "rb") as f:
+            self.visited_battle_positions_count = pickle.load(f)
+        with open(f"{path}/visited_battle_positions.pkl", "rb") as f:
+            self.visited_battle_positions = pickle.load(f)
+        with open(f"{path}/__last_actions.pkl", "rb") as f:
+            self.__last_actions = pickle.load(f)
+        with open(f"{path}/illegal_moves_count.pkl", "rb") as f:
+            self.illegal_moves_count = pickle.load(f)
 
     def clean(self):
         self.__visited_pokedex_own = None

@@ -269,8 +269,7 @@ class TrainWorker:
             ) as pool:
                 while self.event_start.is_set():
                     if self.era_count % self.era == 0:
-                        for _ in range(self.max_workers):
-                            self.evaluate_greedy()
+                        self.evaluate_greedy()
 
                     self.queue_logs.put_nowait(f"Episode {self.era_count}.")
 
