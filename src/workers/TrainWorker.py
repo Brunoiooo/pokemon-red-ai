@@ -298,14 +298,6 @@ class TrainWorker:
                 except queue.Empty:
                     continue
 
-                if item[7] in self.hash_buffer:
-                    count += 1
-                    if count % 1000 == 0:
-                        self.queue_logs.put_nowait(
-                            f"Duplicate experience skipped: {count}"
-                        )
-                    continue
-
                 with self.buffer_lock:
                     self.buffer.append(item)
                     self.hash_buffer.append(item[7])

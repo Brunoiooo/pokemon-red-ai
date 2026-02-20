@@ -168,9 +168,7 @@ class Emulator:
             queue_logs.put_nowait(f"Reward: {reward:.6f}")
             queue_logs.put_nowait(f"Terminated: {terminated}")
             queue_logs.put_nowait(f"Truncated: {truncated}")
-            queue_logs.put_nowait(f"Game mode: {self.data.game_mode_flags_data()}")
             queue_logs.put_nowait(f"world_data: {self.data.world_data()} ")
-            queue_logs.put_nowait(f"dialog_data: {self.data.dialog_data()} ")
             queue_logs.put_nowait(
                 f"menu_battle_dialog_data: {self.data.menu_battle_dialog_data()} "
             )
