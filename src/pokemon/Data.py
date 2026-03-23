@@ -82,10 +82,13 @@ class Data:
         self.visited_pokedex_own = self.pokedex_own(memory)
         self.visited_pokedex_seen = self.pokedex_seen(memory)
 
-        if bytes(self.screen_tiles(self.pyboy.memory)) not in self.visited_screens:
-            self.visited_screens.append(bytes(self.screen_tiles(self.pyboy.memory)))
+        if self.screen_tiles_hash(memory) not in self.visited_screens:
+            self.visited_screens.append(self.screen_tiles_hash(memory))
         else:
             self.useless_count += 1
+
+    def screen_tiles_hash(self, memory: PyBoyMemoryView | bytes | None = None):
+        return hash(bytes(self.screen_tiles(memory if memory else self.pyboy.memory)))
 
     def inputs(self):
         return {
@@ -193,7 +196,7 @@ class Data:
         return [memory[i] for i in range(0xC3A0, 0xC508)]
 
     def reward(self, memory: bytes, action: int):
-        reward = -0.001
+        reward = 0.0
 
         reward += self.reward_core(memory)
 
@@ -209,7 +212,9 @@ class Data:
             reward += self.buffer_reward
             self.buffer_reward = 0.0
 
-        if bytes(self.screen_tiles(self.pyboy.memory)) not in self.visited_screens:
+        reward += -0.001
+
+        if self.screen_tiles_hash() not in self.visited_screens:
             reward += self.visited_screens_reward
 
         return reward
