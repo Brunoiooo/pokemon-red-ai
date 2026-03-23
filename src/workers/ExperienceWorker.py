@@ -131,7 +131,7 @@ class ExperienceWorker:
         return action
 
     def put_to_queue_data(self, terminated: bool, truncated: bool):
-        if self.buffer.maxlen <= len(self.buffer):
+        if self.buffer.maxlen <= len(self.buffer) or terminated or truncated:
             while len(self.buffer):
                 reward, discount = 0.0, 1.0
 

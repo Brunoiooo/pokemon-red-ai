@@ -300,7 +300,7 @@ class TrainWorker:
 
                 with self.buffer_lock:
                     self.buffer.append(item)
-                    self.hash_buffer.append(item[7])
+                    # self.hash_buffer.append(item[7])
         except Exception as e:
             self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
         finally:
@@ -416,8 +416,8 @@ class TrainWorker:
         self.optimizer.step()
 
         self._opt_steps += 1
-        if self._opt_steps % self.target_update_interval == 0:
-            self.hard_update_target()
+        # if self._opt_steps % self.target_update_interval == 0:
+        #     self.hard_update_target()
 
         self.soft_update_target()
 

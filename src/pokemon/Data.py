@@ -79,15 +79,13 @@ class Data:
         self.visited_screens = []
 
     def count(self, reward: float, action: int, memory: bytes | None = None):
-
         self.visited_pokedex_own = self.pokedex_own(memory)
         self.visited_pokedex_seen = self.pokedex_seen(memory)
 
-        if reward <= 0.0:
-            self.useless_count += 1
-
         if bytes(self.screen_tiles(self.pyboy.memory)) not in self.visited_screens:
             self.visited_screens.append(bytes(self.screen_tiles(self.pyboy.memory)))
+        else:
+            self.useless_count += 1
 
     def inputs(self):
         return {
@@ -443,7 +441,7 @@ class Data:
     def core_data(self):
         data = []
 
-        data += self.data_normalizer([self.useless_count], max=self.max_useless_count)
+        # data += self.data_normalizer([self.useless_count], max=self.max_useless_count)
         data += self.player_data()
         data += self.pokedex_data()
 
