@@ -31,22 +31,36 @@ class TrainWorker:
     device: str = field(
         default_factory=lambda: "cuda" if torch.cuda.is_available() else "cpu"
     )
-    queue_data: Queue = field(default_factory=lambda: Manager().Queue())
-    event_start: Event = field(default_factory=lambda: Manager().Event())
-    queue_logs: Queue = field(default_factory=lambda: Manager().Queue())
-    queue_dots: Queue = field(default_factory=lambda: Manager().Queue())
-    model_lock: RLock = field(default_factory=lambda: Manager().RLock())
-    files_lock: RLock = field(default_factory=lambda: Manager().RLock())
-    is_debug: Synchronized = field(default_factory=lambda: Manager().Value("b", False))
+
+    manager: any = field(init=False, repr=False)
+
+    queue_data: any = field(init=False)
+    event_start: any = field(init=False)
+    queue_logs: any = field(init=False)
+    queue_dots: any = field(init=False)
+    model_lock: any = field(init=False)
+    files_lock: any = field(init=False)
+    is_debug: any = field(init=False)
+    buffer_lock: any = field(init=False)
+    is_evaluation_window: any = field(init=False)
+    train_use_sdl: any = field(init=False)
+
     hash_buffer: deque = field(default_factory=lambda: deque(maxlen=200000))
     buffer: deque = field(default_factory=lambda: deque(maxlen=200000))
-    buffer_lock: RLock = field(default_factory=lambda: Manager().RLock())
-    is_evaluation_window: Synchronized = field(
-        default_factory=lambda: Manager().Value("b", False)
-    )
-    train_use_sdl: Synchronized = field(
-        default_factory=lambda: Manager().Value("b", False)
-    )
+
+    def __post_init__(self):
+        self.manager = mp.Manager()
+
+        self.queue_data = self.manager.Queue()
+        self.event_start = self.manager.Event()
+        self.queue_logs = self.manager.Queue()
+        self.queue_dots = self.manager.Queue()
+        self.model_lock = self.manager.RLock()
+        self.files_lock = self.manager.RLock()
+        self.is_debug = self.manager.Value("b", False)
+        self.buffer_lock = self.manager.RLock()
+        self.is_evaluation_window = self.manager.Value("b", False)
+        self.train_use_sdl = self.manager.Value("b", False)
 
     batch_size = 512
     grad_accum_steps = 1
@@ -62,7 +76,7 @@ class TrainWorker:
     per_beta_start: float = 0.4
     per_beta_frames: int = 100000
 
-    era: int = 500
+    era: int = 100
 
     max_epsilon: float = 0.01
 

@@ -16,16 +16,7 @@ class TrainModel:
     dots: list[tuple[float, float]] = []
 
     def __init__(self):
-        manager = Manager()
-        self.train_worker = TrainWorker(
-            queue_logs=manager.Queue(),
-            queue_dots=manager.Queue(),
-            queue_data=manager.Queue(),
-            event_start=manager.Event(),
-            is_debug=manager.Value("b", False),
-            is_evaluation_window=manager.Value("b", False),
-            train_use_sdl=manager.Value("b", False),
-        )
+        self.train_worker = TrainWorker()
 
     @property
     def settings(self) -> dict[str, Any]:
