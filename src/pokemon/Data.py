@@ -221,6 +221,8 @@ class Data:
 
         if self.screen_tiles_hash() not in self.visited_screens:
             reward += self.visited_screens_reward
+        else:
+            reward += -self.visited_screens_reward * 0.25
 
         return reward
 
