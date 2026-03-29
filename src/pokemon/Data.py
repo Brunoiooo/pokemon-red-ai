@@ -449,7 +449,7 @@ class Data:
     def core_data(self):
         data = []
 
-        # data += self.data_normalizer([self.useless_count], max=self.max_useless_count)
+        data += self.data_normalizer([self.useless_count], max=self.max_useless_count)
         data += self.player_data()
         data += self.pokedex_data()
 
