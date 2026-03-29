@@ -3,8 +3,9 @@ from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 import hashlib
 import json
-from multiprocessing import Queue, Manager
+from multiprocessing import Process, Queue, Manager
 import multiprocessing as mp
+from multiprocessing.connection import Pipe, PipeConnection
 from multiprocessing.sharedctypes import Synchronized
 from multiprocessing.synchronize import Event
 import os
@@ -52,7 +53,7 @@ class TrainWorker:
     weight_decay = 1e-5
     gamma = 0.99
     criterion: torch.nn.SmoothL1Loss = field(default_factory=torch.nn.SmoothL1Loss)
-    tau = 0.0001
+    tau = 0.0
     target_update_interval = 1000
     _opt_steps: int = 0
 
@@ -60,8 +61,7 @@ class TrainWorker:
     per_beta_start: float = 0.4
     per_beta_frames: int = 100000
 
-    era: int = 10
-    era_count: int = 0
+    era: int = 100
 
     max_epsilon: float = 0.01
 
@@ -185,34 +185,37 @@ class TrainWorker:
     def run_workers_thread(self, value: Thread | None):
         self.__run_workers_thread = value
 
+    __experienceWorkerPipes: list[tuple[PipeConnection, PipeConnection]] | None = None
+
+    @property
+    def experienceWorkerPipes(self):
+        if self.__experienceWorkerPipes is None:
+            self.__experienceWorkerPipes = [
+                Pipe(duplex=False) for x in range(self.max_workers)
+            ]
+
+        return self.__experienceWorkerPipes
+
     __experienceWorkers: list[ExperienceWorker] | None = None
 
     @property
     def experienceWorkers(self):
-        with self.model_lock:
-            model_state_dict = self.model.state_dict()
-
         if self.__experienceWorkers is None:
+            with self.model_lock:
+                model_state_dict = self.model.state_dict()
+
             self.__experienceWorkers = [
                 ExperienceWorker(
                     queue_logs=self.queue_logs,
                     queue_data=self.queue_data,
                     gamma=self.gamma,
-                    model_state_dict=model_state_dict,
                     window=self.train_use_sdl,
+                    recv_conn=recv_conn,
+                    event_start=self.event_start,
+                    init_model_state_dict=model_state_dict,
                 )
-                for _ in range(self.max_workers)
+                for recv_conn, send_conn in self.experienceWorkerPipes
             ]
-
-        with self.buffer_lock:
-            buffer_len = len(self.buffer)
-            buffer_maxlen = self.buffer.maxlen
-
-        epsilon = max(1.0 - buffer_len / buffer_maxlen, self.max_epsilon)
-
-        for x in self.__experienceWorkers:
-            x.model_state_dict = model_state_dict
-            x.epsilon = epsilon
 
         return self.__experienceWorkers
 
@@ -253,6 +256,15 @@ class TrainWorker:
                             f"Count: {self.count} | Buffer: {len(self.buffer)}"
                         )
 
+                if self.count % self.era == 0:
+                    with self.model_lock:
+                        model_state_dict = self.model.state_dict()
+                    for recv_conn, send_conn in self.experienceWorkerPipes:
+                        send_conn.send(model_state_dict)
+                        self.queue_logs.put_nowait("Sent model state dict to worker.")
+
+                    self.evaluate_greedy()
+
                 self.count += 1
         except Exception as e:
             self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
@@ -264,33 +276,29 @@ class TrainWorker:
         try:
             self.queue_logs.put_nowait("Workers started.")
 
-            with ProcessPoolExecutor(
-                max_workers=self.max_workers, mp_context=mp.get_context("spawn")
-            ) as pool:
-                while self.event_start.is_set():
-                    if self.era_count % self.era == 0:
-                        self.evaluate_greedy()
+            processes: list[Process] = []
+            for x in self.experienceWorkers:
+                p = Process(target=x.run)
+                p.start()
+                processes.append(p)
 
-                    self.queue_logs.put_nowait(f"Episode {self.era_count}.")
-
-                    futures = [pool.submit(x.run) for x in self.experienceWorkers]
-
-                    for future in futures:
-                        future.result()
-
-                    self.era_count += 1
+            while self.event_start.is_set():
+                for p in processes:
+                    p.join(10.0)
 
         except Exception as e:
             self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
         finally:
             self.event_start.clear()
+            if processes:
+                for p in processes:
+                    if p.is_alive():
+                        p.terminate()
             self.queue_logs.put_nowait("Workers stopped.")
 
     def run_queue(self):
         try:
             self.queue_logs.put_nowait("Queue handler started.")
-
-            count = 0
 
             while self.event_start.is_set():
                 try:
@@ -325,7 +333,7 @@ class TrainWorker:
         if self.best_eval_return < avg_ret:
             self.save_best(avg_ret)
 
-        self.queue_dots.put_nowait((self.era_count, count))
+        self.queue_dots.put_nowait((self.count, count))
 
         self.queue_logs.put_nowait(f"Finished evaluation {avg_ret:.6f}.")
 
@@ -416,8 +424,8 @@ class TrainWorker:
         self.optimizer.step()
 
         self._opt_steps += 1
-        # if self._opt_steps % self.target_update_interval == 0:
-        #     self.hard_update_target()
+        if self._opt_steps % self.target_update_interval == 0:
+            self.hard_update_target()
 
         self.soft_update_target()
 

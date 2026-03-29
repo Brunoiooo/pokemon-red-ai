@@ -13,7 +13,7 @@ class Data:
     visited_screens_reward: float = 0.01
 
     useless_count: int = 0
-    max_useless_count: int = 128
+    max_useless_count: int = 8
     __player_pokemon_size = 0x2C
     __pokemon_count = 6
     buffer_reward = 0.0
@@ -84,6 +84,7 @@ class Data:
 
         if self.screen_tiles_hash(memory) not in self.visited_screens:
             self.visited_screens.append(self.screen_tiles_hash(memory))
+            self.useless_count = 0
         else:
             self.useless_count += 1
 
@@ -209,7 +210,7 @@ class Data:
             self.buffer_reward += reward
             reward = 0.0
         elif self.is_battle(self.pyboy.memory):
-            reward += self.buffer_reward
+            reward += self.buffer_reward * (1.5 if 0 < self.buffer_reward else 1.0)
             self.buffer_reward = 0.0
 
         reward += -0.001
@@ -382,11 +383,7 @@ class Data:
         return reward
 
     def terminated(self, memory: bytes):
-        return (
-            0 < self.reward_badges(memory)
-            or 0 < self.reward_event_flags(memory)
-            or self.is_battle(self.pyboy.memory) != self.is_battle(memory)
-        )
+        return 0 < self.reward_badges(memory) or 0 < self.reward_event_flags(memory)
 
     def truncated(self, memory: bytes):
         return True if self.max_useless_count <= self.useless_count else False

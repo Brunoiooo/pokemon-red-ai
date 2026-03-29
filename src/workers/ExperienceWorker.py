@@ -2,7 +2,9 @@ from collections import deque
 from dataclasses import dataclass
 import hashlib
 from multiprocessing import Queue
+from multiprocessing.connection import Pipe, PipeConnection
 from multiprocessing.sharedctypes import Synchronized
+from multiprocessing.synchronize import Event
 import os
 from queue import Full
 import random
@@ -21,11 +23,12 @@ class ExperienceWorker:
     queue_data: Queue
     window: Synchronized
     gamma: float
-    model_state_dict: dict[str, Any]
-    epsilon: float = 1.0
+    recv_conn: PipeConnection
+    event_start: Event
     td_error_steps = 10
-    start_save_chance = 0.25
+    start_save_chance = 0.50
     max_stuck_epsilon = 0.25
+    init_model_state_dict: dict[str, Any]
 
     __last_save_path = "last"
 
@@ -36,6 +39,20 @@ class ExperienceWorker:
             if os.path.exists(f"saves/{self.__last_save_path}")
             else "start"
         )
+
+    __model_state_dict: dict[str, Any] | None = None
+
+    @property
+    def model_state_dict(self):
+        if self.__model_state_dict is None:
+            self.__model_state_dict = self.init_model_state_dict
+
+        return self.__model_state_dict
+
+    @model_state_dict.setter
+    def model_state_dict(self, value: dict[str, Any]):
+        self.__model_state_dict = value
+        self.__model = None
 
     __model: None | ModelPokemon = None
 
@@ -70,48 +87,51 @@ class ExperienceWorker:
 
     def run(self):
         try:
-            self.queue_logs.put_nowait(f"Worker started epsilon: {self.epsilon:.3f}.")
+            while self.event_start.is_set():
+                if self.recv_conn.poll(0.1):
+                    self.model_state_dict = self.recv_conn.recv()
 
-            memory, inputs = self.emulator.reset(
-                dir=(
-                    "start"
-                    if random.random() < self.start_save_chance
-                    else self.last_save_path
-                )
-            )
-
-            while True:
-                action = self.get_action(inputs)
-
-                next_memory, next_inputs, reward, terminated, truncated = (
-                    self.emulator.step(memory=memory, action=action)
-                )
-
-                self.buffer.append(
-                    {
-                        "inputs": self.detach_to_cpu(inputs),
-                        "action": action,
-                        "next_inputs": self.detach_to_cpu(next_inputs),
-                        "reward": reward,
-                    }
-                )
-
-                self.put_to_queue_data(terminated=terminated, truncated=truncated)
-
-                if truncated:
-                    break
-
-                memory, inputs = next_memory, next_inputs
-
-                self.emulator.use_sdl = bool(self.window.get())
-
+                self.run_game()
         except Exception as e:
             self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
         finally:
             self.emulator.pyboy.stop(False)
-            self.queue_logs.put_nowait(
-                f"Worker stopped epsilon: {self.epsilon:.3f} | {'success' if terminated else 'failure'}"
+            self.event_start.clear()
+            self.queue_logs.put_nowait("Worker stopped.")
+
+    def run_game(self):
+        memory, inputs = self.emulator.reset(
+            dir=(
+                "start"
+                if random.random() < self.start_save_chance
+                else self.last_save_path
             )
+        )
+
+        while True:
+            action = self.get_action(inputs)
+
+            next_memory, next_inputs, reward, terminated, truncated = (
+                self.emulator.step(memory=memory, action=action)
+            )
+
+            self.buffer.append(
+                {
+                    "inputs": self.detach_to_cpu(inputs),
+                    "action": action,
+                    "next_inputs": self.detach_to_cpu(next_inputs),
+                    "reward": reward,
+                }
+            )
+
+            self.put_to_queue_data(terminated=terminated, truncated=truncated)
+
+            if truncated:
+                break
+
+            memory, inputs = next_memory, next_inputs
+
+            self.emulator.use_sdl = bool(self.window.get())
 
     def get_action(self, inputs: dict[float]):
         if (
