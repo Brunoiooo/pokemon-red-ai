@@ -76,7 +76,7 @@ class TrainWorker:
     per_beta_start: float = 0.4
     per_beta_frames: int = 100000
 
-    era: int = 100
+    era: int = 1000
 
     max_epsilon: float = 0.01
 
@@ -277,11 +277,22 @@ class TrainWorker:
                 if self.count % self.era == 0:
                     with self.model_lock:
                         model_state_dict = self.model.state_dict()
-                    for recv_conn, send_conn in self.experienceWorkerPipes:
-                        send_conn.send(model_state_dict)
-                        self.queue_logs.put_nowait("Sent model state dict to worker.")
 
-                    self.evaluate_greedy()
+                    threads: Thread = []
+                    for recv_conn, send_conn in self.experienceWorkerPipes:
+                        t = Thread(
+                            target=self.send_model_state_dict_to_worker,
+                            args=(send_conn, model_state_dict),
+                        )
+                        t.start()
+                        threads.append(t)
+
+                    t = Thread(target=self.evaluate_greedy)
+                    t.start()
+                    threads.append(t)
+
+                    for t in threads:
+                        t.join()
 
                 self.count += 1
         except Exception as e:
@@ -332,6 +343,17 @@ class TrainWorker:
         finally:
             self.event_start.clear()
             self.queue_logs.put_nowait("Queue handler stopped.")
+
+    def send_model_state_dict_to_worker(
+        self, send_conn: list[PipeConnection], model_state_dict: dict[str, Any]
+    ):
+        try:
+            send_conn.send(model_state_dict)
+        except Exception as e:
+            self.event_start.clear()
+            self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
+        finally:
+            self.queue_logs.put_nowait("Sent model state dict to worker.")
 
     def evaluate_greedy(self):
         self.queue_logs.put_nowait(f"Starting evaluation.")
