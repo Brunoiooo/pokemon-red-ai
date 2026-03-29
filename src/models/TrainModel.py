@@ -66,10 +66,12 @@ class TrainModel:
             )
 
         self.evaluate_process = Process(
-            target=Emulator().evaluate_greedy,
+            target=Emulator(files_lock=self.train_worker.files_lock).evaluate_greedy,
             kwargs={
                 "model_state_dict": get_model(
-                    "cpu", "best" if best_model else "latest"
+                    "cpu",
+                    files_lock=self.train_worker.files_lock,
+                    name="best" if best_model else "latest",
                 ).state_dict(),
                 "queue_logs": self.train_worker.queue_logs,
                 "is_debug": self.train_worker.is_debug.value,
@@ -86,7 +88,7 @@ class TrainModel:
             )
 
         self.auto_mode_process = Process(
-            target=Emulator().auto_mode,
+            target=Emulator(files_lock=self.train_worker.files_lock).auto_mode,
             kwargs={"queue_logs": self.train_worker.queue_logs},
         )
 

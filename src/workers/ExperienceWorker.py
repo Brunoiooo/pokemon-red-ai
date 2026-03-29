@@ -4,7 +4,7 @@ import hashlib
 from multiprocessing import Queue
 from multiprocessing.connection import Pipe, PipeConnection
 from multiprocessing.sharedctypes import Synchronized
-from multiprocessing.synchronize import Event
+from multiprocessing.synchronize import Event, RLock
 import os
 from queue import Full
 import random
@@ -25,6 +25,7 @@ class ExperienceWorker:
     gamma: float
     recv_conn: PipeConnection
     event_start: Event
+    files_lock: RLock
     td_error_steps = 10
     start_save_chance = 0.50
     max_stuck_epsilon = 0.25
@@ -59,7 +60,7 @@ class ExperienceWorker:
     @property
     def model(self):
         if not self.__model:
-            self.__model = get_model(device="cpu")
+            self.__model = get_model(device="cpu", files_lock=self.files_lock)
 
             self.__model.load_state_dict(self.model_state_dict)
 
@@ -81,7 +82,7 @@ class ExperienceWorker:
     @property
     def emulator(self):
         if self.__emulator is None:
-            self.__emulator = Emulator()
+            self.__emulator = Emulator(files_lock=self.files_lock)
 
         return self.__emulator
 

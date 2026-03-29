@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 import io
+from multiprocessing.synchronize import RLock
 import os
 from queue import Queue
 from typing import Any
@@ -16,6 +17,7 @@ import time
 
 @dataclass
 class Emulator:
+    files_lock: RLock
     saves = "saves"
     buttons = [
         ["a"],
@@ -73,15 +75,16 @@ class Emulator:
     @property
     def data(self):
         if self.__data is None:
-            self.__data = Data(pyboy=self.pyboy)
+            self.__data = Data(pyboy=self.pyboy, files_lock=self.files_lock)
 
         return self.__data
 
     def reset(self, dir: str | None = None):
         path = f"{self.saves}/{dir}"
 
-        with open(f"{path}/checkpoint.state", "rb") as f:
-            self.pyboy.load_state(f)
+        with self.files_lock:
+            with open(f"{path}/checkpoint.state", "rb") as f:
+                self.pyboy.load_state(f)
 
         self.data.clean()
 
@@ -199,7 +202,7 @@ class Emulator:
     ):
         self.use_sdl = is_evaluation_window
 
-        model = get_model(device="cpu")
+        model = get_model(device="cpu", files_lock=self.files_lock)
         model.load_state_dict(model_state_dict)
         model.eval()
 
@@ -257,7 +260,9 @@ class Emulator:
 
     def save_last_checkpoint(self, path: str):
         os.makedirs(path, exist_ok=True)
-        with open(f"{path}/checkpoint.state", "wb") as f:
-            self.pyboy.save_state(f)
+
+        with self.files_lock:
+            with open(f"{path}/checkpoint.state", "wb") as f:
+                self.pyboy.save_state(f)
 
         self.data.save(path=path)

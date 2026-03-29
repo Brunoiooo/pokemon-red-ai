@@ -1,4 +1,5 @@
 import math
+from multiprocessing.synchronize import RLock
 import os
 import torch
 import torch.nn as nn
@@ -6,8 +7,8 @@ import torch.nn as nn
 from pokemon import Emulator
 
 
-def get_model(device: str, name: str | None = None):
-    emulator = Emulator.Emulator()
+def get_model(device: str, files_lock: RLock, name: str | None = None):
+    emulator = Emulator.Emulator(files_lock=files_lock)
 
     inputs = emulator.data.inputs()
 

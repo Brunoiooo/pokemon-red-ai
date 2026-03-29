@@ -1,3 +1,4 @@
+from multiprocessing.synchronize import RLock
 import pickle
 from dataclasses import dataclass, field
 
@@ -8,6 +9,7 @@ import torch
 @dataclass
 class Data:
     pyboy: PyBoy
+    files_lock: RLock
 
     visited_screens: list[bytes] = field(default_factory=list)
     visited_screens_reward: float = 0.01
@@ -52,24 +54,26 @@ class Data:
         ]
 
     def save(self, path: str):
-        with open(f"{path}/__visited_pokedex_own.pkl", "wb") as f:
-            pickle.dump(self.__visited_pokedex_own, f)
-        with open(f"{path}/__visited_pokedex_seen.pkl", "wb") as f:
-            pickle.dump(self.__visited_pokedex_seen, f)
-        with open(f"{path}/buffer_reward.pkl", "wb") as f:
-            pickle.dump(self.buffer_reward, f)
-        with open(f"{path}/visited_screens.pkl", "wb") as f:
-            pickle.dump(self.visited_screens, f)
+        with self.files_lock:
+            with open(f"{path}/__visited_pokedex_own.pkl", "wb") as f:
+                pickle.dump(self.__visited_pokedex_own, f)
+            with open(f"{path}/__visited_pokedex_seen.pkl", "wb") as f:
+                pickle.dump(self.__visited_pokedex_seen, f)
+            with open(f"{path}/buffer_reward.pkl", "wb") as f:
+                pickle.dump(self.buffer_reward, f)
+            with open(f"{path}/visited_screens.pkl", "wb") as f:
+                pickle.dump(self.visited_screens, f)
 
     def load(self, path: str):
-        with open(f"{path}/__visited_pokedex_own.pkl", "rb") as f:
-            self.__visited_pokedex_own = pickle.load(f)
-        with open(f"{path}/__visited_pokedex_seen.pkl", "rb") as f:
-            self.__visited_pokedex_seen = pickle.load(f)
-        with open(f"{path}/buffer_reward.pkl", "rb") as f:
-            self.buffer_reward = pickle.load(f)
-        with open(f"{path}/visited_screens.pkl", "rb") as f:
-            self.visited_screens = pickle.load(f)
+        with self.files_lock:
+            with open(f"{path}/__visited_pokedex_own.pkl", "rb") as f:
+                self.__visited_pokedex_own = pickle.load(f)
+            with open(f"{path}/__visited_pokedex_seen.pkl", "rb") as f:
+                self.__visited_pokedex_seen = pickle.load(f)
+            with open(f"{path}/buffer_reward.pkl", "rb") as f:
+                self.buffer_reward = pickle.load(f)
+            with open(f"{path}/visited_screens.pkl", "rb") as f:
+                self.visited_screens = pickle.load(f)
 
     def clean(self):
         self.__visited_pokedex_own = None

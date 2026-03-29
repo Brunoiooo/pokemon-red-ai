@@ -36,6 +36,7 @@ class TrainWorker:
     queue_logs: Queue = field(default_factory=lambda: Manager().Queue())
     queue_dots: Queue = field(default_factory=lambda: Manager().Queue())
     model_lock: RLock = field(default_factory=lambda: Manager().RLock())
+    files_lock: RLock = field(default_factory=lambda: Manager().RLock())
     is_debug: Synchronized = field(default_factory=lambda: Manager().Value("b", False))
     hash_buffer: deque = field(default_factory=lambda: deque(maxlen=200000))
     buffer: deque = field(default_factory=lambda: deque(maxlen=200000))
@@ -53,7 +54,7 @@ class TrainWorker:
     weight_decay = 1e-5
     gamma = 0.99
     criterion: torch.nn.SmoothL1Loss = field(default_factory=torch.nn.SmoothL1Loss)
-    tau = 0.0
+    tau = 0.001
     target_update_interval = 1000
     _opt_steps: int = 0
 
@@ -61,7 +62,7 @@ class TrainWorker:
     per_beta_start: float = 0.4
     per_beta_frames: int = 100000
 
-    era: int = 100
+    era: int = 500
 
     max_epsilon: float = 0.01
 
@@ -78,7 +79,9 @@ class TrainWorker:
             elif os.path.exists("models/best.pth"):
                 name = "best"
 
-            self.__model = get_model(device=self.device, name=name)
+            self.__model = get_model(
+                device=self.device, files_lock=self.files_lock, name=name
+            )
 
             self.__model.train()
 
@@ -89,7 +92,7 @@ class TrainWorker:
     @property
     def target_model(self):
         if not self.__target_model:
-            self.__target_model = get_model(self.device)
+            self.__target_model = get_model(self.device, files_lock=self.files_lock)
 
             with self.model_lock:
                 self.__target_model.load_state_dict(self.model.state_dict())
@@ -213,6 +216,7 @@ class TrainWorker:
                     recv_conn=recv_conn,
                     event_start=self.event_start,
                     init_model_state_dict=model_state_dict,
+                    files_lock=self.files_lock,
                 )
                 for recv_conn, send_conn in self.experienceWorkerPipes
             ]
@@ -323,7 +327,7 @@ class TrainWorker:
 
         self.save_latest()
 
-        avg_ret, count = Emulator().evaluate_greedy(
+        avg_ret, count = Emulator(files_lock=self.files_lock).evaluate_greedy(
             model_state_dict=model_state_dict,
             queue_logs=self.queue_logs,
             is_debug=False,
@@ -424,8 +428,8 @@ class TrainWorker:
         self.optimizer.step()
 
         self._opt_steps += 1
-        if self._opt_steps % self.target_update_interval == 0:
-            self.hard_update_target()
+        # if self._opt_steps % self.target_update_interval == 0:
+        #     self.hard_update_target()
 
         self.soft_update_target()
 
