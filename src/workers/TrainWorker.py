@@ -76,7 +76,7 @@ class TrainWorker:
     per_beta_start: float = 0.4
     per_beta_frames: int = 100000
 
-    era: int = 100
+    era: int = 250
 
     max_epsilon: float = 0.01
 
