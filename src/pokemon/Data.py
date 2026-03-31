@@ -219,6 +219,12 @@ class Data:
 
         reward += -0.001
 
+        reward += (
+            0.01
+            if self.is_battle(self.pyboy.memory) and not self.is_battle(memory)
+            else 0.0
+        )
+
         if self.screen_tiles_hash() not in self.visited_screens:
             reward += self.visited_screens_reward
         else:
@@ -248,11 +254,6 @@ class Data:
         reward += self.reward_player_pokemons_defenses(memory)
         reward += self.reward_player_pokemons_speeds(memory)
         reward += self.reward_player_pokemons_pps(memory)
-        # reward += (
-        #     0.1
-        #     if self.is_battle(self.pyboy.memory) and not self.is_battle(memory)
-        #     else 0.0
-        # )
 
         return reward
 
