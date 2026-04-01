@@ -90,7 +90,20 @@ class ModelPokemon(nn.Module):
     ):
         super().__init__()
 
-        in_dim = in_dim + 32 + 32 + 32 + 32 + 32 + 32 + 32 + 32 + 32
+        self.screen_out_dim = 32
+
+        total_in_dim = (
+            in_dim
+            + core_in
+            + battle_in
+            + menu_battle_dialog_in
+            + progress_in
+            + mode_in
+            + nav_in
+            + inv_in
+            + party_in
+            + self.screen_out_dim
+        )
 
         self.map_id = nn.Embedding(256, 16)
         self.dialog_id = nn.Embedding(256, 16)
@@ -110,124 +123,33 @@ class ModelPokemon(nn.Module):
         self.screen_enc = nn.Sequential(
             nn.Conv2d(1, 8, 3, padding=1),
             nn.SiLU(),
-            nn.Dropout2d(p=0.05),
             nn.Conv2d(8, 16, 3, padding=1),
             nn.SiLU(),
-            nn.Dropout2d(p=0.05),
             nn.Flatten(),
-            nn.Linear(16 * 18 * 20, 32),
+            nn.Linear(16 * 18 * 20, self.screen_out_dim),
             nn.SiLU(),
-            nn.Dropout(p=0.1),
-        )
-
-        self.core_enc = nn.Sequential(
-            nn.Linear(core_in, 128),
-            nn.SiLU(),
-            nn.Linear(128, 64),
-            nn.SiLU(),
-            nn.Linear(64, 32),
-            nn.SiLU(),
-            nn.Dropout(p=0.05),
-        )
-
-        self.battle_enc = nn.Sequential(
-            nn.Linear(battle_in, 128),
-            nn.SiLU(),
-            nn.Linear(128, 64),
-            nn.SiLU(),
-            nn.Linear(64, 32),
-            nn.SiLU(),
-            nn.Dropout(p=0.05),
-        )
-        self.menu_battle_dialog_enc = nn.Sequential(
-            nn.Linear(menu_battle_dialog_in, 128),
-            nn.SiLU(),
-            nn.Linear(128, 64),
-            nn.SiLU(),
-            nn.Linear(64, 32),
-            nn.SiLU(),
-            nn.Dropout(p=0.05),
-        )
-
-        self.progress_enc = nn.Sequential(
-            nn.Linear(progress_in, 128),
-            nn.SiLU(),
-            nn.Linear(128, 64),
-            nn.SiLU(),
-            nn.Linear(64, 32),
-            nn.SiLU(),
-            nn.Dropout(p=0.05),
-        )
-
-        self.mode_enc = nn.Sequential(
-            nn.Linear(mode_in, 128),
-            nn.SiLU(),
-            nn.Linear(128, 64),
-            nn.SiLU(),
-            nn.Linear(64, 32),
-            nn.SiLU(),
-            nn.Dropout(p=0.05),
-        )
-
-        self.nav_enc = nn.Sequential(
-            nn.Linear(nav_in, 128),
-            nn.SiLU(),
-            nn.Linear(128, 64),
-            nn.SiLU(),
-            nn.Linear(64, 32),
-            nn.SiLU(),
-            nn.Dropout(p=0.05),
-        )
-
-        self.inv_enc = nn.Sequential(
-            nn.Linear(inv_in, 128),
-            nn.SiLU(),
-            nn.Linear(128, 64),
-            nn.SiLU(),
-            nn.Linear(64, 32),
-            nn.SiLU(),
-            nn.Dropout(p=0.05),
-        )
-
-        self.party_enc = nn.Sequential(
-            nn.Linear(party_in, 128),
-            nn.SiLU(),
-            nn.Linear(128, 64),
-            nn.SiLU(),
-            nn.Linear(64, 32),
-            nn.SiLU(),
-            nn.Dropout(p=0.05),
         )
 
         self.trunk = nn.Sequential(
-            nn.Linear(in_dim, 2048),
-            nn.LayerNorm(2048),
+            nn.Linear(total_in_dim, 1024),
+            nn.LayerNorm(1024),
             nn.SiLU(),
-            nn.Dropout(p=0.01),
-            nn.Linear(2048, 1024),
-            nn.SiLU(),
-            nn.Dropout(p=0.01),
             nn.Linear(1024, 512),
             nn.SiLU(),
-            nn.Dropout(p=0.01),
+            nn.Linear(512, 256),
+            nn.SiLU(),
         )
 
-        self.value_heads = nn.ModuleList(
-            [
-                nn.Sequential(nn.Linear(512, 256), nn.SiLU(), nn.Linear(256, 1)),
-                nn.Sequential(nn.Linear(512, 256), nn.SiLU(), nn.Linear(256, 1)),
-                nn.Sequential(nn.Linear(512, 256), nn.SiLU(), nn.Linear(256, 1)),
-                nn.Sequential(nn.Linear(512, 256), nn.SiLU(), nn.Linear(256, 1)),
-            ]
+        self.value_head = nn.Sequential(
+            nn.Linear(256, 128),
+            nn.SiLU(),
+            nn.Linear(128, 1),
         )
 
-        self.advantage_heads = nn.ModuleList(
-            [
-                nn.Sequential(nn.Linear(512, 256), nn.SiLU(), nn.Linear(256, outputs)),
-                nn.Sequential(nn.Linear(512, 256), nn.SiLU(), nn.Linear(256, outputs)),
-                nn.Sequential(nn.Linear(512, 256), nn.SiLU(), nn.Linear(256, outputs)),
-                nn.Sequential(nn.Linear(512, 256), nn.SiLU(), nn.Linear(256, outputs)),
-            ]
+        self.advantage_head = nn.Sequential(
+            nn.Linear(256, 128),
+            nn.SiLU(),
+            nn.Linear(128, outputs),
         )
 
     def _as_float_batch(self, t, device):
@@ -256,28 +178,27 @@ class ModelPokemon(nn.Module):
         device = next(self.parameters()).device
 
         core = self._as_float_batch(x["core"], device)
-        core = self.core_enc(core)
-
         battle = self._as_float_batch(x["battle"], device)
-        battle = self.battle_enc(battle)
-
         menu_battle_dialog = self._as_float_batch(x["menu_battle_dialog"], device)
-        menu_battle_dialog = self.menu_battle_dialog_enc(menu_battle_dialog)
-
         mode = self._as_float_batch(x["mode"], device)
-        mode = self.mode_enc(mode)
-
         progress = self._as_float_batch(x["progress"], device)
-        progress = self.progress_enc(progress)
-
         nav = self._as_float_batch(x["nav"], device)
-        nav = self.nav_enc(nav)
-
         inv = self._as_float_batch(x["inv"], device)
-        inv = self.inv_enc(inv)
-
         party = self._as_float_batch(x["party"], device)
-        party = self.party_enc(party)
+
+        float_features = torch.cat(
+            [
+                core,
+                battle,
+                menu_battle_dialog,
+                mode,
+                progress,
+                nav,
+                inv,
+                party,
+            ],
+            dim=1,
+        )
 
         map_id_emb = self.map_id(self._as_long_scalar_batch(x["map_id"], device))
         dialog_id_emb = self.dialog_id(
@@ -292,6 +213,7 @@ class ModelPokemon(nn.Module):
         move_menu_emb = self.move_menu_type(
             self._as_long_scalar_batch(x["move_menu_type"], device)
         )
+
         move_id_full = self.move_id(self._as_long_seq_batch(x["move_id"], device))
         move_id_emb = move_id_full.reshape(move_id_full.size(0), -1)
 
@@ -335,14 +257,7 @@ class ModelPokemon(nn.Module):
 
         h = torch.cat(
             [
-                core,
-                battle,
-                menu_battle_dialog,
-                mode,
-                progress,
-                nav,
-                inv,
-                party,
+                float_features,
                 map_id_emb,
                 dialog_id_emb,
                 index_emb,
@@ -363,23 +278,8 @@ class ModelPokemon(nn.Module):
 
         z = self.trunk(h)
 
-        raw_mode = self._as_float_batch(x["mode"], device)
-        mode_sum = raw_mode.sum(dim=1)
-
-        mode_idx = raw_mode.argmax(dim=1)
-        mode_idx = torch.where(mode_sum == 0, torch.full_like(mode_idx, 3), mode_idx)
-
-        q = torch.empty(
-            (z.size(0), self.advantage_heads[0][-1].out_features), device=device
-        )
-
-        for i in range(4):
-            mask = mode_idx == i
-            if mask.any():
-                z_i = z[mask]
-                v_i = self.value_heads[i](z_i)
-                a_i = self.advantage_heads[i](z_i)
-                q_i = v_i + (a_i - a_i.mean(dim=1, keepdim=True))
-                q[mask] = q_i
+        v = self.value_head(z)
+        a = self.advantage_head(z)
+        q = v + (a - a.mean(dim=1, keepdim=True))
 
         return q
