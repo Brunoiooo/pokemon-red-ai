@@ -377,7 +377,7 @@ class TrainWorker:
 
         self.freeze_model(avg_ret)
 
-        self.queue_dots.put_nowait((self.count, count))
+        self.queue_dots.put_nowait((self.count, avg_ret))
 
         self.queue_logs.put_nowait(f"Finished evaluation {avg_ret:.6f}.")
 
