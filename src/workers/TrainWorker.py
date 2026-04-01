@@ -62,13 +62,13 @@ class TrainWorker:
         self.is_evaluation_window = self.manager.Value("b", False)
         self.train_use_sdl = self.manager.Value("b", False)
 
-    batch_size = 512
-    grad_accum_steps = 1
+    batch_size = 128
+    grad_accum_steps = 2
     lr = 0.0001
     weight_decay = 1e-5
     gamma = 0.99
     criterion: torch.nn.SmoothL1Loss = field(default_factory=torch.nn.SmoothL1Loss)
-    tau = 0.001
+    tau = 0.005
     target_update_interval = 1000
     _opt_steps: int = 0
 
