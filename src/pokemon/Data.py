@@ -16,15 +16,12 @@ class Data:
 
     badge_reward: float = 20.0
     event_reward: float = 5.0
-    new_screen_reward: float = 0.002
+    new_screen_reward: float = 0.001
     new_pokedex_seen_reward: float = 0.2
     new_pokedex_own_reward: float = 0.5
     status_reward: float = 0.02
     base_reward: float = -0.002
     truncated_reward: float = -0.2
-
-    progress_count: int = 0
-    max_progress_count: int = 100
 
     useless_count: int = 0
     max_useless_count: int = 8
@@ -91,7 +88,6 @@ class Data:
         self.__visited_pokedex_own = None
         self.__visited_pokedex_seen = None
         self.useless_count = 0
-        self.progress_count = 0
         self.buffer_reward = 0.0
         self.visited_screens = []
 
@@ -102,9 +98,6 @@ class Data:
         if self.screen_tiles_hash(memory) not in self.visited_screens:
             self.visited_screens.append(self.screen_tiles_hash(memory))
             self.useless_count = 0
-            self.progress_count += (
-                1 if self.progress_count < self.max_progress_count else 0
-            )
         else:
             self.useless_count += 1
 
@@ -236,12 +229,10 @@ class Data:
             reward += self.buffer_reward * (1.0 if 0 < self.buffer_reward else 0.50)
             self.buffer_reward = 0.0
 
-        reward += self.base_reward
+        reward += self.base_reward * (self.useless_count / self.max_useless_count + 1.0)
 
         if self.screen_tiles_hash() not in self.visited_screens:
-            reward += self.new_screen_reward * (
-                self.progress_count / self.max_progress_count + 1.0
-            )
+            reward += self.new_screen_reward
 
         return reward
 
