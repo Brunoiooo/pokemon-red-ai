@@ -122,7 +122,9 @@ class TrainWorker:
         if not self.__optimizer:
             with self.model_lock:
                 self.__optimizer = optim.AdamW(
-                    self.model.parameters(), lr=self.lr, weight_decay=self.weight_decay
+                    [p for p in self.model.parameters() if p.requires_grad],
+                    lr=self.lr,
+                    weight_decay=self.weight_decay,
                 )
 
         return self.__optimizer
@@ -373,11 +375,57 @@ class TrainWorker:
         if self.best_eval_return < avg_ret:
             self.save_best(avg_ret)
 
+        self.freeze_model()
+
         self.queue_dots.put_nowait((self.count, count))
 
         self.queue_logs.put_nowait(f"Finished evaluation {avg_ret:.6f}.")
 
         self.queue_logs.put_nowait("Evaluation stopped.")
+
+    __is_freeze: bool = False
+
+    @property
+    def is_freeze(self):
+        return self.__is_freeze
+
+    @is_freeze.setter
+    def is_freeze(self, value: bool):
+        if self.__is_freeze == value:
+            return
+
+        self.__is_freeze = value
+        with self.model_lock:
+            if value:
+                self.model.freeze()
+            else:
+                self.model.unfreeze()
+        self.freeze_steps = 0
+        self.freeze_delay = 0
+        self.__optimizer = None
+
+    freeze_steps: int = 0
+    freeze_max_steps: int = 10
+    freeze_delay: int = 0
+    freeze_max_delay: int = 10
+
+    def freeze_model(self, avg_return: float):
+        if self.is_freeze and self.freeze_steps < self.freeze_max_steps:
+            self.freeze_steps += 1
+            return
+        elif self.is_freeze:
+            self.queue_logs.put_nowait(f"Unfreezing model.")
+            self.is_freeze = False
+            return
+        elif not self.is_freeze and self.freeze_delay < self.freeze_max_delay:
+            self.freeze_delay += 1
+            return
+        elif not self.is_freeze and avg_return < self.best_eval_return:
+            self.queue_logs.put_nowait(
+                f"Freezing model for {self.freeze_max_steps} steps."
+            )
+            self.is_freeze = True
+            return
 
     def optimize_batch(self):
         try:

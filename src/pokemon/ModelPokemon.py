@@ -283,3 +283,37 @@ class ModelPokemon(nn.Module):
         q = v + (a - a.mean(dim=1, keepdim=True))
 
         return q
+
+    def freeze_representation(self):
+        modules = [
+            self.map_id,
+            self.dialog_id,
+            self.index_of_current_pokemon_send_out,
+            self.type_of_battle,
+            self.move_menu_type,
+            self.move_id,
+            self.move_type,
+            self.pokemon_id,
+            self.pokemon_type,
+            self.sprite_id,
+            self.item_id,
+            self.sprite_data_movement_statuses,
+            self.sprite_data_facing_directions,
+            self.screen_enc,
+            self.trunk,
+        ]
+
+        for module in modules:
+            for p in module.parameters():
+                p.requires_grad = False
+
+    def unfreeze_all(self):
+        for p in self.parameters():
+            p.requires_grad = True
+
+    def freeze(self):
+        self.freeze_representation()
+
+        for module in [self.value_head, self.advantage_head]:
+            for p in module.parameters():
+                p.requires_grad = True
