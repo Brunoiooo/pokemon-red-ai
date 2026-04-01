@@ -1,3 +1,4 @@
+import hashlib
 from multiprocessing.synchronize import RLock
 import pickle
 from dataclasses import dataclass, field
@@ -101,7 +102,10 @@ class Data:
             self.useless_count += 1
 
     def screen_tiles_hash(self, memory: PyBoyMemoryView | bytes | None = None):
-        return hash(bytes(self.screen_tiles(memory if memory else self.pyboy.memory)))
+        return hashlib.blake2b(
+            bytes(self.screen_tiles(memory if memory else self.pyboy.memory)),
+            digest_size=16,
+        ).digest()
 
     def inputs(self):
         return {
