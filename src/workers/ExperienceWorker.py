@@ -27,7 +27,7 @@ class ExperienceWorker:
     event_start: Event
     files_lock: RLock
     td_error_steps = 10
-    start_save_chance = 0.50
+    start_save_chance = 0.25
     max_stuck_epsilon = 1.0
     init_model_state_dict: dict[str, Any]
 

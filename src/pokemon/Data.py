@@ -12,16 +12,24 @@ class Data:
     files_lock: RLock
 
     visited_screens: list[bytes] = field(default_factory=list)
-    visited_screens_reward: float = 0.01
+
+    badge_reward: float = 1.0
+    event_reward: float = 0.5
+    new_screen_reward: float = 0.01
+    new_pokedex_seen_reward: float = 0.05
+    new_pokedex_own_reward: float = 0.15
+    status_reward: float = 0.05
+    base_reward: float = -0.001
+    truncated_reward: float = -0.05
 
     useless_count: int = 0
     max_useless_count: int = 8
-    __player_pokemon_size = 0x2C
-    __pokemon_count = 6
-    buffer_reward = 0.0
+    __player_pokemon_size: int = 0x2C
+    __pokemon_count: int = 6
+    buffer_reward: float = 0.0
 
-    __stored_pokemon_size = 0x21
-    __stored_pokemon_count = 20
+    __stored_pokemon_size: int = 0x21
+    __stored_pokemon_count: int = 20
 
     __visited_pokedex_own: list[int] | None = None
 
@@ -214,21 +222,13 @@ class Data:
             self.buffer_reward += reward
             reward = 0.0
         elif self.is_battle(self.pyboy.memory):
-            reward += self.buffer_reward * (1.5 if 0 < self.buffer_reward else 1.0)
+            reward += self.buffer_reward * (1.0 if 0 < self.buffer_reward else 0.50)
             self.buffer_reward = 0.0
 
-        reward += -0.001
-
-        reward += (
-            0.01
-            if self.is_battle(self.pyboy.memory) and not self.is_battle(memory)
-            else 0.0
-        )
+        reward += self.base_reward
 
         if self.screen_tiles_hash() not in self.visited_screens:
-            reward += self.visited_screens_reward
-        else:
-            reward += -self.visited_screens_reward * 0.25
+            reward += self.new_screen_reward
 
         return reward
 
@@ -285,9 +285,9 @@ class Data:
             if id_x == id_y and id_x != 0:
                 for status_x_bit, status_y_bit in zip(status_x, status_y):
                     if status_x_bit == 1 and status_y_bit == 0:
-                        reward += 0.3
+                        reward += self.status_reward
                     elif status_x_bit == 0 and status_y_bit == 1:
-                        reward -= 0.3
+                        reward += -self.status_reward
 
         return reward
 
@@ -390,7 +390,7 @@ class Data:
         return reward
 
     def terminated(self, memory: bytes):
-        return 0 < self.reward_badges(memory) or 0 < self.reward_event_flags(memory)
+        return self.badges(self.pyboy.memory) == 0b11111111
 
     def truncated(self, memory: bytes):
         return True if self.max_useless_count <= self.useless_count else False
@@ -1174,8 +1174,6 @@ class Data:
         reward += self.reward_enemy_status(memory)
         reward += self.reward_pokemon_current_hp(memory)
         reward += self.reward_pokemon_status(memory)
-        reward += self.reward_critical_hit_flag(memory)
-        reward += self.reward_one_hit_ko_flag(memory)
 
         return reward
 
@@ -1194,9 +1192,9 @@ class Data:
             self.enemy_status(memory), self.enemy_status(self.pyboy.memory)
         ):
             if bit_before == 0 and bit_after == 1:
-                reward += 0.3
+                reward += self.status_reward
             elif bit_before == 1 and bit_after == 0:
-                reward -= 0.3
+                reward += -self.status_reward
 
         return max(0, reward)
 
@@ -1218,27 +1216,11 @@ class Data:
             self.pokemon_status(memory), self.pokemon_status(self.pyboy.memory)
         ):
             if bit_before == 0 and bit_after == 1:
-                reward -= 0.3
+                reward += -self.status_reward
             elif bit_before == 1 and bit_after == 0:
-                reward += 0.3
+                reward += self.status_reward
 
         return reward
-
-    def reward_critical_hit_flag(self, memory: bytes):
-        return (
-            0.3
-            if self.critical_hit_flag(memory) == 0
-            and self.critical_hit_flag(self.pyboy.memory) == 1
-            else 0.0
-        )
-
-    def reward_one_hit_ko_flag(self, memory: bytes):
-        return (
-            0.3
-            if self.one_hit_ko_flag(memory) == 0
-            and self.one_hit_ko_flag(self.pyboy.memory) == 1
-            else 0.0
-        )
 
     def reward_pokedex(self, memory: bytes):
         return self.reward_pokedex_own(memory) + self.reward_pokedex_seen(memory)
@@ -1250,7 +1232,7 @@ class Data:
             self.visited_pokedex_own,
         ):
             if bit_before == 0 and bit_after == 1 and visited == 0:
-                return 0.5
+                return self.new_pokedex_own_reward
 
         return 0.0
 
@@ -1261,7 +1243,7 @@ class Data:
             self.visited_pokedex_seen,
         ):
             if bit_before == 0 and bit_after == 1 and visited == 0:
-                return 0.2
+                return self.new_pokedex_seen_reward
 
         return 0.0
 
@@ -1272,7 +1254,7 @@ class Data:
             self.badges(memory), self.badges(self.pyboy.memory)
         ):
             if bit_before == 0 and bit_after == 1:
-                reward += 1
+                reward += self.badge_reward
 
         return reward
 
@@ -1283,7 +1265,7 @@ class Data:
             self.event_flags_data(memory), self.event_flags_data(self.pyboy.memory)
         ):
             if flag_x == 0 and flag_y == 1:
-                reward += 1
+                reward += self.event_reward
 
         return reward
 
