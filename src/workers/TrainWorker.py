@@ -375,7 +375,7 @@ class TrainWorker:
         if self.best_eval_return < avg_ret:
             self.save_best(avg_ret)
 
-        self.freeze_model()
+        self.freeze_model(avg_ret)
 
         self.queue_dots.put_nowait((self.count, count))
 
