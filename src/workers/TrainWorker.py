@@ -497,7 +497,7 @@ class TrainWorker:
                     )
 
                 gamma_pow_n = torch.pow(self.gamma_tensor, n)
-                bootstrap_mask = (~(te | tr)).float()
+                bootstrap_mask = (~te).float()
                 target = rN + bootstrap_mask * gamma_pow_n * next_q_target
 
             loss = torch.nn.functional.smooth_l1_loss(q_sa, target, reduction="mean")
