@@ -68,7 +68,7 @@ class TrainWorker:
     weight_decay = 1e-5
     gamma = 0.99
     criterion: torch.nn.SmoothL1Loss = field(default_factory=torch.nn.SmoothL1Loss)
-    tau = 0.005
+    tau = 0.0005
     target_update_interval = 1000
     _opt_steps: int = 0
 
@@ -399,7 +399,7 @@ class TrainWorker:
             if value:
                 self.model.freeze()
             else:
-                self.model.unfreeze()
+                self.model.unfreeze_all()
         self.freeze_steps = 0
         self.freeze_delay = 0
         self.__optimizer = None

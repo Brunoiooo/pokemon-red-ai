@@ -14,14 +14,14 @@ class Data:
 
     visited_screens: list[bytes] = field(default_factory=list)
 
-    badge_reward: float = 1.0
-    event_reward: float = 0.5
-    new_screen_reward: float = 0.01
-    new_pokedex_seen_reward: float = 0.05
-    new_pokedex_own_reward: float = 0.15
-    status_reward: float = 0.05
-    base_reward: float = -0.001
-    truncated_reward: float = -0.05
+    badge_reward: float = 20.0
+    event_reward: float = 5.0
+    new_screen_reward: float = 0.001
+    new_pokedex_seen_reward: float = 0.2
+    new_pokedex_own_reward: float = 0.5
+    status_reward: float = 0.02
+    base_reward: float = -0.002
+    truncated_reward: float = -0.2
 
     useless_count: int = 0
     max_useless_count: int = 8
