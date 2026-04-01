@@ -29,6 +29,7 @@ class ExperienceWorker:
     td_error_steps = 10
     start_save_chance = 0.25
     max_stuck_epsilon = 1.0
+    min_stuck_epsilon = 0.05
     init_model_state_dict: dict[str, Any]
 
     __last_save_path = "last"
@@ -135,11 +136,11 @@ class ExperienceWorker:
             self.emulator.use_sdl = bool(self.window.get())
 
     def get_action(self, inputs: dict[float]):
-        if (
-            random.random()
-            < self.emulator.data.useless_count
+        if random.random() < max(
+            self.emulator.data.useless_count
             / self.emulator.data.max_useless_count
-            * self.max_stuck_epsilon
+            * self.max_stuck_epsilon,
+            self.min_stuck_epsilon,
         ):
             action = random.randint(0, len(self.emulator.buttons) - 1)
         else:
