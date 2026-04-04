@@ -86,6 +86,8 @@ class Emulator:
                 self.pyboy.load_state(f)
 
         self.data.clean()
+        self.data.progress = 0
+        self.data.last_progress = 0
 
         try:
             self.data.load(path=path)
@@ -96,6 +98,8 @@ class Emulator:
 
     def step(self, memory: bytes, action: int):
         self.ticks(action)
+
+        self.data.count_progress()
 
         reward = self.data.reward(memory=memory, action=action)
 
@@ -134,6 +138,10 @@ class Emulator:
 
         memory, inputs = self.reset(dir="start")
 
+        flags = self.data.map_id(self.pyboy.memory), self.data.event_flags_data(
+            self.pyboy.memory
+        )
+
         while True:
             action = 0
 
@@ -166,16 +174,18 @@ class Emulator:
             if truncated:
                 break
 
-            queue_logs.put_nowait("==================================")
-            queue_logs.put_nowait(f"Reward: {reward:.6f}")
-            queue_logs.put_nowait(f"Terminated: {terminated}")
-            queue_logs.put_nowait(f"Truncated: {truncated}")
-            queue_logs.put_nowait(f"world_data: {self.data.world_data()} ")
-            queue_logs.put_nowait(
-                f"menu_battle_dialog_data: {self.data.menu_battle_dialog_data()} "
-            )
-            queue_logs.put_nowait(f"useless_count: {self.data.useless_count} ")
-            queue_logs.put_nowait("==================================")
+            if flags != (
+                self.data.map_id(self.pyboy.memory),
+                self.data.event_flags_data(self.pyboy.memory),
+            ):
+                flags = self.data.map_id(self.pyboy.memory), self.data.event_flags_data(
+                    self.pyboy.memory
+                )
+                queue_logs.put_nowait(
+                    f"{self.data.position_x(self.pyboy.memory), self.data.position_y(self.pyboy.memory),flags}"
+                )
+
+            queue_logs.put_nowait(f"{reward:.2f}")
 
             time.sleep(0.1)
 
@@ -212,7 +222,6 @@ class Emulator:
         self.save_last_checkpoint("saves/last")
 
         count = 0
-        was_saved = False
         while True:
             count += 1
 
@@ -226,16 +235,10 @@ class Emulator:
                 memory=memory, action=action
             )
 
-            if (
-                was_saved is False
-                and self.data.max_useless_count * 0.1 < self.data.useless_count
-            ):
+            if self.data.progress != self.data.last_progress:
                 self.save_last_checkpoint("saves/last")
                 if is_debug:
                     queue_logs.put_nowait(f"saved checkpoint {count}")
-                was_saved = True
-            elif 0 == self.data.useless_count:
-                was_saved = False
 
             if terminated:
                 queue_logs.put_nowait(

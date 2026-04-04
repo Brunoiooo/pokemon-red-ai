@@ -16,12 +16,26 @@ class Data:
 
     badge_reward: float = 20.0
     event_reward: float = 5.0
-    new_screen_reward: float = 0.001
+    new_screen_reward: float = 0.002
     new_pokedex_seen_reward: float = 0.2
     new_pokedex_own_reward: float = 0.5
     status_reward: float = 0.02
-    base_reward: float = -0.002
+    base_reward: float = -0.001
     truncated_reward: float = -0.2
+    progress_list: list[tuple[int, int, int]] = field(
+        default_factory=lambda: [
+            (1, 7, 37),
+            (6, 5, 0),
+            (8, 5, 40),
+            (12, 12, 0),
+            (35, 10, 12),
+            (35, 20, 1),
+        ]
+    )
+
+    last_progress: int = 0
+    progress: int = 0
+    progress_reward: float = 1.0
 
     useless_count: int = 0
     max_useless_count: int = 8
@@ -72,6 +86,8 @@ class Data:
                 pickle.dump(self.buffer_reward, f)
             with open(f"{path}/visited_screens.pkl", "wb") as f:
                 pickle.dump(self.visited_screens, f)
+            with open(f"{path}/progress.pkl", "wb") as f:
+                pickle.dump(self.progress, f)
 
     def load(self, path: str):
         with self.files_lock:
@@ -83,6 +99,8 @@ class Data:
                 self.buffer_reward = pickle.load(f)
             with open(f"{path}/visited_screens.pkl", "rb") as f:
                 self.visited_screens = pickle.load(f)
+            with open(f"{path}/progress.pkl", "rb") as f:
+                self.progress = self.last_progress = pickle.load(f)
 
     def clean(self):
         self.__visited_pokedex_own = None
@@ -100,6 +118,15 @@ class Data:
             self.useless_count = 0
         else:
             self.useless_count += 1
+
+    def count_progress(self):
+        self.last_progress = self.progress
+        if self.progress_list[self.progress] == (
+            self.position_x(self.pyboy.memory),
+            self.position_y(self.pyboy.memory),
+            self.map_id(self.pyboy.memory),
+        ):
+            self.progress += 1
 
     def screen_tiles_hash(self, memory: PyBoyMemoryView | bytes | None = None):
         return hashlib.blake2b(
@@ -249,6 +276,7 @@ class Data:
         reward = 0.0
 
         reward += self.reward_milestones(memory)
+        reward += self.reward_progress()
         reward += self.reward_pokedex(memory)
         reward += self.reward_player_pokemons_current_hps(memory)
         reward += self.reward_player_pokemons_statuses(memory)
@@ -260,6 +288,9 @@ class Data:
         reward += self.reward_player_pokemons_pps(memory)
 
         return reward
+
+    def reward_progress(self):
+        return self.progress_reward if self.progress != self.last_progress else 0.0
 
     def reward_player_pokemons_current_hps(self, memory: bytes):
         reward = 0.0
@@ -457,8 +488,15 @@ class Data:
         data += self.data_normalizer([self.useless_count], max=self.max_useless_count)
         data += self.player_data()
         data += self.pokedex_data()
+        data += self.get_progress()
 
         return data
+
+    def get_progress(self, progress: int | None = None):
+        if progress is None:
+            progress = self.progress
+
+        return [1] * progress + [0] * (len(self.progress_list) - progress)
 
     def inventory_data(self, memory: PyBoyMemoryView | bytes):
         data = []
