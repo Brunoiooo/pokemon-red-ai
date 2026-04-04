@@ -237,8 +237,9 @@ class Emulator:
 
             if self.data.progress != self.data.last_progress:
                 self.save_last_checkpoint("saves/last")
-                if is_debug:
-                    queue_logs.put_nowait(f"saved checkpoint {count}")
+                queue_logs.put_nowait(
+                    f"saved checkpoint {count}, with progress {self.data.progress}"
+                )
 
             if terminated:
                 queue_logs.put_nowait(
@@ -246,11 +247,6 @@ class Emulator:
                 )
 
             total_reward += reward
-
-            if is_debug:
-                queue_logs.put_nowait(
-                    f"Action: {action}, Reward: {reward:.2f}, Terminated: {terminated}, Truncated: {truncated}"
-                )
 
             if truncated:
                 break
