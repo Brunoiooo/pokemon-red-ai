@@ -16,7 +16,7 @@ class Data:
 
     badge_reward: float = 1.0
     event_reward: float = 0.5
-    new_screen_reward: float = 0.002
+    new_screen_reward: float = 0.0025
     new_pokedex_seen_reward: float = 0.1
     new_pokedex_own_reward: float = 0.25
     status_reward: float = 0.02
