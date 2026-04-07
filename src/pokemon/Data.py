@@ -16,26 +16,12 @@ class Data:
 
     badge_reward: float = 1.0
     event_reward: float = 0.5
-    new_screen_reward: float = 0.001
+    new_screen_reward: float = 0.002
     new_pokedex_seen_reward: float = 0.1
     new_pokedex_own_reward: float = 0.25
     status_reward: float = 0.02
     base_reward: float = -0.002
     truncated_reward: float = -0.02
-    progress_list: list[tuple[int, int, int]] = field(
-        default_factory=lambda: [
-            (1, 7, 37),
-            (6, 5, 0),
-            (8, 5, 40),
-            (12, 12, 0),
-            (35, 10, 12),
-            (35, 20, 1),
-        ]
-    )
-
-    last_progress: int = 0
-    progress: int = 0
-    progress_reward: float = 0.5
 
     useless_count: int = 0
     max_useless_count: int = 8
@@ -44,7 +30,6 @@ class Data:
     buffer_reward: float = 0.0
 
     __stored_pokemon_size: int = 0x21
-    __stored_pokemon_count: int = 20
 
     __visited_pokedex_own: list[int] | None = None
 
@@ -86,8 +71,6 @@ class Data:
                 pickle.dump(self.buffer_reward, f)
             with open(f"{path}/visited_screens.pkl", "wb") as f:
                 pickle.dump(self.visited_screens, f)
-            with open(f"{path}/progress.pkl", "wb") as f:
-                pickle.dump(self.progress, f)
 
     def load(self, path: str):
         with self.files_lock:
@@ -99,8 +82,6 @@ class Data:
                 self.buffer_reward = pickle.load(f)
             with open(f"{path}/visited_screens.pkl", "rb") as f:
                 self.visited_screens = pickle.load(f)
-            with open(f"{path}/progress.pkl", "rb") as f:
-                self.progress = self.last_progress = pickle.load(f)
 
     def clean(self):
         self.__visited_pokedex_own = None
@@ -118,15 +99,6 @@ class Data:
             self.useless_count = 0
         else:
             self.useless_count += 1
-
-    def count_progress(self):
-        self.last_progress = self.progress
-        if self.progress_list[self.progress] == (
-            self.position_x(self.pyboy.memory),
-            self.position_y(self.pyboy.memory),
-            self.map_id(self.pyboy.memory),
-        ):
-            self.progress += 1
 
     def screen_tiles_hash(self, memory: PyBoyMemoryView | bytes | None = None):
         return hashlib.blake2b(
@@ -221,20 +193,32 @@ class Data:
                 dtype=torch.long,
             ),
             "item_id": torch.tensor(
-                self.poke_mart_items(self.pyboy.memory)
-                + self.items_ids(self.pyboy.memory)
-                + self.stored_items_ids(self.pyboy.memory),
-                dtype=torch.long,
-            ),
-            "sprite_data_movement_statuses": torch.tensor(
-                self.sprite_data_movement_statuses(self.pyboy.memory),
-                dtype=torch.long,
-            ),
-            "sprite_data_facing_directions": torch.tensor(
-                self.sprite_data_facing_directions(self.pyboy.memory),
+                self.item_ids(),
                 dtype=torch.long,
             ),
         }
+
+    def item_ids(self, memory: PyBoyMemoryView | bytes | None = None):
+        if memory is None:
+            memory = self.pyboy.memory
+
+        data = [
+            self.poke_mart_items(memory)[self.real_current_menu_selected_item(memory)],
+            self.items_ids(memory)[self.real_current_menu_selected_item(memory)],
+            self.stored_items_ids(memory)[self.real_current_menu_selected_item(memory)],
+        ]
+
+        return data if self.is_eq_menu(memory) else [0] * len(data)
+
+    def is_eq_menu(self, memory: PyBoyMemoryView | bytes):
+        if memory is None:
+            memory = self.pyboy.memory
+
+        return (
+            True
+            if self.menu_position_x(memory) == 4 and self.menu_position_y(memory) == 5
+            else False
+        )
 
     def screen_tiles(self, memory: PyBoyMemoryView | bytes):
         return [memory[i] for i in range(0xC3A0, 0xC508)]
@@ -276,7 +260,6 @@ class Data:
         reward = 0.0
 
         reward += self.reward_milestones(memory)
-        reward += self.reward_progress()
         reward += self.reward_pokedex(memory)
         reward += self.reward_player_pokemons_current_hps(memory)
         reward += self.reward_player_pokemons_statuses(memory)
@@ -288,9 +271,6 @@ class Data:
         reward += self.reward_player_pokemons_pps(memory)
 
         return reward
-
-    def reward_progress(self):
-        return self.progress_reward if self.progress != self.last_progress else 0.0
 
     def reward_player_pokemons_current_hps(self, memory: bytes):
         reward = 0.0
@@ -444,6 +424,7 @@ class Data:
             [
                 self.menu_position_x(self.pyboy.memory),
                 self.menu_position_y(self.pyboy.memory),
+                self.id_of_the_first_displayed_menu_item(self.pyboy.memory),
             ]
         ) + [
             self.current_menu_selected_item(self.pyboy.memory)
@@ -488,25 +469,30 @@ class Data:
         data += self.data_normalizer([self.useless_count], max=self.max_useless_count)
         data += self.player_data()
         data += self.pokedex_data()
-        data += self.get_progress()
 
         return data
-
-    def get_progress(self, progress: int | None = None):
-        if progress is None:
-            progress = self.progress
-
-        return [1] * progress + [0] * (len(self.progress_list) - progress)
 
     def inventory_data(self, memory: PyBoyMemoryView | bytes):
         data = []
 
-        data += self.data_normalizer(self.items_quantities(memory))
+        data += self.data_normalizer(
+            [
+                self.items_quantities(memory)[
+                    self.real_current_menu_selected_item(memory)
+                ]
+            ]
+        )
         data += self.data_normalizer([self.player_money(memory)], max=0xFFFFFF)
-        data += self.data_normalizer(self.stored_items_quantities(memory))
+        data += self.data_normalizer(
+            [
+                self.stored_items_quantities(memory)[
+                    self.real_current_menu_selected_item(memory)
+                ]
+            ]
+        )
         data += self.data_normalizer([self.game_coins(memory)], max=0xFFFF)
 
-        return data
+        return data if self.is_eq_menu(memory) else [0] * len(data)
 
     def id_of_the_last_menu_item(self, memory: PyBoyMemoryView | bytes):
         return memory[0xCC28]
@@ -563,19 +549,29 @@ class Data:
         )
 
     def sprite_data_ids(self, memory: PyBoyMemoryView | bytes):
-        return [memory[0xC100 + 0x10 * x] for x in range(16)]
+        data = [memory[0xC100 + 0x10 * x] for x in range(16)]
+
+        return data if self.is_world(memory) else [0] * len(data)
 
     def sprite_data_movement_statuses(self, memory: PyBoyMemoryView | bytes):
-        return [memory[0xC101 + 0x10 * x] for x in range(16)]
+        data = [memory[0xC101 + 0x10 * x] for x in range(16)]
+
+        return data if self.is_world(memory) else [0] * len(data)
 
     def sprite_data_facing_directions(self, memory: PyBoyMemoryView | bytes):
-        return [memory[0xC109 + 0x10 * x] for x in range(16)]
+        data = [memory[0xC109 + 0x10 * x] for x in range(16)]
+
+        return data if self.is_world(memory) else [0] * len(data)
 
     def sprite_data_y_positions(self, memory: PyBoyMemoryView | bytes):
-        return [memory[0xC204 + 0x10 * x] for x in range(16)]
+        data = [memory[0xC204 + 0x10 * x] for x in range(16)]
+
+        return data if self.is_world(memory) else [0] * len(data)
 
     def sprite_data_x_positions(self, memory: PyBoyMemoryView | bytes):
-        return [memory[0xC205 + 0x10 * x] for x in range(16)]
+        data = [memory[0xC205 + 0x10 * x] for x in range(16)]
+
+        return data if self.is_world(memory) else [0] * len(data)
 
     def menu_position_x(self, memory: PyBoyMemoryView | bytes):
         return memory[0xCC24]
@@ -585,6 +581,14 @@ class Data:
 
     def current_menu_selected_item(self, memory: PyBoyMemoryView | bytes):
         return memory[0xCC26]
+
+    def real_current_menu_selected_item(self, memory: PyBoyMemoryView | bytes):
+        return self.current_menu_selected_item(
+            memory
+        ) + self.id_of_the_first_displayed_menu_item(memory)
+
+    def id_of_the_first_displayed_menu_item(self, memory: PyBoyMemoryView | bytes):
+        return memory[0xCC36]
 
     def index_of_current_pokemon_send_out(self, memory: PyBoyMemoryView | bytes):
         return memory[0xCC2F]
@@ -1130,56 +1134,90 @@ class Data:
         data = []
         data = self.data_normalizer(self.stored_pokemon_hps(memory), max=0xFFFF)
         data += self.data_normalizer(self.stored_pokemon_levels(memory))
-        data += self.data_normalizer(self.stored_pokemon_statuses(memory))
+        data += self.stored_pokemon_statuses(memory)
         data += self.data_normalizer(
             self.stored_pokemon_experiences(memory), max=0xFFFFFF
         )
         data += self.data_normalizer(self.stored_pokemon_pps(memory))
 
-        return data
+        return data if self.is_eq_menu(memory) else [0] * len(data)
 
     def stored_pokemon_pps(self, memory: PyBoyMemoryView | bytes):
         return [
-            memory[x + i * self.__stored_pokemon_size]
-            for i in range(self.__stored_pokemon_count)
+            memory[
+                x
+                + self.real_current_menu_selected_item(memory)
+                * self.__stored_pokemon_size
+            ]
             for x in range(0xDAB3, 0xDAB7)
         ]
 
     def stored_pokemon_experiences(self, memory: PyBoyMemoryView | bytes):
         return [
-            memory[0xDAA4 + i * self.__stored_pokemon_size]
-            | (memory[0xDAA5 + i * self.__stored_pokemon_size] << 8)
-            | (memory[0xDAA6 + i * self.__stored_pokemon_size] << 16)
-            for i in range(self.__stored_pokemon_count)
+            memory[
+                0xDAA4
+                + self.real_current_menu_selected_item(memory)
+                * self.__stored_pokemon_size
+            ]
+            | (
+                memory[
+                    0xDAA5
+                    + self.real_current_menu_selected_item(memory)
+                    * self.__stored_pokemon_size
+                ]
+                << 8
+            )
+            | (
+                memory[
+                    0xDAA6
+                    + self.real_current_menu_selected_item(memory)
+                    * self.__stored_pokemon_size
+                ]
+                << 16
+            )
         ]
 
     def stored_pokemon_moves(self, memory: PyBoyMemoryView | bytes):
         return [
-            memory[x + i * self.__stored_pokemon_size]
-            for i in range(self.__stored_pokemon_count)
+            memory[
+                x
+                + self.real_current_menu_selected_item(memory)
+                * self.__stored_pokemon_size
+            ]
             for x in range(0xDA9E, 0xDAA2)
         ]
 
     def stored_pokemon_types(self, memory: PyBoyMemoryView | bytes):
-        return [
-            memory[x + i * self.__stored_pokemon_size]
-            for i in range(self.__stored_pokemon_count)
+        data = [
+            memory[
+                x
+                + self.real_current_menu_selected_item(memory)
+                * self.__stored_pokemon_size
+            ]
             for x in range(0xDA9B, 0xDA9D)
         ]
+
+        return data if self.is_eq_menu(memory) else [0] * len(data)
 
     def stored_pokemon_statuses(self, memory: PyBoyMemoryView | bytes):
         return [
             bit
-            for i in range(self.__stored_pokemon_count)
             for bit in self.bits_extractor(
-                memory[0xDA9A + i * self.__stored_pokemon_size]
+                memory[
+                    0xDA9A
+                    + self.real_current_menu_selected_item(memory)
+                    * self.__stored_pokemon_size
+                ]
             )
         ]
 
     def stored_pokemon_levels(self, memory: PyBoyMemoryView | bytes):
         return [
-            memory[0xDA99 + i * self.__stored_pokemon_size]
-            for i in range(self.__stored_pokemon_count)
+            memory[
+                0xDA99
+                + self.real_current_menu_selected_item(memory)
+                * self.__stored_pokemon_size
+            ]
         ]
 
     def stored_pokemon_hps(self, memory: PyBoyMemoryView | bytes):
@@ -1187,21 +1225,32 @@ class Data:
             x | (y << 8)
             for x, y in zip(
                 [
-                    memory[0xDA97 + i * self.__stored_pokemon_size]
-                    for i in range(self.__stored_pokemon_count)
+                    memory[
+                        0xDA97
+                        + self.real_current_menu_selected_item(memory)
+                        * self.__stored_pokemon_size
+                    ]
                 ],
                 [
-                    memory[0xDA98 + i * self.__stored_pokemon_size]
-                    for i in range(self.__stored_pokemon_count)
+                    memory[
+                        0xDA98
+                        + self.real_current_menu_selected_item(memory)
+                        * self.__stored_pokemon_size
+                    ]
                 ],
             )
         ]
 
     def stored_pokemon_ids(self, memory: PyBoyMemoryView | bytes):
-        return [
-            memory[0xDA96 + i * self.__stored_pokemon_size]
-            for i in range(self.__stored_pokemon_count)
+        data = [
+            memory[
+                0xDA96
+                + self.real_current_menu_selected_item(memory)
+                * self.__stored_pokemon_size
+            ]
         ]
+
+        return data if self.is_eq_menu(memory) else [0] * len(data)
 
     def tile_data(self, memory: PyBoyMemoryView | bytes):
         return [memory[i] for i in range(0xC490, 0xC4F1)]

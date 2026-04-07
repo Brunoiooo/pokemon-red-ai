@@ -21,8 +21,6 @@ def get_model(device: str, files_lock: RLock, name: str | None = None):
         + len(inputs["pokemon_type"]) * 16
         + len(inputs["sprite_id"]) * 16
         + len(inputs["item_id"]) * 16
-        + len(inputs["sprite_data_movement_statuses"]) * 2
-        + len(inputs["sprite_data_facing_directions"]) * 4
     )
 
     total_in_dim = single_embed_dim + multi_embed_dim
@@ -117,8 +115,6 @@ class ModelPokemon(nn.Module):
         self.pokemon_type = nn.Embedding(256, 16, padding_idx=0)
         self.sprite_id = nn.Embedding(256, 16, padding_idx=0)
         self.item_id = nn.Embedding(256, 16, padding_idx=0)
-        self.sprite_data_movement_statuses = nn.Embedding(4, 2)
-        self.sprite_data_facing_directions = nn.Embedding(13, 4)
 
         self.screen_enc = nn.Sequential(
             nn.Conv2d(1, 8, 3, padding=1),
@@ -236,20 +232,6 @@ class ModelPokemon(nn.Module):
         item_id_full = self.item_id(self._as_long_seq_batch(x["item_id"], device))
         item_id_emb = item_id_full.reshape(item_id_full.size(0), -1)
 
-        sprite_data_movement_statuses_full = self.sprite_data_movement_statuses(
-            self._as_long_seq_batch(x["sprite_data_movement_statuses"], device)
-        )
-        sprite_data_movement_statuses_emb = sprite_data_movement_statuses_full.reshape(
-            sprite_data_movement_statuses_full.size(0), -1
-        )
-
-        sprite_data_facing_directions_full = self.sprite_data_facing_directions(
-            self._as_long_seq_batch(x["sprite_data_facing_directions"], device)
-        )
-        sprite_data_facing_directions_emb = sprite_data_facing_directions_full.reshape(
-            sprite_data_facing_directions_full.size(0), -1
-        )
-
         screen = self._as_float_batch(x["screen_tiles"], device)
         if screen.dim() == 3:
             screen = screen.unsqueeze(1)
@@ -269,8 +251,8 @@ class ModelPokemon(nn.Module):
                 pokemon_type_emb,
                 sprite_id_emb,
                 item_id_emb,
-                sprite_data_movement_statuses_emb,
-                sprite_data_facing_directions_emb,
+                # sprite_data_movement_statuses_emb,
+                # sprite_data_facing_directions_emb,
                 screen_feat,
             ],
             dim=1,
@@ -297,8 +279,6 @@ class ModelPokemon(nn.Module):
             self.pokemon_type,
             self.sprite_id,
             self.item_id,
-            self.sprite_data_movement_statuses,
-            self.sprite_data_facing_directions,
             self.screen_enc,
             self.trunk,
         ]

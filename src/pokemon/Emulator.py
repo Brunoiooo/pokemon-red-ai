@@ -99,8 +99,6 @@ class Emulator:
     def step(self, memory: bytes, action: int):
         self.ticks(action)
 
-        self.data.count_progress()
-
         reward = self.data.reward(memory=memory, action=action)
 
         terminated = self.data.terminated(memory)
@@ -235,7 +233,7 @@ class Emulator:
                 memory=memory, action=action
             )
 
-            if self.data.progress != self.data.last_progress:
+            if self.is_milestone(memory):
                 self.save_last_checkpoint("saves/last")
                 queue_logs.put_nowait(
                     f"saved checkpoint {count}, with progress {self.data.progress}"
