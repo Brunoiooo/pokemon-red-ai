@@ -14,14 +14,14 @@ class Data:
 
     visited_screens: list[bytes] = field(default_factory=list)
 
-    badge_reward: float = 20.0
-    event_reward: float = 5.0
-    new_screen_reward: float = 0.002
-    new_pokedex_seen_reward: float = 0.2
-    new_pokedex_own_reward: float = 0.5
+    badge_reward: float = 1.0
+    event_reward: float = 0.5
+    new_screen_reward: float = 0.001
+    new_pokedex_seen_reward: float = 0.1
+    new_pokedex_own_reward: float = 0.25
     status_reward: float = 0.02
-    base_reward: float = -0.001
-    truncated_reward: float = -0.2
+    base_reward: float = -0.002
+    truncated_reward: float = -0.02
     progress_list: list[tuple[int, int, int]] = field(
         default_factory=lambda: [
             (1, 7, 37),
@@ -35,7 +35,7 @@ class Data:
 
     last_progress: int = 0
     progress: int = 0
-    progress_reward: float = 1.0
+    progress_reward: float = 0.5
 
     useless_count: int = 0
     max_useless_count: int = 8
@@ -256,7 +256,7 @@ class Data:
             reward += self.buffer_reward * (1.0 if 0 < self.buffer_reward else 0.50)
             self.buffer_reward = 0.0
 
-        reward += self.base_reward * (self.useless_count / self.max_useless_count + 1.0)
+        reward += self.base_reward
 
         if self.screen_tiles_hash() not in self.visited_screens:
             reward += self.new_screen_reward
@@ -642,9 +642,6 @@ class Data:
 
         return data if self.is_battle(self.pyboy.memory) else [0] * len(data)
 
-    def enemy_status(self, memory: PyBoyMemoryView | bytes):
-        return self.bits_extractor(memory[0xCFE9], end_bit=6)
-
     def bits_extractor(self, byte: int, start_bit=0, end_bit=7):
         if start_bit < 0 or end_bit > 7 or start_bit > end_bit:
             raise ValueError("Invalid bit range")
@@ -846,7 +843,7 @@ class Data:
         data += self.data_normalizer(self.player_pokemons_pps(self.pyboy.memory))
 
         data += self.data_normalizer(
-            self.player_pokemons_levels(self.pyboy.memory),
+            self.player_pokemons_level(self.pyboy.memory),
         )
 
         data += self.data_normalizer(
@@ -936,7 +933,7 @@ class Data:
             for i in range(self.__pokemon_count)
         ]
 
-    def player_pokemons_levels(self, memory: PyBoyMemoryView | bytes = None):
+    def player_pokemons_level(self, memory: PyBoyMemoryView | bytes = None):
         return [memory[0xD18C]]
 
     def player_pokemons_max_hps(self, memory: PyBoyMemoryView | bytes = None):
