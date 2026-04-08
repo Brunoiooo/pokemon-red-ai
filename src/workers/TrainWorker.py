@@ -15,6 +15,7 @@ from threading import RLock, Thread
 from time import sleep
 import traceback
 from typing import Any
+from matplotlib.pylab import beta
 import torch.optim as optim
 import numpy as np
 import torch
@@ -45,8 +46,9 @@ class TrainWorker:
     is_evaluation_window: any = field(init=False)
     train_use_sdl: any = field(init=False)
 
+    buffer_capacity: int = 200000
     hash_buffer: deque = field(default_factory=lambda: deque(maxlen=200000))
-    buffer: deque = field(default_factory=lambda: deque(maxlen=200000))
+    buffer: PrioritizedReplayBuffer | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self):
         self.manager = mp.Manager()
@@ -61,10 +63,14 @@ class TrainWorker:
         self.buffer_lock = self.manager.RLock()
         self.is_evaluation_window = self.manager.Value("b", False)
         self.train_use_sdl = self.manager.Value("b", False)
+        self.buffer = PrioritizedReplayBuffer(
+            capacity=self.buffer_capacity,
+            alpha=self.per_alpha,
+        )
 
     batch_size = 128
     grad_accum_steps = 2
-    lr = 0.0001
+    lr = 5e-4
     weight_decay = 1e-5
     gamma = 0.99
     criterion: torch.nn.SmoothL1Loss = field(default_factory=torch.nn.SmoothL1Loss)
@@ -76,7 +82,7 @@ class TrainWorker:
     per_beta_start: float = 0.4
     per_beta_frames: int = 100000
 
-    era: int = 250
+    era: int = 1000
 
     max_epsilon: float = 0.01
 
@@ -338,8 +344,8 @@ class TrainWorker:
                     continue
 
                 with self.buffer_lock:
-                    self.buffer.append(item)
-                    # self.hash_buffer.append(item[7])
+                    self.buffer.add(item)
+                    self.hash_buffer.append(item[7])
         except Exception as e:
             self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
         finally:
@@ -427,6 +433,10 @@ class TrainWorker:
             self.is_freeze = True
             return
 
+    def per_beta(self):
+        frac = min(1.0, self.count / max(1, self.per_beta_frames))
+        return self.per_beta_start + frac * (1.0 - self.per_beta_start)
+
     def optimize_batch(self):
         try:
             with self.buffer_lock:
@@ -434,14 +444,12 @@ class TrainWorker:
                     raise ValueError(
                         f"Buffer too small: expected at least {self.batch_size}, got {len(self.buffer)}"
                     )
+                beta = self.per_beta()
+                batch, idxs, is_weights = self.buffer.sample(self.batch_size, beta=beta)
         except ValueError as e:
             self.queue_logs.put_nowait(str(e))
             sleep(1.0)
             return
-
-        with self.buffer_lock:
-            idx = np.random.randint(0, len(self.buffer), size=self.batch_size)
-            batch = [self.buffer[i] for i in idx]
 
         (
             inputs,
@@ -455,22 +463,25 @@ class TrainWorker:
         ) = zip(*batch)
 
         inputs = self.collate_states(inputs)
-        actions = torch.tensor(actions, device=self.device, dtype=torch.long)
         next_inputs = self.collate_states(next_inputs)
+
+        actions = torch.tensor(actions, device=self.device, dtype=torch.long)
         rewards = torch.tensor(rewards, device=self.device, dtype=torch.float32)
         terminateds = torch.tensor(terminateds, device=self.device, dtype=torch.bool)
         truncateds = torch.tensor(truncateds, device=self.device, dtype=torch.bool)
         steps = torch.tensor(steps, device=self.device, dtype=torch.long)
+        is_weights = torch.tensor(is_weights, device=self.device, dtype=torch.float32)
 
         micro = self.batch_size // self.grad_accum_steps
         assert self.batch_size % self.grad_accum_steps == 0
 
         self.optimizer.zero_grad(set_to_none=True)
 
-        total_td_errors = np.zeros(self.batch_size)
+        total_td_errors = np.zeros(self.batch_size, dtype=np.float32)
 
         for i in range(self.grad_accum_steps):
             sl = slice(i * micro, (i + 1) * micro)
+
             s = {k: v[sl] for k, v in inputs.items()}
             ns = {k: v[sl] for k, v in next_inputs.items()}
             a = actions[sl]
@@ -478,6 +489,7 @@ class TrainWorker:
             te = terminateds[sl]
             tr = truncateds[sl]
             n = steps[sl]
+            w = is_weights[sl]
 
             with self.model_lock:
                 q_all = self.model(s)
@@ -497,25 +509,30 @@ class TrainWorker:
                     )
 
                 gamma_pow_n = torch.pow(self.gamma_tensor, n)
-                bootstrap_mask = (~te).float()
+                bootstrap_mask = (~te).float()  # ewentualnie (~(te | tr)).float()
                 target = rN + bootstrap_mask * gamma_pow_n * next_q_target
 
-            loss = torch.nn.functional.smooth_l1_loss(q_sa, target, reduction="mean")
-            (loss / self.grad_accum_steps).backward()
+            td = target - q_sa
+            total_td_errors[sl] = td.detach().abs().cpu().numpy()
 
-            td_error = torch.abs(q_sa - target).detach()
-            total_td_errors[sl] = td_error.cpu().numpy()
+            per_sample_loss = torch.nn.functional.smooth_l1_loss(
+                q_sa, target, reduction="none"
+            )
+            loss = (per_sample_loss * w).mean()
+            loss = loss / self.grad_accum_steps
+            loss.backward()
 
         with self.model_lock:
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-
         self.optimizer.step()
 
-        self._opt_steps += 1
-        # if self._opt_steps % self.target_update_interval == 0:
-        #     self.hard_update_target()
+        with self.buffer_lock:
+            self.buffer.update_priorities(idxs, total_td_errors.tolist())
 
-        self.soft_update_target()
+        self._opt_steps += 1
+        if self._opt_steps % self.target_update_interval == 0:
+            with self.model_lock:
+                self.target_model.load_state_dict(self.model.state_dict())
 
     def collate_states(self, list_of_dicts: tuple[Any, ...]):
         batch = {}

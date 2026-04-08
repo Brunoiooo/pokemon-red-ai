@@ -28,8 +28,8 @@ class ExperienceWorker:
     files_lock: RLock
     td_error_steps = 10
     start_save_chance = 0.25
-    max_stuck_epsilon = 0.25
-    min_stuck_epsilon = 0.05
+    max_stuck_epsilon = 0.50
+    min_stuck_epsilon = 0.20
     init_model_state_dict: dict[str, Any]
 
     __last_save_path = "last"
