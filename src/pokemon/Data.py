@@ -91,20 +91,28 @@ class Data:
         self.visited_screens = []
 
     def count(self, reward: float, action: int, memory: bytes | None = None):
-        self.visited_pokedex_own = self.pokedex_own(memory)
-        self.visited_pokedex_seen = self.pokedex_seen(memory)
+        self.visited_pokedex_own = self.pokedex_own(self.pyboy.memory)
+        self.visited_pokedex_seen = self.pokedex_seen(self.pyboy.memory)
 
-        if self.screen_tiles_hash(memory) not in self.visited_screens:
-            self.visited_screens.append(self.screen_tiles_hash(memory))
-            self.useless_count = 0
+        if self.is_world(self.pyboy.memory):
+            if self.screen_tiles_hash(self.pyboy.memory) in self.visited_screens:
+                self.useless_count += 1
+            else:
+                self.useless_count = 0
         else:
-            self.useless_count += 1
+            if reward <= 0.0:
+                self.useless_count += 1
+            else:
+                self.useless_count = 0
+
+        if self.screen_tiles_hash(self.pyboy.memory) not in self.visited_screens:
+            self.visited_screens.append(self.screen_tiles_hash(self.pyboy.memory))
 
     def screen_tiles_hash(self, memory: PyBoyMemoryView | bytes | None = None):
         return hashlib.blake2b(
             bytes(self.screen_tiles(memory if memory else self.pyboy.memory)),
             digest_size=16,
-        ).digest()
+        ).hexdigest()
 
     def inputs(self):
         return {
@@ -1266,12 +1274,29 @@ class Data:
         return reward
 
     def reward_enemy_hp(self, memory: bytes):
-        return (
-            (self.enemy_hp(memory) - self.enemy_hp(self.pyboy.memory))
-            / self.enemy_max_hp(self.pyboy.memory)
-            if self.enemy_max_hp(self.pyboy.memory) != 0
-            else 0
-        )
+        if (
+            self.enemy_max_hp(self.pyboy.memory) == 0
+            or self.pokemon_max_hp(self.pyboy.memory) == 0
+        ):
+            return 0
+
+        diff = (
+            self.enemy_hp(memory) - self.enemy_hp(self.pyboy.memory)
+        ) / self.enemy_max_hp(self.pyboy.memory)
+
+        if self.enemy_max_hp(self.pyboy.memory) < self.pokemon_max_hp(
+            self.pyboy.memory
+        ):
+            diff += min(
+                (
+                    self.enemy_max_hp(self.pyboy.memory)
+                    - self.pokemon_max_hp(self.pyboy.memory)
+                )
+                / self.enemy_max_hp(self.pyboy.memory),
+                1.0,
+            )
+
+        return diff
 
     def reward_enemy_status(self, memory: bytes):
         reward = 0
