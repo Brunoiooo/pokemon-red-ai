@@ -41,6 +41,7 @@ class TrainWorker:
     queue_dots: any = field(init=False)
     model_lock: any = field(init=False)
     files_lock: any = field(init=False)
+    eval_lock: any = field(init=False)
     is_debug: any = field(init=False)
     buffer_lock: any = field(init=False)
     is_evaluation_window: any = field(init=False)
@@ -59,6 +60,7 @@ class TrainWorker:
         self.queue_dots = self.manager.Queue()
         self.model_lock = self.manager.RLock()
         self.files_lock = self.manager.RLock()
+        self.eval_lock = self.manager.RLock()
         self.is_debug = self.manager.Value("b", False)
         self.buffer_lock = self.manager.RLock()
         self.is_evaluation_window = self.manager.Value("b", False)
@@ -276,33 +278,13 @@ class TrainWorker:
             while self.event_start.is_set():
                 self.optimize_batch()
 
-                if self.is_debug.value and self.count % 10 == 0:
-                    with self.buffer_lock:
-                        self.queue_logs.put_nowait(
-                            f"Count: {self.count} | Buffer: {len(self.buffer)}"
-                        )
-
-                if self.count % self.era == 0:
-                    with self.model_lock:
-                        model_state_dict = self.model.state_dict()
-
-                    threads: Thread = []
-                    for recv_conn, send_conn in self.experienceWorkerPipes:
-                        t = Thread(
-                            target=self.send_model_state_dict_to_worker,
-                            args=(send_conn, model_state_dict),
-                        )
-                        t.start()
-                        threads.append(t)
-
-                    t = Thread(target=self.evaluate_greedy)
-                    t.start()
-                    threads.append(t)
-
-                    for t in threads:
-                        t.join()
-
-                self.count += 1
+                with self.eval_lock:
+                    if self.is_debug.value and self.count % 10 == 0:
+                        with self.buffer_lock:
+                            self.queue_logs.put_nowait(
+                                f"Count: {self.count} | Buffer: {len(self.buffer)}"
+                            )
+                    self.count += 1
         except Exception as e:
             self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
         finally:
@@ -319,9 +301,24 @@ class TrainWorker:
                 p.start()
                 processes.append(p)
 
+            threads: list[Thread] = []
+            for recv_conn, send_conn in self.experienceWorkerPipes:
+                t = Thread(
+                    target=self.send_model_state_dict_to_worker,
+                    args=[send_conn],
+                )
+                t.start()
+                threads.append(t)
+
+            t = Thread(target=self.evaluate_greedy)
+            t.start()
+            threads.append(t)
+
             while self.event_start.is_set():
                 for p in processes:
-                    p.join(10.0)
+                    p.join()
+                for t in threads:
+                    t.join()
 
         except Exception as e:
             self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
@@ -352,42 +349,55 @@ class TrainWorker:
             self.event_start.clear()
             self.queue_logs.put_nowait("Queue handler stopped.")
 
-    def send_model_state_dict_to_worker(
-        self, send_conn: list[PipeConnection], model_state_dict: dict[str, Any]
-    ):
+    def send_model_state_dict_to_worker(self, send_conn: PipeConnection):
         try:
-            send_conn.send(model_state_dict)
+            while self.event_start.is_set():
+                with self.model_lock:
+                    model_state_dict = self.model.state_dict()
+
+                send_conn.send(model_state_dict)
+
+                self.queue_logs.put_nowait("Sent model state dict to worker.")
         except Exception as e:
             self.event_start.clear()
             self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
         finally:
-            self.queue_logs.put_nowait("Sent model state dict to worker.")
+            self.queue_logs.put_nowait("Stopped sending model state dict to worker.")
 
     def evaluate_greedy(self):
-        self.queue_logs.put_nowait(f"Starting evaluation.")
+        try:
+            self.queue_logs.put_nowait(f"Starting evaluation.")
 
-        with self.model_lock:
-            model_state_dict = self.model.state_dict()
+            while self.event_start.is_set():
 
-        self.save_latest()
+                with self.model_lock:
+                    model_state_dict = self.model.state_dict()
 
-        avg_ret, count = Emulator(files_lock=self.files_lock).evaluate_greedy(
-            model_state_dict=model_state_dict,
-            queue_logs=self.queue_logs,
-            is_debug=False,
-            is_evaluation_window=self.is_evaluation_window.value,
-        )
+                self.save_latest()
 
-        if self.best_eval_return < avg_ret:
-            self.save_best(avg_ret)
+                with self.eval_lock:
+                    count = self.count
 
-        self.freeze_model(avg_ret)
+                (avg_ret, steps) = Emulator(files_lock=self.files_lock).evaluate_greedy(
+                    model_state_dict=model_state_dict,
+                    queue_logs=self.queue_logs,
+                    is_debug=False,
+                    is_evaluation_window=self.is_evaluation_window.value,
+                )
 
-        self.queue_dots.put_nowait((self.count, avg_ret))
+                if self.best_eval_return < avg_ret:
+                    self.save_best(avg_ret)
 
-        self.queue_logs.put_nowait(f"Finished evaluation {avg_ret:.6f}.")
+                with self.eval_lock:
+                    self.queue_dots.put_nowait((count, avg_ret))
 
-        self.queue_logs.put_nowait("Evaluation stopped.")
+                self.queue_logs.put_nowait(f"Finished evaluation {avg_ret:.6f}.")
+
+        except Exception as e:
+            self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
+            self.event_start.clear()
+        finally:
+            self.queue_logs.put_nowait("Evaluation stopped.")
 
     __is_freeze: bool = False
 
@@ -434,7 +444,8 @@ class TrainWorker:
             return
 
     def per_beta(self):
-        frac = min(1.0, self.count / max(1, self.per_beta_frames))
+        with self.eval_lock:
+            frac = min(1.0, self.count / max(1, self.per_beta_frames))
         return self.per_beta_start + frac * (1.0 - self.per_beta_start)
 
     def optimize_batch(self):

@@ -90,10 +90,10 @@ class ExperienceWorker:
     def run(self):
         try:
             while self.event_start.is_set():
+                self.run_game()
+
                 if self.recv_conn.poll(0.1):
                     self.model_state_dict = self.recv_conn.recv()
-
-                self.run_game()
         except Exception as e:
             self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
         finally:
