@@ -16,7 +16,7 @@ class Data:
 
     badge_reward: float = 1.0
     event_reward: float = 0.5
-    new_screen_reward: float = 0.002
+    new_screen_reward: float = 0.0025
     new_pokedex_seen_reward: float = 0.1
     new_pokedex_own_reward: float = 0.25
     status_reward: float = 0.02
@@ -24,7 +24,7 @@ class Data:
     truncated_reward: float = -0.02
 
     useless_count: int = 0
-    max_useless_count: int = 64
+    max_useless_count: int = 16
     __player_pokemon_size: int = 0x2C
     __pokemon_count: int = 6
     buffer_reward: float = 0.0
@@ -32,6 +32,9 @@ class Data:
     __stored_pokemon_size: int = 0x21
 
     __visited_pokedex_own: list[int] | None = None
+
+    visited_positions: dict[tuple[int, int, int], int] = field(default_factory=dict)
+    map_vision_radius: int = 5
 
     @property
     def visited_pokedex_own(self):
@@ -71,6 +74,8 @@ class Data:
                 pickle.dump(self.buffer_reward, f)
             with open(f"{path}/visited_screens.pkl", "wb") as f:
                 pickle.dump(self.visited_screens, f)
+            with open(f"{path}/visited_positions.pkl", "wb") as f:
+                pickle.dump(self.visited_positions, f)
 
     def load(self, path: str):
         with self.files_lock:
@@ -82,6 +87,8 @@ class Data:
                 self.buffer_reward = pickle.load(f)
             with open(f"{path}/visited_screens.pkl", "rb") as f:
                 self.visited_screens = pickle.load(f)
+            with open(f"{path}/visited_positions.pkl", "rb") as f:
+                self.visited_positions = pickle.load(f)
 
     def clean(self):
         self.__visited_pokedex_own = None
@@ -89,24 +96,35 @@ class Data:
         self.useless_count = 0
         self.buffer_reward = 0.0
         self.visited_screens = []
+        self.visited_positions = {}
 
     def count(self, reward: float, action: int, memory: bytes | None = None):
         self.visited_pokedex_own = self.pokedex_own(self.pyboy.memory)
         self.visited_pokedex_seen = self.pokedex_seen(self.pyboy.memory)
 
         if self.is_world(self.pyboy.memory):
-            if self.screen_tiles_hash(self.pyboy.memory) in self.visited_screens:
-                self.useless_count += 1
-            else:
-                self.useless_count = 0
+            pos = self.get_position(self.pyboy.memory)
+            self.visited_positions[pos] = self.visited_positions.get(pos, 0) + 1
+        elif self.is_menu(self.pyboy.memory):
+            self.useless_count += 1
         else:
-            if reward <= 0.0:
+            if self.screen_tiles_hash() in self.visited_screens:
                 self.useless_count += 1
             else:
                 self.useless_count = 0
 
         if self.screen_tiles_hash(self.pyboy.memory) not in self.visited_screens:
             self.visited_screens.append(self.screen_tiles_hash(self.pyboy.memory))
+
+    def get_position(self, memory: bytes | None = None, offset_x=0, offset_y=0):
+        if memory is None:
+            memory = self.pyboy.memory
+
+        return (
+            self.position_x(memory) + offset_x,
+            self.position_y(memory) + offset_y,
+            self.map_id(memory),
+        )
 
     def screen_tiles_hash(self, memory: PyBoyMemoryView | bytes | None = None):
         return hashlib.blake2b(
@@ -248,12 +266,26 @@ class Data:
             reward += self.buffer_reward * (1.0 if 0 < self.buffer_reward else 0.50)
             self.buffer_reward = 0.0
 
-        reward += self.base_reward
+        # reward += self.base_reward
 
-        if self.screen_tiles_hash() not in self.visited_screens:
-            reward += self.new_screen_reward
+        if self.is_world(self.pyboy.memory):
+            reward += self.reward_position(memory)
+        else:
+            reward += self.useless_count / self.max_useless_count * self.base_reward
 
         return reward
+
+    def reward_position(self, memory: bytes | None = None):
+        if memory is None:
+            memory = self.pyboy.memory
+
+        position = self.get_position(memory)
+
+        return (
+            self.visited_positions.get(position, 0)
+            / self.max_useless_count
+            * self.base_reward
+        )
 
     def is_menu_illegal_move(self, memory: bytes):
         return (
@@ -413,10 +445,16 @@ class Data:
         return reward
 
     def terminated(self, memory: bytes):
-        return self.badges(self.pyboy.memory) == 0b11111111
+        return all(self.badges(self.pyboy.memory))
 
     def truncated(self, memory: bytes):
-        return True if self.max_useless_count <= self.useless_count else False
+        return (
+            True
+            if self.max_useless_count <= self.useless_count
+            or self.max_useless_count
+            <= self.visited_positions.get(self.get_position(self.pyboy.memory), 0)
+            else False
+        )
 
     def is_illegal_world_move(self, memory: bytes, action: int):
         return (
@@ -477,8 +515,26 @@ class Data:
         data += self.data_normalizer([self.useless_count], max=self.max_useless_count)
         data += self.player_data()
         data += self.pokedex_data()
+        data += self.map_data()
 
         return data
+
+    def map_data(self, memory: PyBoyMemoryView | bytes | None = None):
+        if memory is None:
+            memory = self.pyboy.memory
+
+        data = self.data_normalizer(
+            [
+                self.visited_positions.get(
+                    self.get_position(memory, offset_x=dx, offset_y=dy), 0
+                )
+                for dx in range(-self.map_vision_radius, self.map_vision_radius + 1)
+                for dy in range(-self.map_vision_radius, self.map_vision_radius + 1)
+            ],
+            max=self.max_useless_count,
+        )
+
+        return data if self.is_world(memory) else [0] * len(data)
 
     def inventory_data(self, memory: PyBoyMemoryView | bytes):
         data = []
@@ -528,9 +584,6 @@ class Data:
 
     def type_of_battle(self, memory: PyBoyMemoryView | bytes):
         return memory[0xD057]
-
-    def get_position(self, offset_x=0, offset_y=0):
-        return f"{self.position_x(self.pyboy.memory) + offset_x}x{self.position_y(self.pyboy.memory) + offset_y}x{self.map_id(self.pyboy.memory)}"
 
     def is_world(self, memory: PyBoyMemoryView | bytes):
         return (

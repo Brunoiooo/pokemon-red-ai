@@ -101,17 +101,14 @@ class Emulator:
 
         reward = self.data.reward(memory=memory, action=action)
 
+        self.data.count(reward=reward, action=action, memory=memory)
+
         terminated = self.data.terminated(memory)
 
         truncated = self.data.truncated(memory)
 
         if truncated:
             reward = self.data.truncated_reward
-
-        if self.is_milestone(memory):
-            self.data.clean()
-
-        self.data.count(reward=reward, action=action, memory=memory)
 
         return (
             bytes(self.pyboy.memory[0:0x10000]),
@@ -183,7 +180,7 @@ class Emulator:
                     f"{self.data.position_x(self.pyboy.memory), self.data.position_y(self.pyboy.memory),flags}"
                 )
 
-            queue_logs.put_nowait(f"{reward:.2f}")
+            queue_logs.put_nowait(f"{reward:.5f}")
 
             time.sleep(0.1)
 
