@@ -15,7 +15,6 @@ from threading import RLock, Thread
 from time import sleep
 import traceback
 from typing import Any
-from matplotlib.pylab import beta
 import torch.optim as optim
 import numpy as np
 import torch
