@@ -4,6 +4,7 @@ from multiprocessing.synchronize import RLock
 import os
 from queue import Queue
 from typing import Any
+import uuid
 
 import numpy as np
 from pyboy import PyBoy
@@ -204,6 +205,8 @@ class Emulator:
         is_debug: bool,
         is_evaluation_window: bool,
     ):
+        checkpoint = f"saves/{uuid.uuid4()}"
+
         self.use_sdl = is_evaluation_window
 
         model = get_model(device="cpu", files_lock=self.files_lock)
@@ -214,7 +217,7 @@ class Emulator:
 
         memory, inputs = self.reset(dir="start")
 
-        self.save_last_checkpoint("saves/last")
+        self.save_last_checkpoint(checkpoint)
 
         count = 0
         while True:
@@ -231,7 +234,7 @@ class Emulator:
             )
 
             if self.is_milestone(memory):
-                self.save_last_checkpoint("saves/last")
+                self.save_last_checkpoint(checkpoint)
                 queue_logs.put_nowait(
                     f"saved checkpoint {count}, with progress {self.data.progress}"
                 )

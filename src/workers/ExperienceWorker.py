@@ -11,6 +11,7 @@ import random
 import time
 import traceback
 from typing import Any
+from pathlib import Path
 import numpy as np
 import torch
 from pokemon.Emulator import Emulator
@@ -41,6 +42,10 @@ class ExperienceWorker:
             if os.path.exists(f"saves/{self.__last_save_path}")
             else "start"
         )
+
+    @property
+    def random_save_path(self):
+        return random.choice([p for p in Path("saves/").iterdir() if p.is_dir()]).name
 
     __model_state_dict: dict[str, Any] | None = None
 
@@ -102,13 +107,7 @@ class ExperienceWorker:
             self.queue_logs.put_nowait("Worker stopped.")
 
     def run_game(self):
-        memory, inputs = self.emulator.reset(
-            dir=(
-                "start"
-                if random.random() < self.start_save_chance
-                else self.last_save_path
-            )
-        )
+        memory, inputs = self.emulator.reset(dir=self.random_save_path)
 
         while True:
             action = self.get_action(inputs)
