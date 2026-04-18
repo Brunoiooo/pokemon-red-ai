@@ -5,3 +5,7 @@ recordings
 debuger
 __pycache__
 winserwer
+v*.*
+models
+saves
+!saves/start
