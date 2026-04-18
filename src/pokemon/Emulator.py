@@ -233,7 +233,7 @@ class Emulator:
                 memory=memory, action=action
             )
 
-            if self.is_milestone(memory):
+            if truncated:
                 self.save_last_checkpoint(checkpoint)
                 queue_logs.put_nowait(
                     f"saved checkpoint {count}, with progress {self.data.progress}"
