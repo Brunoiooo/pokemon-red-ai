@@ -384,7 +384,7 @@ class TrainWorker:
                     count = self.count
 
                 save_last = f"last_{evaluation_count % self.max_last_saves}"
-                save_best = f"last_{evaluation_count % self.max_best_saves}"
+                save_best = f"best_{evaluation_count % self.max_best_saves}"
 
                 (avg_ret, steps) = Emulator(files_lock=self.files_lock).evaluate_greedy(
                     model_state_dict=model_state_dict,
