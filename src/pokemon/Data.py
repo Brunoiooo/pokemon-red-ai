@@ -293,10 +293,24 @@ class Data:
 
         if self.is_world(self.pyboy.memory):
             reward += self.reward_position(memory)
+        if self.is_dialog(self.pyboy.memory):
+            reward += self.reward_dialog(memory)
         else:
             reward += self.useless_count / self.max_useless_count * self.base_reward
 
         return reward
+
+    def reward_dialog(self, memory: bytes | None = None):
+        if memory is None:
+            memory = self.pyboy.memory
+
+        dialog = self.get_dialog(memory)
+
+        return (
+            self.visited_dialogs.get(dialog, 0)
+            / self.max_useless_count
+            * self.base_reward
+        )
 
     def reward_position(self, memory: bytes | None = None):
         if memory is None:
