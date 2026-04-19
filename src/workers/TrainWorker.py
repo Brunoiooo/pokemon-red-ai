@@ -11,6 +11,7 @@ from multiprocessing.synchronize import Event
 import os
 import queue
 import random
+import shutil
 from threading import RLock, Thread
 from time import sleep
 import traceback
@@ -49,6 +50,9 @@ class TrainWorker:
     buffer_capacity: int = 200000
     hash_buffer: deque = field(default_factory=lambda: deque(maxlen=200000))
     buffer: PrioritizedReplayBuffer | None = field(default=None, init=False, repr=False)
+
+    max_last_saves: int = 10
+    max_best_saves: int = 3
 
     def __post_init__(self):
         self.manager = mp.Manager()
@@ -367,6 +371,8 @@ class TrainWorker:
         try:
             self.queue_logs.put_nowait(f"Starting evaluation.")
 
+            evaluation_count = 0
+
             while self.event_start.is_set():
 
                 with self.model_lock:
@@ -377,20 +383,32 @@ class TrainWorker:
                 with self.eval_lock:
                     count = self.count
 
+                save_last = f"last_{evaluation_count % self.max_last_saves}"
+                save_best = f"last_{evaluation_count % self.max_best_saves}"
+
                 (avg_ret, steps) = Emulator(files_lock=self.files_lock).evaluate_greedy(
                     model_state_dict=model_state_dict,
                     queue_logs=self.queue_logs,
                     is_debug=False,
                     is_evaluation_window=self.is_evaluation_window.value,
+                    save_name=save_last,
                 )
 
                 if self.best_eval_return < avg_ret:
                     self.save_best(avg_ret)
+                    with self.files_lock:
+                        shutil.copytree(
+                            f"saves/{save_last}",
+                            f"saves/{save_best}",
+                            dirs_exist_ok=True,
+                        )
 
                 with self.eval_lock:
                     self.queue_dots.put_nowait((count, avg_ret))
 
                 self.queue_logs.put_nowait(f"Finished evaluation {avg_ret:.6f}.")
+
+                evaluation_count += 1
 
         except Exception as e:
             self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")

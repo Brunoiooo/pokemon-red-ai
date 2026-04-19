@@ -13,7 +13,7 @@ class Data:
     files_lock: RLock
 
     visited_screens: list[bytes] = field(default_factory=list)
-
+    visited_maps: set[int] = field(default_factory=set)
     badge_reward: float = 1.0
     event_reward: float = 0.5
     new_screen_reward: float = 0.0025
@@ -76,6 +76,8 @@ class Data:
                 pickle.dump(self.visited_screens, f)
             with open(f"{path}/visited_positions.pkl", "wb") as f:
                 pickle.dump(self.visited_positions, f)
+            with open(f"{path}/visited_maps.pkl", "wb") as f:
+                pickle.dump(self.visited_maps, f)
 
     def load(self, path: str):
         with self.files_lock:
@@ -89,6 +91,8 @@ class Data:
                 self.visited_screens = pickle.load(f)
             with open(f"{path}/visited_positions.pkl", "rb") as f:
                 self.visited_positions = pickle.load(f)
+            with open(f"{path}/visited_maps.pkl", "rb") as f:
+                self.visited_maps = pickle.load(f)
 
     def clean(self):
         self.__visited_pokedex_own = None
@@ -115,6 +119,8 @@ class Data:
 
         if self.screen_tiles_hash(self.pyboy.memory) not in self.visited_screens:
             self.visited_screens.append(self.screen_tiles_hash(self.pyboy.memory))
+
+        self.visited_maps.add(self.map_id(self.pyboy.memory))
 
     def get_position(self, memory: bytes | None = None, offset_x=0, offset_y=0):
         if memory is None:
@@ -309,6 +315,18 @@ class Data:
         reward += self.reward_player_pokemons_defenses(memory)
         reward += self.reward_player_pokemons_speeds(memory)
         reward += self.reward_player_pokemons_pps(memory)
+        reward += self.reward_map(memory)
+
+        return reward
+
+    def reward_map(self, memory: bytes | None = None):
+        reward = 0.0
+
+        if memory is None:
+            memory = self.pyboy.memory
+
+        if self.map_id(memory) not in self.visited_maps:
+            reward += self.new_screen_reward
 
         return reward
 

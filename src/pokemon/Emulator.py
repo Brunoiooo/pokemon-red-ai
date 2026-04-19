@@ -204,8 +204,9 @@ class Emulator:
         queue_logs: Queue,
         is_debug: bool,
         is_evaluation_window: bool,
+        save_name: str = "last",
     ):
-        checkpoint = f"saves/{uuid.uuid4()}"
+        checkpoint = f"saves/{save_name}"
 
         self.use_sdl = is_evaluation_window
 
