@@ -14,6 +14,7 @@ class Data:
 
     visited_screens: list[bytes] = field(default_factory=list)
     visited_maps: set[int] = field(default_factory=set)
+    visited_dialogs: dict[tuple[int, int], int] = field(default_factory=dict)
     badge_reward: float = 1.0
     event_reward: float = 0.5
     new_screen_reward: float = 0.0025
@@ -78,6 +79,8 @@ class Data:
                 pickle.dump(self.visited_positions, f)
             with open(f"{path}/visited_maps.pkl", "wb") as f:
                 pickle.dump(self.visited_maps, f)
+            with open(f"{path}/visited_dialogs.pkl", "wb") as f:
+                pickle.dump(self.visited_dialogs, f)
 
     def load(self, path: str):
         with self.files_lock:
@@ -93,6 +96,8 @@ class Data:
                 self.visited_positions = pickle.load(f)
             with open(f"{path}/visited_maps.pkl", "rb") as f:
                 self.visited_maps = pickle.load(f)
+            with open(f"{path}/visited_dialogs.pkl", "rb") as f:
+                self.visited_dialogs = pickle.load(f)
 
     def clean(self):
         self.__visited_pokedex_own = None
@@ -101,13 +106,15 @@ class Data:
         self.buffer_reward = 0.0
         self.visited_screens = []
         self.visited_positions = {}
+        self.visited_maps = set()
+        self.visited_dialogs = {}
 
     def count(self, reward: float, action: int, memory: bytes | None = None):
         self.visited_pokedex_own = self.pokedex_own(self.pyboy.memory)
         self.visited_pokedex_seen = self.pokedex_seen(self.pyboy.memory)
 
         if self.is_world(self.pyboy.memory):
-            pos = self.get_position(self.pyboy.memory)
+            pos = self.get_position()
             self.visited_positions[pos] = self.visited_positions.get(pos, 0) + 1
         elif self.is_menu(self.pyboy.memory):
             self.useless_count += 1
@@ -121,6 +128,16 @@ class Data:
             self.visited_screens.append(self.screen_tiles_hash(self.pyboy.memory))
 
         self.visited_maps.add(self.map_id(self.pyboy.memory))
+
+        if self.is_dialog(self.pyboy.memory):
+            dialog = self.get_dialog()
+            self.visited_dialogs[dialog] = self.visited_dialogs.get(dialog, 0) + 1
+
+    def get_dialog(self, memory: bytes | None = None):
+        if memory is None:
+            memory = self.pyboy.memory
+
+        return (self.dialog_id(memory), self.map_id(memory))
 
     def get_position(self, memory: bytes | None = None, offset_x=0, offset_y=0):
         if memory is None:
@@ -470,7 +487,8 @@ class Data:
             True
             if self.max_useless_count <= self.useless_count
             or self.max_useless_count
-            <= self.visited_positions.get(self.get_position(self.pyboy.memory), 0)
+            <= self.visited_positions.get(self.get_position(), 0)
+            or self.max_useless_count <= self.visited_dialogs.get(self.get_dialog(), 0)
             else False
         )
 
@@ -531,6 +549,9 @@ class Data:
         data = []
 
         data += self.data_normalizer([self.useless_count], max=self.max_useless_count)
+        data += self.data_normalizer(
+            [self.visited_dialogs.get(self.get_dialog(), 0)], max=self.max_useless_count
+        )
         data += self.player_data()
         data += self.pokedex_data()
         data += self.map_data()

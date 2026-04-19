@@ -87,8 +87,6 @@ class Emulator:
                 self.pyboy.load_state(f)
 
         self.data.clean()
-        self.data.progress = 0
-        self.data.last_progress = 0
 
         try:
             self.data.load(path=path)
@@ -237,7 +235,7 @@ class Emulator:
             if truncated:
                 self.save_last_checkpoint(checkpoint)
                 queue_logs.put_nowait(
-                    f"saved checkpoint {count}, with progress {self.data.progress}"
+                    f"saved checkpoint {count} at reward {total_reward:.2f} after truncation"
                 )
 
             if terminated:
