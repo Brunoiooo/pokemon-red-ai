@@ -17,7 +17,7 @@ class Data:
     visited_dialogs: dict[tuple[int, int], int] = field(default_factory=dict)
     badge_reward: float = 1.0
     event_reward: float = 0.5
-    new_screen_reward: float = 0.0025
+    new_screen_reward: float = 0.002
     new_pokedex_seen_reward: float = 0.1
     new_pokedex_own_reward: float = 0.25
     status_reward: float = 0.02
@@ -115,7 +115,7 @@ class Data:
 
         if self.is_world(self.pyboy.memory):
             pos = self.get_position()
-            self.visited_positions[pos] = self.visited_positions.get(pos, 0) + 1
+            self.visited_positions[pos] = self.visited_positions.get(pos, -1) + 1
         elif self.is_menu(self.pyboy.memory):
             self.useless_count += 1
         else:
@@ -131,7 +131,7 @@ class Data:
 
         if self.is_dialog(self.pyboy.memory):
             dialog = self.get_dialog()
-            self.visited_dialogs[dialog] = self.visited_dialogs.get(dialog, 0) + 1
+            self.visited_dialogs[dialog] = self.visited_dialogs.get(dialog, -1) + 1
 
     def get_dialog(self, memory: bytes | None = None):
         if memory is None:
@@ -289,7 +289,7 @@ class Data:
             reward += self.buffer_reward * (1.0 if 0 < self.buffer_reward else 0.50)
             self.buffer_reward = 0.0
 
-        # reward += self.base_reward
+        reward += self.base_reward
 
         if self.is_world(self.pyboy.memory):
             reward += self.reward_position(memory)
@@ -298,19 +298,18 @@ class Data:
         else:
             reward += self.useless_count / self.max_useless_count * self.base_reward
 
+        if self.screen_tiles_hash() not in self.visited_screens:
+            reward += self.new_screen_reward
+
         return reward
 
-    def reward_dialog(self, memory: bytes | None = None):
-        if memory is None:
-            memory = self.pyboy.memory
+    def reward_dialog(self, memory: bytes):
+        reward = 0.0
 
-        dialog = self.get_dialog(memory)
+        if self.dialog_id(memory) != self.dialog_id(self.pyboy.memory):
+            reward += self.new_screen_reward
 
-        return (
-            self.visited_dialogs.get(dialog, 0)
-            / self.max_useless_count
-            * self.base_reward
-        )
+        return reward
 
     def reward_position(self, memory: bytes | None = None):
         if memory is None:
@@ -346,7 +345,7 @@ class Data:
         reward += self.reward_player_pokemons_defenses(memory)
         reward += self.reward_player_pokemons_speeds(memory)
         reward += self.reward_player_pokemons_pps(memory)
-        reward += self.reward_map(memory)
+        reward += self.reward_map()
 
         return reward
 
