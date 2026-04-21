@@ -32,6 +32,7 @@ class ExperienceWorker:
     max_stuck_epsilon = 0.50
     min_stuck_epsilon = 0.20
     init_model_state_dict: dict[str, Any]
+    max_episode_steps: int = 100
 
     __last_save_path = "last"
 
@@ -109,7 +110,7 @@ class ExperienceWorker:
     def run_game(self):
         memory, inputs = self.emulator.reset(dir=self.random_save_path)
 
-        while True:
+        for i in range(self.max_episode_steps):
             action = self.get_action(inputs)
 
             next_memory, next_inputs, reward, terminated, truncated = (
