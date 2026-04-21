@@ -27,7 +27,7 @@ class ExperienceWorker:
     recv_conn: PipeConnection
     event_start: Event
     files_lock: RLock
-    td_error_steps = 10
+    td_error_steps = 5
     start_save_chance = 0.25
     max_stuck_epsilon = 0.50
     min_stuck_epsilon = 0.20
@@ -126,7 +126,11 @@ class ExperienceWorker:
                 }
             )
 
-            self.put_to_queue_data(terminated=terminated, truncated=truncated)
+            self.put_to_queue_data(
+                terminated=terminated,
+                truncated=truncated,
+                flush=self.max_episode_steps - 1 <= i,
+            )
 
             if truncated:
                 break
@@ -152,8 +156,8 @@ class ExperienceWorker:
 
         return action
 
-    def put_to_queue_data(self, terminated: bool, truncated: bool):
-        if self.buffer.maxlen <= len(self.buffer) or terminated or truncated:
+    def put_to_queue_data(self, terminated: bool, truncated: bool, flush: bool):
+        if self.buffer.maxlen <= len(self.buffer) or terminated or truncated or flush:
             while len(self.buffer):
                 reward, discount = 0.0, 1.0
 
@@ -192,7 +196,7 @@ class ExperienceWorker:
                     time.sleep(0.01)
                     pass
 
-                if truncated or terminated:
+                if truncated or terminated or flush:
                     self.buffer.popleft()
                 else:
                     break
