@@ -110,7 +110,7 @@ class ExperienceWorker:
     def run_game(self):
         memory, inputs = self.emulator.reset(dir=self.random_save_path)
 
-        for i in range(self.max_episode_steps):
+        while self.event_start.is_set():
             action = self.get_action(inputs)
 
             next_memory, next_inputs, reward, terminated, truncated = (
@@ -129,7 +129,6 @@ class ExperienceWorker:
             self.put_to_queue_data(
                 terminated=terminated,
                 truncated=truncated,
-                flush=self.max_episode_steps - 1 <= i,
             )
 
             if truncated:
