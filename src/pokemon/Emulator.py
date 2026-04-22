@@ -109,6 +109,9 @@ class Emulator:
         if truncated:
             reward = self.data.truncated_reward
 
+        if self.is_milestone(memory=memory):
+            self.data.clean()
+
         return (
             bytes(self.pyboy.memory[0:0x10000]),
             self.data.inputs(),
@@ -232,11 +235,9 @@ class Emulator:
                 memory=memory, action=action
             )
 
-            if truncated:
+            if self.data.useless_count == 0:
                 self.save_last_checkpoint(checkpoint)
-                queue_logs.put_nowait(
-                    f"saved checkpoint {count} at reward {total_reward:.2f} after truncation"
-                )
+                queue_logs.put_nowait(f"saved checkpoint {count}")
 
             if terminated:
                 queue_logs.put_nowait(

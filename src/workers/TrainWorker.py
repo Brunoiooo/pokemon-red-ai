@@ -300,7 +300,9 @@ class TrainWorker:
 
             processes: list[Process] = []
             for x in self.experienceWorkers:
-                p = Process(target=x.run)
+                p = Process(
+                    target=x.run, kwargs={"focused": len(processes) <= 0}, daemon=True
+                )
                 p.start()
                 processes.append(p)
 

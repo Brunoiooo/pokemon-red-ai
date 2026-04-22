@@ -116,13 +116,14 @@ class Data:
         if self.is_world(self.pyboy.memory):
             pos = self.get_position()
             self.visited_positions[pos] = self.visited_positions.get(pos, -1) + 1
-        elif self.is_menu(self.pyboy.memory):
+
+        if self.is_menu(self.pyboy.memory):
             self.useless_count += 1
         else:
             if self.screen_tiles_hash() in self.visited_screens:
                 self.useless_count += 1
             else:
-                self.useless_count = 0
+                self.useless_count = max(0, self.useless_count - 1)
 
         if self.screen_tiles_hash(self.pyboy.memory) not in self.visited_screens:
             self.visited_screens.append(self.screen_tiles_hash(self.pyboy.memory))
@@ -289,14 +290,17 @@ class Data:
             reward += self.buffer_reward * (1.0 if 0 < self.buffer_reward else 0.50)
             self.buffer_reward = 0.0
 
-        reward += self.base_reward
+        if not self.is_world(self.pyboy.memory):
+            reward += self.base_reward
 
         if self.is_world(self.pyboy.memory):
             reward += self.reward_position(memory)
         elif self.is_dialog(self.pyboy.memory):
             reward += self.reward_dialog(memory)
 
-        if self.screen_tiles_hash() not in self.visited_screens:
+        if self.screen_tiles_hash() not in self.visited_screens and not self.is_world(
+            self.pyboy.memory
+        ):
             reward += self.new_screen_reward
 
         return reward

@@ -12,6 +12,7 @@ import time
 import traceback
 from typing import Any
 from pathlib import Path
+import keyboard
 import numpy as np
 import torch
 from pokemon.Emulator import Emulator
@@ -93,10 +94,10 @@ class ExperienceWorker:
 
         return self.__emulator
 
-    def run(self):
+    def run(self, focused: bool = False):
         try:
             while self.event_start.is_set():
-                self.run_game()
+                self.run_game(focused=focused)
 
                 if self.recv_conn.poll(0.1):
                     self.model_state_dict = self.recv_conn.recv()
@@ -107,11 +108,31 @@ class ExperienceWorker:
             self.event_start.clear()
             self.queue_logs.put_nowait("Worker stopped.")
 
-    def run_game(self):
+    def run_game(self, focused: bool = False):
         memory, inputs = self.emulator.reset(dir=self.random_save_path)
 
         while self.event_start.is_set():
             action = self.get_action(inputs)
+
+            if focused and keyboard.is_pressed("ctrl"):
+                key = keyboard.read_key()
+                time.sleep(0.1)
+                if key == "up":
+                    action = 6
+                elif key == "down":
+                    action = 7
+                elif key == "left":
+                    action = 4
+                elif key == "right":
+                    action = 5
+                elif key == "a":
+                    action = 0
+                elif key == "b":
+                    action = 1
+                elif key == "space":
+                    action = 2
+                elif key == "enter":
+                    action = 3
 
             next_memory, next_inputs, reward, terminated, truncated = (
                 self.emulator.step(memory=memory, action=action)
