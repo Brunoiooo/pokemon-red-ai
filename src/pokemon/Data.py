@@ -293,10 +293,8 @@ class Data:
 
         if self.is_world(self.pyboy.memory):
             reward += self.reward_position(memory)
-        if self.is_dialog(self.pyboy.memory):
+        elif self.is_dialog(self.pyboy.memory):
             reward += self.reward_dialog(memory)
-        else:
-            reward += self.useless_count / self.max_useless_count * self.base_reward
 
         if self.screen_tiles_hash() not in self.visited_screens:
             reward += self.new_screen_reward
@@ -346,19 +344,33 @@ class Data:
         reward += self.reward_player_pokemons_speeds(memory)
         reward += self.reward_player_pokemons_pps(memory)
         reward += self.reward_map()
+        reward += self.reward_player_items(memory)
+        reward += self.reward_stored_items(memory)
 
         return reward
 
-    def reward_map(self, memory: bytes | None = None):
-        reward = 0.0
+    def reward_player_items(self, memory: bytes):
+        return (
+            sum(self.items_quantities(self.pyboy.memory))
+            - sum(self.items_quantities(memory))
+        ) * self.new_screen_reward
 
-        if memory is None:
-            memory = self.pyboy.memory
+    def reward_stored_items(self, memory: bytes):
+        return (
+            (
+                sum(self.stored_items_quantities(self.pyboy.memory))
+                - sum(self.stored_items_quantities(memory))
+            )
+            * self.new_screen_reward
+            * 0.5
+        )
 
-        if self.map_id(memory) not in self.visited_maps:
-            reward += self.new_screen_reward
-
-        return reward
+    def reward_map(self):
+        return (
+            self.new_screen_reward
+            if self.map_id(self.pyboy.memory) not in self.visited_maps
+            else 0.0
+        )
 
     def reward_player_pokemons_current_hps(self, memory: bytes):
         reward = 0.0
