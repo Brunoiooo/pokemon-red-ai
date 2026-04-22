@@ -303,6 +303,9 @@ class Data:
         ):
             reward += self.new_screen_reward
 
+        if self.useless_count == 0:
+            reward += self.new_screen_reward
+
         return reward
 
     def reward_dialog(self, memory: bytes):
