@@ -25,7 +25,7 @@ class Data:
     truncated_reward: float = -0.02
 
     useless_count: int = 0
-    max_useless_count: int = 16
+    max_useless_count: int = 32
     __player_pokemon_size: int = 0x2C
     __pokemon_count: int = 6
     buffer_reward: float = 0.0
