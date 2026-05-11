@@ -23,6 +23,7 @@ class Data:
     status_reward: float = 0.02
     base_reward: float = -0.002
     truncated_reward: float = -0.02
+    new_item_reward: float = 0.1
 
     in_menu_count: float = 0.0
     in_battle_count: float = 0.0
