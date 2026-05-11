@@ -24,7 +24,8 @@ class Data:
     base_reward: float = -0.002
     truncated_reward: float = -0.02
 
-    useless_count: int = 0
+    in_menu_count: float = 0.0
+    in_battle_count: float = 0.0
     max_useless_count: int = 32
     __player_pokemon_size: int = 0x2C
     __pokemon_count: int = 6
@@ -73,8 +74,6 @@ class Data:
                 pickle.dump(self.__visited_pokedex_seen, f)
             with open(f"{path}/buffer_reward.pkl", "wb") as f:
                 pickle.dump(self.buffer_reward, f)
-            with open(f"{path}/visited_screens.pkl", "wb") as f:
-                pickle.dump(self.visited_screens, f)
             with open(f"{path}/visited_positions.pkl", "wb") as f:
                 pickle.dump(self.visited_positions, f)
             with open(f"{path}/visited_maps.pkl", "wb") as f:
@@ -90,8 +89,6 @@ class Data:
                 self.__visited_pokedex_seen = pickle.load(f)
             with open(f"{path}/buffer_reward.pkl", "rb") as f:
                 self.buffer_reward = pickle.load(f)
-            with open(f"{path}/visited_screens.pkl", "rb") as f:
-                self.visited_screens = pickle.load(f)
             with open(f"{path}/visited_positions.pkl", "rb") as f:
                 self.visited_positions = pickle.load(f)
             with open(f"{path}/visited_maps.pkl", "rb") as f:
@@ -102,9 +99,9 @@ class Data:
     def clean(self):
         self.__visited_pokedex_own = None
         self.__visited_pokedex_seen = None
-        self.useless_count = 0
+        self.in_menu_count = 0
+        self.in_battle_count = 0
         self.buffer_reward = 0.0
-        self.visited_screens = []
         self.visited_positions = {}
         self.visited_maps = set()
         self.visited_dialogs = {}
@@ -115,24 +112,26 @@ class Data:
 
         if self.is_world(self.pyboy.memory):
             pos = self.get_position()
-            self.visited_positions[pos] = self.visited_positions.get(pos, -1) + 1
+            self.visited_positions[pos] = self.visited_positions.get(pos, 0) + 1
 
         if self.is_menu(self.pyboy.memory):
-            self.useless_count += 1
+            self.in_menu_count += 1.0
         else:
-            if self.screen_tiles_hash() in self.visited_screens:
-                self.useless_count += 1
+            self.in_menu_count = max(0, self.in_menu_count - 0.25)
+
+        if self.is_battle(self.pyboy.memory):
+            if self.number_of_turns_in_current_battle(
+                memory
+            ) != self.number_of_turns_in_current_battle(self.pyboy.memory):
+                self.in_battle_count = 0
             else:
-                self.useless_count = max(0, self.useless_count - 1)
-
-        if self.screen_tiles_hash(self.pyboy.memory) not in self.visited_screens:
-            self.visited_screens.append(self.screen_tiles_hash(self.pyboy.memory))
-
-        self.visited_maps.add(self.map_id(self.pyboy.memory))
+                self.in_battle_count += 1.0
 
         if self.is_dialog(self.pyboy.memory):
             dialog = self.get_dialog()
-            self.visited_dialogs[dialog] = self.visited_dialogs.get(dialog, -1) + 1
+            self.visited_dialogs[dialog] = self.visited_dialogs.get(dialog, 0) + 1
+
+        self.visited_maps.add(self.map_id(self.pyboy.memory))
 
     def get_dialog(self, memory: bytes | None = None):
         if memory is None:
@@ -290,40 +289,39 @@ class Data:
             reward += self.buffer_reward * (1.0 if 0 < self.buffer_reward else 0.50)
             self.buffer_reward = 0.0
 
-        if not self.is_world(self.pyboy.memory):
-            reward += self.base_reward
-
         if self.is_world(self.pyboy.memory):
-            reward += self.reward_position(memory)
+            reward += self.reward_position()
         elif self.is_dialog(self.pyboy.memory):
             reward += self.reward_dialog(memory)
-
-        if self.screen_tiles_hash() not in self.visited_screens and not self.is_world(
-            self.pyboy.memory
-        ):
-            reward += self.new_screen_reward
-
-        if self.useless_count == 0:
-            reward += self.new_screen_reward
+        elif self.is_menu(self.pyboy.memory):
+            reward += self.in_menu_count / self.max_useless_count * self.base_reward
+        elif self.is_battle(self.pyboy.memory):
+            reward += self.reward_battle_useless_count(memory)
 
         return reward
+
+    def reward_battle_useless_count(self, memory: bytes):
+        return (
+            self.new_screen_reward
+            if self.number_of_turns_in_current_battle(memory)
+            != self.number_of_turns_in_current_battle(self.pyboy.memory)
+            or not self.is_battle(memory)
+            and self.is_battle(self.pyboy.memory)
+            else self.in_battle_count / self.max_useless_count * self.base_reward
+        )
 
     def reward_dialog(self, memory: bytes):
-        reward = 0.0
-
-        if self.dialog_id(memory) != self.dialog_id(self.pyboy.memory):
-            reward += self.new_screen_reward
-
-        return reward
-
-    def reward_position(self, memory: bytes | None = None):
-        if memory is None:
-            memory = self.pyboy.memory
-
-        position = self.get_position(memory)
-
         return (
-            self.visited_positions.get(position, 0)
+            self.new_screen_reward
+            if self.dialog_id(memory) != self.dialog_id(self.pyboy.memory)
+            else self.visited_dialogs.get(self.get_dialog(), 0)
+            / self.max_useless_count
+            * self.base_reward
+        )
+
+    def reward_position(self):
+        return (
+            self.visited_positions.get(self.get_position(), 0)
             / self.max_useless_count
             * self.base_reward
         )
@@ -360,7 +358,7 @@ class Data:
         return (
             sum(self.items_quantities(self.pyboy.memory))
             - sum(self.items_quantities(memory))
-        ) * self.new_screen_reward
+        ) * self.new_item_reward
 
     def reward_stored_items(self, memory: bytes):
         return (
@@ -368,7 +366,7 @@ class Data:
                 sum(self.stored_items_quantities(self.pyboy.memory))
                 - sum(self.stored_items_quantities(memory))
             )
-            * self.new_screen_reward
+            * self.new_item_reward
             * 0.5
         )
 
@@ -517,10 +515,11 @@ class Data:
     def truncated(self, memory: bytes):
         return (
             True
-            if self.max_useless_count <= self.useless_count
-            or self.max_useless_count
+            if self.max_useless_count
             <= self.visited_positions.get(self.get_position(), 0)
             or self.max_useless_count <= self.visited_dialogs.get(self.get_dialog(), 0)
+            or self.max_useless_count <= self.in_battle_count
+            or self.max_useless_count <= self.in_menu_count
             else False
         )
 
@@ -580,9 +579,13 @@ class Data:
     def core_data(self):
         data = []
 
-        data += self.data_normalizer([self.useless_count], max=self.max_useless_count)
         data += self.data_normalizer(
-            [self.visited_dialogs.get(self.get_dialog(), 0)], max=self.max_useless_count
+            [
+                self.in_battle_count,
+                self.in_menu_count,
+                self.visited_dialogs.get(self.get_dialog(), 0),
+            ],
+            max=self.max_useless_count,
         )
         data += self.player_data()
         data += self.pokedex_data()

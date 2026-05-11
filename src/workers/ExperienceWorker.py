@@ -160,12 +160,7 @@ class ExperienceWorker:
             self.emulator.use_sdl = bool(self.window.get())
 
     def get_action(self, inputs: dict[float]):
-        if random.random() < max(
-            self.emulator.data.useless_count
-            / self.emulator.data.max_useless_count
-            * self.max_stuck_epsilon,
-            self.min_stuck_epsilon,
-        ):
+        if random.random() < self.min_stuck_epsilon:
             action = random.randint(0, len(self.emulator.buttons) - 1)
         else:
             with torch.inference_mode():

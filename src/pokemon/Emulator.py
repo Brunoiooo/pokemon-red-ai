@@ -235,7 +235,10 @@ class Emulator:
                 memory=memory, action=action
             )
 
-            if self.data.useless_count == 0:
+            if (
+                self.data.is_world(self.pyboy.memory)
+                and self.data.visited_positions.get(self.data.get_position(), 0) == 0
+            ):
                 self.save_last_checkpoint(checkpoint)
                 queue_logs.put_nowait(f"saved checkpoint {count}")
 
