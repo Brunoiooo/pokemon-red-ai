@@ -116,6 +116,7 @@ def main():
 
     finally:
         # Save logs
+        log_file.parent.mkdir(parents=True, exist_ok=True)
         with open(log_file, "w") as f:
             for msg in log_messages:
                 f.write(msg + "\n")

@@ -145,6 +145,7 @@ class MetricsCollector:
 
     def save_json(self):
         """Save metrics to JSON"""
+        self.log_dir.mkdir(parents=True, exist_ok=True)
         filename = self.log_dir / f"metrics_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
 
         # Convert to serializable format

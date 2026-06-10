@@ -118,6 +118,12 @@ def get_model(device: str, files_lock: RLock, name: str | None = None):
             f"Architecture may have changed — consider --reset-buffer and fresh training."
         )
 
+    if model.use_c51:
+        with torch.no_grad():
+            model.support.copy_(
+                torch.linspace(model.v_min, model.v_max, model.num_atoms, device=model.support.device)
+            )
+
     return model
 
 
@@ -220,7 +226,7 @@ class ModelPokemon(nn.Module):
         if self.use_c51:
             self.num_atoms = 51
             self.v_min = -10.0
-            self.v_max = 10.0
+            self.v_max = 5.0
             self.register_buffer(
                 "support",
                 torch.linspace(self.v_min, self.v_max, self.num_atoms),
@@ -398,19 +404,13 @@ class ModelPokemon(nn.Module):
         z = self.trunk(h)
 
         if self.use_c51:
-            v_dist = self.value_dist_head(z)
-            a_dist = self.advantage_dist_head(z).reshape(
+            v_logits = self.value_dist_head(z)
+            a_logits = self.advantage_dist_head(z).reshape(
                 z.size(0), self.outputs, self.num_atoms
             )
 
-            v_dist = torch.softmax(v_dist, dim=1)
-            a_dist = torch.softmax(a_dist, dim=2)
-
-            q_dist = v_dist.unsqueeze(1) + (
-                a_dist
-                - a_dist.mean(dim=1, keepdim=True)
-            )
-            q_dist = torch.softmax(q_dist, dim=2)
+            q_logits = v_logits.unsqueeze(1) + a_logits - a_logits.mean(dim=1, keepdim=True)
+            q_dist = torch.softmax(q_logits, dim=2)
 
             q = (q_dist * self.support).sum(dim=2)
 

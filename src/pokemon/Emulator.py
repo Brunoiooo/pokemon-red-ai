@@ -1,3 +1,4 @@
+from collections import deque
 from dataclasses import dataclass
 import io
 from multiprocessing.synchronize import RLock
@@ -245,12 +246,22 @@ class Emulator:
 
         self.save_last_checkpoint(checkpoint)
 
+        state_buffer = deque(maxlen=64)
         count = 0
         while True:
             count += 1
 
+            model_inputs = inputs
+            if state_buffer:
+                model_inputs = {
+                    **inputs,
+                    "state_sequence": torch.stack(list(state_buffer)).unsqueeze(0),
+                }
+
             with torch.inference_mode():
-                out = model(inputs)
+                out = model(model_inputs)
+                if isinstance(out, dict) and "z" in out:
+                    state_buffer.append(out["z"].squeeze(0).detach())
                 q = out["q"] if isinstance(out, dict) else out
                 q = q.squeeze(0)
 

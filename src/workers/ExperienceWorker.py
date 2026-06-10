@@ -28,10 +28,10 @@ class ExperienceWorker:
     recv_conn: PipeConnection
     event_start: Event
     files_lock: RLock
-    td_error_steps = 5
-    start_save_chance = 0.1
-    max_stuck_epsilon = 0.8
-    min_stuck_epsilon = 0.5
+    td_error_steps = 10
+    start_save_chance = 0.4
+    max_stuck_epsilon = 0.02
+    min_stuck_epsilon = 0.0
     epsilon_decay_steps: int = field(default=500_000, init=False)
     _total_steps: int = field(default=0, init=False)
     _state_buffer: deque = field(default_factory=lambda: deque(maxlen=64), init=False)
@@ -50,7 +50,11 @@ class ExperienceWorker:
 
     @property
     def random_save_path(self):
-        return random.choice([p for p in Path("saves/").iterdir() if p.is_dir()]).name
+        all_saves = [p for p in Path("saves/").iterdir() if p.is_dir()]
+        if len(all_saves) <= 1 or random.random() < self.start_save_chance:
+            return "start"
+        non_start = [p for p in all_saves if p.name != "start"]
+        return random.choice(non_start).name if non_start else "start"
 
     __model_state_dict: dict[str, Any] | None = None
 
@@ -75,7 +79,7 @@ class ExperienceWorker:
 
             self.__model.load_state_dict(self.model_state_dict)
 
-            self.__model.eval()
+            self.__model.train()
 
         return self.__model
 
@@ -160,6 +164,9 @@ class ExperienceWorker:
                 break
 
             memory, inputs = next_memory, next_inputs
+
+            if self._total_steps % 200 == 0 and self.recv_conn.poll():
+                self.model_state_dict = self.recv_conn.recv()
 
             self.emulator.use_sdl = bool(self.window.get())
 

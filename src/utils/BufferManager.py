@@ -49,6 +49,14 @@ class BufferManager:
             with open(self.buffer_path, 'rb') as f:
                 buffer_state = pickle.load(f)
 
+            saved_capacity = buffer_state.get('tree_capacity')
+            if saved_capacity is not None and saved_capacity != capacity:
+                print(
+                    f"[BufferManager] Capacity mismatch: saved={saved_capacity}, "
+                    f"requested={capacity}. Starting fresh buffer."
+                )
+                return None
+
             buffer = PrioritizedReplayBuffer(capacity=capacity, alpha=alpha)
 
             buffer.tree.data = buffer_state['tree_data']

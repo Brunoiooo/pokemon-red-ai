@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 import hashlib
 import json
 from multiprocessing import Process, Queue, Manager
+import threading
 import multiprocessing as mp
 from multiprocessing.connection import Pipe, PipeConnection
 from multiprocessing.sharedctypes import Synchronized
@@ -14,6 +15,7 @@ import shutil
 from threading import RLock, Thread
 from time import sleep
 import traceback
+import contextlib
 from typing import Any
 import torch.optim as optim
 import numpy as np
@@ -47,7 +49,7 @@ class TrainWorker:
     is_evaluation_window: any = field(init=False)
     train_use_sdl: any = field(init=False)
 
-    buffer_capacity: int = 200000
+    buffer_capacity: int = 500000
     buffer: PrioritizedReplayBuffer | None = field(default=None, init=False, repr=False)
     buffer_manager: BufferManager = field(default=None, init=False, repr=False)
     last_buffer_save: int = field(default=0, init=False, repr=False)
@@ -63,11 +65,11 @@ class TrainWorker:
         self.event_start = self.manager.Event()
         self.queue_logs = self.manager.Queue()
         self.queue_dots = self.manager.Queue()
-        self.model_lock = self.manager.RLock()
+        self.model_lock = threading.RLock()
         self.files_lock = self.manager.RLock()
-        self.eval_lock = self.manager.RLock()
+        self.eval_lock = threading.RLock()
         self.is_debug = self.manager.Value("b", False)
-        self.buffer_lock = self.manager.RLock()
+        self.buffer_lock = threading.RLock()
         self.is_evaluation_window = self.manager.Value("b", False)
         self.train_use_sdl = self.manager.Value("b", False)
 
@@ -101,7 +103,7 @@ class TrainWorker:
     _opt_steps: int = 0
 
     per_alpha: float = 0.7
-    per_beta_start: float = 0.6
+    per_beta_start: float = 0.4
     per_beta_frames: int = 2_000_000
 
     era: int = 1000
@@ -180,6 +182,20 @@ class TrainWorker:
                 milestones=[5000],
             )
         return self.__scheduler
+
+    __scaler: Any = None
+
+    @property
+    def scaler(self):
+        if self.__scaler is None and self.device == "cuda":
+            from torch.cuda.amp import GradScaler
+            self.__scaler = GradScaler()
+        return self.__scaler
+
+    def _autocast(self):
+        if self.device == "cuda":
+            return torch.autocast(device_type="cuda", dtype=torch.float16)
+        return contextlib.nullcontext()
 
     __gamma_tensor: torch.Tensor | None = None
 
@@ -424,7 +440,7 @@ class TrainWorker:
                     model_state_dict = self.model.state_dict()
 
                 send_conn.send(model_state_dict)
-                sleep(30)
+                sleep(5)
         except Exception as e:
             try:
                 self.event_start.clear()
@@ -606,7 +622,7 @@ class TrainWorker:
             n = steps[sl]
             w = is_weights[sl]
 
-            with self.model_lock:
+            with self.model_lock, self._autocast():
                 out = self.model(s)
 
             if isinstance(out, dict):
@@ -617,7 +633,7 @@ class TrainWorker:
                 ).squeeze(1)  # (micro, num_atoms)
 
                 with torch.no_grad():
-                    with self.model_lock:
+                    with self.model_lock, self._autocast():
                         was_training = self.model.training
                         self.model.eval()
                         next_out_online = self.model(ns)
@@ -649,7 +665,7 @@ class TrainWorker:
                     m.scatter_add_(1, l, next_dist * (u.float() - b))
                     m.scatter_add_(1, u, next_dist * (b - l.float()))
 
-                log_p = torch.log(dist_sa + 1e-8)
+                log_p = torch.log(dist_sa.float() + 1e-8)
                 per_sample_loss = -(m * log_p).sum(dim=1)
                 total_td_errors[sl] = per_sample_loss.detach().cpu().numpy()
             else:
@@ -682,11 +698,20 @@ class TrainWorker:
 
             loss = (per_sample_loss * w).mean()
             loss = loss / self.grad_accum_steps
-            loss.backward()
+            if self.scaler is not None:
+                self.scaler.scale(loss).backward()
+            else:
+                loss.backward()
 
         with self.model_lock:
+            if self.scaler is not None:
+                self.scaler.unscale_(self.optimizer)
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-        self.optimizer.step()
+        if self.scaler is not None:
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+        else:
+            self.optimizer.step()
         self.scheduler.step()
 
         with self.buffer_lock:
