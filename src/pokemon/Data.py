@@ -21,7 +21,7 @@ class Data:
     new_pokedex_seen_reward: float = 0.1
     new_pokedex_own_reward: float = 0.25
     status_reward: float = 0.02
-    base_reward: float = -0.002
+    base_reward: float = -0.0001
     truncated_reward: float = -0.02
     new_item_reward: float = 0.1
 

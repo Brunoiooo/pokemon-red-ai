@@ -73,9 +73,9 @@ class TrainWorker:
             alpha=self.per_alpha,
         )
 
-    batch_size = 256
+    batch_size = 512
     grad_accum_steps = 1
-    lr = 1e-3
+    lr = 5e-4
     weight_decay = 1e-4
     gamma = 0.99
     criterion: torch.nn.SmoothL1Loss = field(default_factory=torch.nn.SmoothL1Loss)
