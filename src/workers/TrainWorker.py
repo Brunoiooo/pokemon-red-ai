@@ -23,6 +23,7 @@ from pokemon.Emulator import Emulator
 from pokemon.ModelPokemon import ModelPokemon, get_model
 from pokemon.PrioritizedReplayBuffer import PrioritizedReplayBuffer
 from workers.ExperienceWorker import ExperienceWorker
+from utils.BufferManager import BufferManager
 from math import inf
 
 
@@ -50,6 +51,8 @@ class TrainWorker:
     buffer_capacity: int = 200000
     hash_buffer: deque = field(default_factory=lambda: deque(maxlen=200000))
     buffer: PrioritizedReplayBuffer | None = field(default=None, init=False, repr=False)
+    buffer_manager: BufferManager = field(default=None, init=False, repr=False)
+    last_buffer_save: int = field(default=0, init=False, repr=False)
 
     max_last_saves: int = 10
     max_best_saves: int = 3
@@ -68,10 +71,25 @@ class TrainWorker:
         self.buffer_lock = self.manager.RLock()
         self.is_evaluation_window = self.manager.Value("b", False)
         self.train_use_sdl = self.manager.Value("b", False)
-        self.buffer = PrioritizedReplayBuffer(
+
+        self.buffer_manager = BufferManager()
+
+        loaded_buffer = self.buffer_manager.load_buffer(
             capacity=self.buffer_capacity,
-            alpha=self.per_alpha,
+            alpha=self.per_alpha
         )
+
+        if loaded_buffer is not None:
+            self.buffer = loaded_buffer
+            buffer_size_mb = self.buffer_manager.get_buffer_size()
+            self.queue_logs.put_nowait(
+                f"Loaded replay buffer from disk ({buffer_size_mb:.1f}MB, {len(self.buffer)} entries)"
+            )
+        else:
+            self.buffer = PrioritizedReplayBuffer(
+                capacity=self.buffer_capacity,
+                alpha=self.per_alpha,
+            )
 
     batch_size = 512
     grad_accum_steps = 1
@@ -85,7 +103,7 @@ class TrainWorker:
 
     per_alpha: float = 0.7
     per_beta_start: float = 0.6
-    per_beta_frames: int = 50000
+    per_beta_frames: int = 2_000_000
 
     era: int = 1000
 
@@ -139,6 +157,30 @@ class TrainWorker:
                 )
 
         return self.__optimizer
+
+    __scheduler: any = None
+
+    @property
+    def scheduler(self):
+        if self.__scheduler is None:
+            from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
+            warmup = LinearLR(
+                self.optimizer,
+                start_factor=0.1,
+                end_factor=1.0,
+                total_iters=5000,
+            )
+            cosine = CosineAnnealingLR(
+                self.optimizer,
+                T_max=1_000_000,
+                eta_min=1e-6,
+            )
+            self.__scheduler = SequentialLR(
+                self.optimizer,
+                schedulers=[warmup, cosine],
+                milestones=[5000],
+            )
+        return self.__scheduler
 
     __gamma_tensor: torch.Tensor | None = None
 
@@ -287,11 +329,16 @@ class TrainWorker:
                             self.queue_logs.put_nowait(
                                 f"Count: {self.count} | Buffer: {len(self.buffer)}"
                             )
+
+                    if self.count % 500 == 0:
+                        self.save_buffer_to_disk()
+
                     self.count += 1
         except Exception as e:
             self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
         finally:
             self.event_start.clear()
+            self.save_buffer_to_disk()
             self.queue_logs.put_nowait("Train stopped.")
 
     def run_workers(self):
@@ -462,6 +509,18 @@ class TrainWorker:
             self.is_freeze = True
             return
 
+    def save_buffer_to_disk(self):
+        """Saves the replay buffer to disk. Call this periodically during training."""
+        try:
+            with self.buffer_lock:
+                if self.buffer_manager.save_buffer(self.buffer):
+                    buffer_size_mb = self.buffer_manager.get_buffer_size()
+                    self.queue_logs.put_nowait(
+                        f"Saved replay buffer ({buffer_size_mb:.1f}MB, {len(self.buffer)} entries)"
+                    )
+        except Exception as e:
+            self.queue_logs.put_nowait(f"Error saving buffer: {e}")
+
     def per_beta(self):
         with self.eval_lock:
             frac = min(1.0, self.count / max(1, self.per_beta_frames))
@@ -522,32 +581,79 @@ class TrainWorker:
             w = is_weights[sl]
 
             with self.model_lock:
-                q_all = self.model(s)
-            q_sa = q_all.gather(1, a.view(-1, 1)).squeeze(1)
+                out = self.model(s)
 
-            with torch.no_grad():
-                with self.model_lock:
-                    was_training = self.model.training
-                    self.model.eval()
-                    next_q_online = self.model(ns)
-                    next_a = torch.argmax(next_q_online, dim=1)
-                    if was_training:
-                        self.model.train()
+            if isinstance(out, dict):
+                # C51 distributional RL: Bellman projection + cross-entropy loss
+                dist_sa = out["dist"].gather(
+                    1,
+                    a.view(-1, 1, 1).expand(-1, 1, self.model.num_atoms),
+                ).squeeze(1)  # (micro, num_atoms)
 
-                    next_q_target = (
-                        self.target_model(ns).gather(1, next_a.view(-1, 1)).squeeze(1)
-                    )
+                with torch.no_grad():
+                    with self.model_lock:
+                        was_training = self.model.training
+                        self.model.eval()
+                        next_out_online = self.model(ns)
+                        next_a = torch.argmax(next_out_online["q"], dim=1)
+                        if was_training:
+                            self.model.train()
 
-                gamma_pow_n = torch.pow(self.gamma_tensor, n)
-                bootstrap_mask = (~te).float()
-                target = rN + bootstrap_mask * gamma_pow_n * next_q_target
+                        next_out_target = self.target_model(ns)
+                        next_dist = next_out_target["dist"].gather(
+                            1,
+                            next_a.view(-1, 1, 1).expand(-1, 1, self.model.num_atoms),
+                        ).squeeze(1)  # (micro, num_atoms)
 
-            td = target - q_sa
-            total_td_errors[sl] = td.detach().abs().cpu().numpy()
+                    support = self.model.support  # (num_atoms,)
+                    v_min = self.model.v_min
+                    v_max = self.model.v_max
+                    num_atoms = self.model.num_atoms
+                    delta_z = (v_max - v_min) / (num_atoms - 1)
 
-            per_sample_loss = torch.nn.functional.smooth_l1_loss(
-                q_sa, target, reduction="none"
-            )
+                    gamma_pow_n = torch.pow(self.gamma_tensor, n.float())
+                    bootstrap_mask = (~te).float()
+                    Tz = rN.unsqueeze(1) + bootstrap_mask.unsqueeze(1) * gamma_pow_n.unsqueeze(1) * support.unsqueeze(0)
+                    Tz = Tz.clamp(v_min, v_max)
+                    b = (Tz - v_min) / delta_z
+                    l = b.floor().long().clamp(0, num_atoms - 1)
+                    u = b.ceil().long().clamp(0, num_atoms - 1)
+
+                    m = torch.zeros_like(next_dist)
+                    m.scatter_add_(1, l, next_dist * (u.float() - b))
+                    m.scatter_add_(1, u, next_dist * (b - l.float()))
+
+                log_p = torch.log(dist_sa + 1e-8)
+                per_sample_loss = -(m * log_p).sum(dim=1)
+                total_td_errors[sl] = per_sample_loss.detach().cpu().numpy()
+            else:
+                # Standard DQN fallback
+                q_sa = out.gather(1, a.view(-1, 1)).squeeze(1)
+
+                with torch.no_grad():
+                    with self.model_lock:
+                        was_training = self.model.training
+                        self.model.eval()
+                        next_q_online = self.model(ns)
+                        if isinstance(next_q_online, dict):
+                            next_q_online = next_q_online["q"]
+                        next_a = torch.argmax(next_q_online, dim=1)
+                        if was_training:
+                            self.model.train()
+
+                        next_out_target = self.target_model(ns)
+                        if isinstance(next_out_target, dict):
+                            next_out_target = next_out_target["q"]
+                        next_q_target = next_out_target.gather(1, next_a.view(-1, 1)).squeeze(1)
+
+                    gamma_pow_n = torch.pow(self.gamma_tensor, n.float())
+                    bootstrap_mask = (~te).float()
+                    target = rN + bootstrap_mask * gamma_pow_n * next_q_target
+
+                td = target - q_sa
+                total_td_errors[sl] = td.detach().abs().cpu().numpy()
+                per_sample_loss = torch.nn.functional.smooth_l1_loss(q_sa, target, reduction="none")
+
             loss = (per_sample_loss * w).mean()
             loss = loss / self.grad_accum_steps
             loss.backward()
@@ -555,14 +661,13 @@ class TrainWorker:
         with self.model_lock:
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
         self.optimizer.step()
+        self.scheduler.step()
 
         with self.buffer_lock:
             self.buffer.update_priorities(idxs, total_td_errors.tolist())
 
         self._opt_steps += 1
-        if self._opt_steps % self.target_update_interval == 0:
-            with self.model_lock:
-                self.target_model.load_state_dict(self.model.state_dict())
+        self.soft_update_target()
 
     def collate_states(self, list_of_dicts: tuple[Any, ...]):
         batch = {}

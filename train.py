@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 import sys
+import warnings
+warnings.filterwarnings("ignore", message="Detected call of `lr_scheduler.step\\(\\)` before `optimizer.step\\(\\)`")
 sys.path.insert(0, "src")
 import time
 import argparse
@@ -29,6 +31,8 @@ def main():
                         help="Number of experience workers (default: 5)")
     parser.add_argument("--eval-gui", "-eg", action="store_true",
                         help="Show GUI during evaluations only")
+    parser.add_argument("--reset-buffer", "-rb", action="store_true",
+                        help="Reset experience buffer (start fresh)")
 
     args = parser.parse_args()
 
@@ -50,6 +54,12 @@ def main():
     Path("logs").mkdir(exist_ok=True)
     log_file = Path("logs") / f"train_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
 
+    if args.reset_buffer:
+        from utils.BufferManager import BufferManager
+        bm = BufferManager()
+        if bm.delete_buffer():
+            print("Replay buffer reset.\n")
+
     trainer = TrainWorker(max_workers=args.workers)
 
     # Set GUI mode
@@ -61,6 +71,7 @@ def main():
     print(f"Batch size: {trainer.batch_size}")
     print(f"Learning rate: {trainer.lr:.2e}")
     print(f"Buffer capacity: {trainer.buffer_capacity}")
+    print(f"Buffer entries: {len(trainer.buffer)}")
     print(f"Episode steps: 5000 (UPDATED)")
     print(f"Base reward: -0.0001 (UPDATED)")
     print(f"Exploration: 50-80% (UPDATED)\n")

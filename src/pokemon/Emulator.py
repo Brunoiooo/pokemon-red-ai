@@ -248,7 +248,8 @@ class Emulator:
             count += 1
 
             with torch.inference_mode():
-                q = model(inputs)
+                out = model(inputs)
+                q = out["q"] if isinstance(out, dict) else out
                 q = q.squeeze(0)
 
             action = int(torch.argmax(q).item())

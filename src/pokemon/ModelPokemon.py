@@ -5,6 +5,54 @@ import torch
 import torch.nn as nn
 
 from pokemon import Emulator
+from pokemon.TransformerMemory import TransformerMemory
+
+
+class NoisyLinear(nn.Module):
+    """Noisy linear layer for exploration (from Rainbow DQN)."""
+
+    def __init__(self, in_features: int, out_features: int, std_init: float = 0.5):
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.std_init = std_init
+
+        self.weight_mu = nn.Parameter(torch.empty(out_features, in_features))
+        self.weight_sigma = nn.Parameter(torch.empty(out_features, in_features))
+        self.register_buffer("weight_epsilon", torch.empty(out_features, in_features))
+
+        self.bias_mu = nn.Parameter(torch.empty(out_features))
+        self.bias_sigma = nn.Parameter(torch.empty(out_features))
+        self.register_buffer("bias_epsilon", torch.empty(out_features))
+
+        self.reset_parameters()
+        self.sample_noise()
+
+    def reset_parameters(self):
+        mu_range = 1 / math.sqrt(self.in_features)
+        self.weight_mu.data.uniform_(-mu_range, mu_range)
+        self.weight_sigma.data.fill_(self.std_init / math.sqrt(self.in_features))
+        self.bias_mu.data.uniform_(-mu_range, mu_range)
+        self.bias_sigma.data.fill_(self.std_init / math.sqrt(self.out_features))
+
+    def _f(self, x):
+        return torch.sign(x) * torch.sqrt(torch.abs(x) + 1e-8)
+
+    def sample_noise(self):
+        epsilon_in = self._f(torch.randn(self.in_features, device=self.weight_mu.device))
+        epsilon_out = self._f(torch.randn(self.out_features, device=self.weight_mu.device))
+        self.weight_epsilon.copy_(epsilon_out.ger(epsilon_in))
+        self.bias_epsilon.copy_(epsilon_out)
+
+    def forward(self, x):
+        if self.training:
+            self.sample_noise()
+            w = self.weight_mu + self.weight_sigma * self.weight_epsilon
+            b = self.bias_mu + self.bias_sigma * self.bias_epsilon
+        else:
+            w = self.weight_mu
+            b = self.bias_mu
+        return torch.nn.functional.linear(x, w, b)
 
 
 def get_model(device: str, files_lock: RLock, name: str | None = None):
@@ -12,15 +60,15 @@ def get_model(device: str, files_lock: RLock, name: str | None = None):
 
     inputs = emulator.data.inputs()
 
-    single_embed_dim = 16 + 16 + 4 + 16 + 16
+    single_embed_dim = 32 + 32 + 4 + 16 + 16
 
     multi_embed_dim = (
-        len(inputs["move_id"]) * 16
-        + len(inputs["move_type"]) * 16
-        + len(inputs["pokemon_id"]) * 16
-        + len(inputs["pokemon_type"]) * 16
+        len(inputs["move_id"]) * 32
+        + len(inputs["move_type"]) * 32
+        + len(inputs["pokemon_id"]) * 32
+        + len(inputs["pokemon_type"]) * 32
         + len(inputs["sprite_id"]) * 16
-        + len(inputs["item_id"]) * 16
+        + len(inputs["item_id"]) * 32
     )
 
     total_in_dim = single_embed_dim + multi_embed_dim
@@ -36,6 +84,9 @@ def get_model(device: str, files_lock: RLock, name: str | None = None):
         inv_in=len(inputs["inv"]),
         party_in=len(inputs["party"]),
         outputs=len(emulator.buttons),
+        use_c51=True,
+        use_noisy=True,
+        use_transformer=True,
     ).to(device)
 
     emulator.pyboy.stop(False)
@@ -49,14 +100,23 @@ def get_model(device: str, files_lock: RLock, name: str | None = None):
 
     state = torch.load(ckpt_path, map_location=device)
 
-    model.load_state_dict(
-        (
-            state["model_state"]
-            if isinstance(state, dict) and "model_state" in state
-            else state
-        ),
-        strict=True,
+    state_dict = (
+        state["model_state"]
+        if isinstance(state, dict) and "model_state" in state
+        else state
     )
+
+    try:
+        model.load_state_dict(state_dict, strict=True)
+    except RuntimeError:
+        result = model.load_state_dict(state_dict, strict=False)
+        missing = len(result.missing_keys)
+        unexpected = len(result.unexpected_keys)
+        print(
+            f"[ModelPokemon] Loaded checkpoint with mismatches "
+            f"(missing={missing}, unexpected={unexpected}). "
+            f"Architecture may have changed — consider --reset-buffer and fresh training."
+        )
 
     return model
 
@@ -85,10 +145,19 @@ class ModelPokemon(nn.Module):
         inv_in: int,
         party_in: int,
         outputs: int,
+        use_c51: bool = True,
+        use_noisy: bool = True,
+        use_transformer: bool = True,
     ):
         super().__init__()
 
-        self.screen_out_dim = 32
+        self.outputs = outputs
+        self.use_c51 = use_c51
+        self.use_noisy = use_noisy
+        self.use_transformer = use_transformer
+
+        self.screen_out_dim = 128
+        self.transformer_dim = 256 if use_transformer else 0
 
         total_in_dim = (
             in_dim
@@ -101,30 +170,42 @@ class ModelPokemon(nn.Module):
             + inv_in
             + party_in
             + self.screen_out_dim
+            + self.transformer_dim
         )
 
-        self.map_id = nn.Embedding(256, 16)
-        self.dialog_id = nn.Embedding(256, 16)
+        self.map_id = nn.Embedding(256, 32)
+        self.dialog_id = nn.Embedding(256, 32)
         self.index_of_current_pokemon_send_out = nn.Embedding(6, 4)
         self.type_of_battle = nn.Embedding(256, 16)
         self.move_menu_type = nn.Embedding(256, 16)
 
-        self.move_id = nn.Embedding(256, 16, padding_idx=0)
-        self.move_type = nn.Embedding(256, 16, padding_idx=0)
-        self.pokemon_id = nn.Embedding(256, 16, padding_idx=0)
-        self.pokemon_type = nn.Embedding(256, 16, padding_idx=0)
+        self.move_id = nn.Embedding(256, 32, padding_idx=0)
+        self.move_type = nn.Embedding(256, 32, padding_idx=0)
+        self.pokemon_id = nn.Embedding(256, 32, padding_idx=0)
+        self.pokemon_type = nn.Embedding(256, 32, padding_idx=0)
         self.sprite_id = nn.Embedding(256, 16, padding_idx=0)
-        self.item_id = nn.Embedding(256, 16, padding_idx=0)
+        self.item_id = nn.Embedding(256, 32, padding_idx=0)
 
         self.screen_enc = nn.Sequential(
-            nn.Conv2d(1, 8, 3, padding=1),
+            nn.Conv2d(1, 32, 3, padding=1),
             nn.SiLU(),
-            nn.Conv2d(8, 16, 3, padding=1),
+            nn.Conv2d(32, 64, 3, padding=1),
             nn.SiLU(),
+            nn.Conv2d(64, 64, 3, padding=1),
+            nn.SiLU(),
+            nn.AdaptiveAvgPool2d((9, 10)),
             nn.Flatten(),
-            nn.Linear(16 * 18 * 20, self.screen_out_dim),
+            nn.Linear(64 * 9 * 10, 256),
+            nn.SiLU(),
+            nn.Linear(256, self.screen_out_dim),
             nn.SiLU(),
         )
+
+        if self.use_transformer:
+            self.transformer_memory = TransformerMemory(
+                state_dim=256, d_model=256, n_heads=4, n_layers=3, ff_dim=512
+            )
+            self.state_buffer = None
 
         self.trunk = nn.Sequential(
             nn.Linear(total_in_dim, 1024),
@@ -136,17 +217,62 @@ class ModelPokemon(nn.Module):
             nn.SiLU(),
         )
 
-        self.value_head = nn.Sequential(
-            nn.Linear(256, 128),
-            nn.SiLU(),
-            nn.Linear(128, 1),
-        )
+        if self.use_c51:
+            self.num_atoms = 51
+            self.v_min = -10.0
+            self.v_max = 10.0
+            self.register_buffer(
+                "support",
+                torch.linspace(self.v_min, self.v_max, self.num_atoms),
+            )
 
-        self.advantage_head = nn.Sequential(
-            nn.Linear(256, 128),
-            nn.SiLU(),
-            nn.Linear(128, outputs),
-        )
+            if self.use_noisy:
+                self.value_dist_head = nn.Sequential(
+                    NoisyLinear(256, 128),
+                    nn.SiLU(),
+                    NoisyLinear(128, self.num_atoms),
+                )
+                self.advantage_dist_head = nn.Sequential(
+                    NoisyLinear(256, 128),
+                    nn.SiLU(),
+                    NoisyLinear(128, outputs * self.num_atoms),
+                )
+            else:
+                self.value_dist_head = nn.Sequential(
+                    nn.Linear(256, 128),
+                    nn.SiLU(),
+                    nn.Linear(128, self.num_atoms),
+                )
+                self.advantage_dist_head = nn.Sequential(
+                    nn.Linear(256, 128),
+                    nn.SiLU(),
+                    nn.Linear(128, outputs * self.num_atoms),
+                )
+        else:
+            if self.use_noisy:
+                self.value_head = nn.Sequential(
+                    NoisyLinear(256, 128),
+                    nn.SiLU(),
+                    NoisyLinear(128, 1),
+                )
+
+                self.advantage_head = nn.Sequential(
+                    NoisyLinear(256, 128),
+                    nn.SiLU(),
+                    NoisyLinear(128, outputs),
+                )
+            else:
+                self.value_head = nn.Sequential(
+                    nn.Linear(256, 128),
+                    nn.SiLU(),
+                    nn.Linear(128, 1),
+                )
+
+                self.advantage_head = nn.Sequential(
+                    nn.Linear(256, 128),
+                    nn.SiLU(),
+                    nn.Linear(128, outputs),
+                )
 
     def _as_float_batch(self, t, device):
         t = t.to(device)
@@ -258,13 +384,43 @@ class ModelPokemon(nn.Module):
             dim=1,
         )
 
+        if self.use_transformer:
+            if "state_sequence" in x:
+                transformer_context = self.transformer_memory(
+                    x["state_sequence"].to(device)
+                )
+            else:
+                transformer_context = torch.zeros(
+                    h.size(0), self.transformer_dim, device=device
+                )
+            h = torch.cat([h, transformer_context], dim=1)
+
         z = self.trunk(h)
 
-        v = self.value_head(z)
-        a = self.advantage_head(z)
-        q = v + (a - a.mean(dim=1, keepdim=True))
+        if self.use_c51:
+            v_dist = self.value_dist_head(z)
+            a_dist = self.advantage_dist_head(z).reshape(
+                z.size(0), self.outputs, self.num_atoms
+            )
 
-        return q
+            v_dist = torch.softmax(v_dist, dim=1)
+            a_dist = torch.softmax(a_dist, dim=2)
+
+            q_dist = v_dist.unsqueeze(1) + (
+                a_dist
+                - a_dist.mean(dim=1, keepdim=True)
+            )
+            q_dist = torch.softmax(q_dist, dim=2)
+
+            q = (q_dist * self.support).sum(dim=2)
+
+            return {"q": q, "dist": q_dist, "z": z}
+        else:
+            v = self.value_head(z)
+            a = self.advantage_head(z)
+            q = v + (a - a.mean(dim=1, keepdim=True))
+
+            return {"q": q, "z": z}
 
     def freeze_representation(self):
         modules = [
@@ -283,6 +439,9 @@ class ModelPokemon(nn.Module):
             self.trunk,
         ]
 
+        if self.use_transformer:
+            modules.append(self.transformer_memory)
+
         for module in modules:
             for p in module.parameters():
                 p.requires_grad = False
@@ -294,6 +453,12 @@ class ModelPokemon(nn.Module):
     def freeze(self):
         self.freeze_representation()
 
-        for module in [self.value_head, self.advantage_head]:
+        head_modules = []
+        if self.use_c51:
+            head_modules = [self.value_dist_head, self.advantage_dist_head]
+        else:
+            head_modules = [self.value_head, self.advantage_head]
+
+        for module in head_modules:
             for p in module.parameters():
                 p.requires_grad = True

@@ -1,5 +1,5 @@
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import hashlib
 from multiprocessing import Queue
 from multiprocessing.connection import Pipe, PipeConnection
@@ -32,6 +32,9 @@ class ExperienceWorker:
     start_save_chance = 0.1
     max_stuck_epsilon = 0.8
     min_stuck_epsilon = 0.5
+    epsilon_decay_steps: int = field(default=500_000, init=False)
+    _total_steps: int = field(default=0, init=False)
+    _state_buffer: deque = field(default_factory=lambda: deque(maxlen=64), init=False)
     init_model_state_dict: dict[str, Any]
     max_episode_steps: int = 5000
 
@@ -109,6 +112,7 @@ class ExperienceWorker:
             self.queue_logs.put_nowait("Worker stopped.")
 
     def run_game(self, focused: bool = False):
+        self._state_buffer.clear()
         memory, inputs = self.emulator.reset(dir=self.random_save_path)
 
         while self.event_start.is_set():
@@ -160,13 +164,25 @@ class ExperienceWorker:
             self.emulator.use_sdl = bool(self.window.get())
 
     def get_action(self, inputs: dict[float]):
-        if random.random() < self.min_stuck_epsilon:
+        frac = min(1.0, self._total_steps / self.epsilon_decay_steps)
+        epsilon = self.max_stuck_epsilon - frac * (self.max_stuck_epsilon - self.min_stuck_epsilon)
+        self._total_steps += 1
+
+        model_inputs = inputs
+        if self._state_buffer:
+            model_inputs = {**inputs, "state_sequence": torch.stack(list(self._state_buffer)).unsqueeze(0)}
+
+        with torch.inference_mode():
+            out = self.model(model_inputs)
+
+        if isinstance(out, dict) and "z" in out:
+            self._state_buffer.append(out["z"].squeeze(0).detach().cpu())
+
+        if random.random() < epsilon:
             action = random.randint(0, len(self.emulator.buttons) - 1)
         else:
-            with torch.inference_mode():
-                q = self.model(inputs)
-                q = q.squeeze(0)
-
+            q = out["q"] if isinstance(out, dict) else out
+            q = q.squeeze(0)
             action = int(torch.argmax(q).item())
 
         return action
