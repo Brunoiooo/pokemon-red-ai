@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from multiprocessing import set_start_method
 from workers.TrainWorker import TrainWorker
+from utils.MetricsCollector import MetricsCollector
 
 def format_time(seconds):
     hours, remainder = divmod(int(seconds), 3600)
@@ -76,6 +77,8 @@ def main():
     log_messages = []
     evals = []
 
+    metrics = MetricsCollector()
+
     try:
         while True:
             time.sleep(0.2)
@@ -90,6 +93,15 @@ def main():
                 count, avg_ret = trainer.queue_dots.get_nowait()
                 elapsed = time.time() - start_time
                 evals.append((count, avg_ret, elapsed))
+
+                # Collect eval metrics
+                metrics.add_eval_metrics(
+                    eval_num=len(evals),
+                    step=count,
+                    timestamp=elapsed,
+                    return_value=avg_ret,
+                )
+
                 print(f"\n{'='*70}")
                 print(f"[EVAL #{len(evals)}] Step {count} | Return: {avg_ret:.4f} | Time: {format_time(elapsed)}")
                 if len(evals) > 1:
@@ -116,6 +128,15 @@ def main():
                           f"Opt: {opt_steps:6d} ({opt_per_sec:4.1f} opt/s) | "
                           f"Buf: {buffer_pct:5.1f}%")
 
+                    # Collect metrics
+                    metrics.add_step_metrics(
+                        step=current_count,
+                        timestamp=elapsed,
+                        buffer_size=buffer_size,
+                        buffer_pct=buffer_pct,
+                        steps_per_sec=steps_per_sec,
+                    )
+
                     last_count = current_count
                     last_opt = opt_steps
 
@@ -131,6 +152,11 @@ def main():
         time.sleep(2)
 
         total_time = time.time() - start_time
+
+        # Finalize metrics
+        metrics.finalize(trainer.count, trainer._opt_steps, total_time)
+        metrics_file = metrics.save_json()
+
         print(f"\n{'='*70}")
         print(f"  Training Summary")
         print(f"{'='*70}")
@@ -149,6 +175,10 @@ def main():
                 print(f"\n✓ Model achieved positive returns!")
 
         print(f"{'='*70}\n")
+
+        # Print analysis and recommendations
+        metrics.print_summary()
+        print(f"Detailed metrics saved to: {metrics_file}\n")
 
     finally:
         # Save logs
