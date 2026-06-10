@@ -73,19 +73,19 @@ class TrainWorker:
             alpha=self.per_alpha,
         )
 
-    batch_size = 128
-    grad_accum_steps = 2
-    lr = 5e-4
-    weight_decay = 1e-5
+    batch_size = 256
+    grad_accum_steps = 1
+    lr = 1e-3
+    weight_decay = 1e-4
     gamma = 0.99
     criterion: torch.nn.SmoothL1Loss = field(default_factory=torch.nn.SmoothL1Loss)
-    tau = 0.0005
-    target_update_interval = 1000
+    tau = 0.001
+    target_update_interval = 500
     _opt_steps: int = 0
 
-    per_alpha: float = 0.6
-    per_beta_start: float = 0.4
-    per_beta_frames: int = 100000
+    per_alpha: float = 0.7
+    per_beta_start: float = 0.6
+    per_beta_frames: int = 50000
 
     era: int = 1000
 
@@ -478,7 +478,7 @@ class TrainWorker:
                 batch, idxs, is_weights = self.buffer.sample(self.batch_size, beta=beta)
         except ValueError as e:
             self.queue_logs.put_nowait(str(e))
-            sleep(1.0)
+            sleep(0.1)
             return
 
         (
@@ -539,7 +539,7 @@ class TrainWorker:
                     )
 
                 gamma_pow_n = torch.pow(self.gamma_tensor, n)
-                bootstrap_mask = (~te).float()  # ewentualnie (~(te | tr)).float()
+                bootstrap_mask = (~te).float()
                 target = rN + bootstrap_mask * gamma_pow_n * next_q_target
 
             td = target - q_sa

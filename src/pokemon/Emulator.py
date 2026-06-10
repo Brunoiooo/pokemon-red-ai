@@ -64,7 +64,7 @@ class Emulator:
     def pyboy(self):
         if self.__pyboy is None:
             window_str = "SDL2" if self.use_sdl else "null"
-            self.__pyboy = PyBoy(f"rom.gb", sound_emulated=False, window=window_str)
+            self.__pyboy = PyBoy(f"rom.gb", sound_emulated=False, window=window_str, cgb=False)
             if self.__data is not None:
                 self.__data.pyboy = self.__pyboy
 
@@ -168,6 +168,28 @@ class Emulator:
                 memory=memory, action=action
             )
 
+            # queue_logs.put_nowait(
+            #     f"useless_count: {self.data.useless_count, len(self.data.visited_screens)}"
+            # )
+            # queue_logs.put_nowait(f"visited_dialogs: {self.data.visited_dialogs}")
+            # queue_logs.put_nowait(
+            #     f"sprite_data_ids: {self.data.sprite_data_ids(self.pyboy.memory)}"
+            # )
+            # queue_logs.put_nowait(
+            #     f"visited_dialogs.get: {self.data.visited_dialogs.get(self.data.get_dialog(), 0)}"
+            # )
+            queue_logs.put_nowait(f"key: {key}, reward: {reward:.5f}")
+            queue_logs.put_nowait(
+                f"is_dialog: {self.data.is_dialog(self.pyboy.memory)}, is_world: {self.data.is_world(self.pyboy.memory)}, is_menu: {self.data.is_menu(self.pyboy.memory)}, is_battle: {self.data.is_battle(self.pyboy.memory)}"
+            )
+            queue_logs.put_nowait(f"visited_maps: {self.data.visited_maps}")
+            queue_logs.put_nowait(
+                f"visited_dialogs: {self.data.visited_dialogs.get(self.data.get_dialog(), 0)}"
+            )
+            queue_logs.put_nowait(
+                f"visited_positions: {self.data.visited_positions.get(self.data.get_position(), 0)}"
+            )
+
             if truncated:
                 break
 
@@ -182,7 +204,7 @@ class Emulator:
                     f"{self.data.position_x(self.pyboy.memory), self.data.position_y(self.pyboy.memory),flags}"
                 )
 
-            queue_logs.put_nowait(f"{reward:.5f}")
+            # queue_logs.put_nowait(f"{reward:.5f}")
 
             time.sleep(0.1)
 

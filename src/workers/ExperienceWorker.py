@@ -29,11 +29,11 @@ class ExperienceWorker:
     event_start: Event
     files_lock: RLock
     td_error_steps = 5
-    start_save_chance = 0.25
+    start_save_chance = 0.1
     max_stuck_epsilon = 0.50
-    min_stuck_epsilon = 0.20
+    min_stuck_epsilon = 0.15
     init_model_state_dict: dict[str, Any]
-    max_episode_steps: int = 100
+    max_episode_steps: int = 1000
 
     __last_save_path = "last"
 
