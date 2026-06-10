@@ -9,3 +9,6 @@ v*.*
 models
 saves
 !saves/start
+checkpoints/
+buffer/
+logs/

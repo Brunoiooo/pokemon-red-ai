@@ -98,6 +98,8 @@ def main():
             while not trainer.queue_logs.empty():
                 msg = trainer.queue_logs.get_nowait()
                 log_messages.append(msg)
+                if len(log_messages) > 10000:
+                    log_messages = log_messages[-5000:]
 
             # Collect evaluation results
             while not trainer.queue_dots.empty():

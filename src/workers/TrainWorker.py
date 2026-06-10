@@ -1,4 +1,3 @@
-from collections import deque
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 import hashlib
@@ -49,7 +48,6 @@ class TrainWorker:
     train_use_sdl: any = field(init=False)
 
     buffer_capacity: int = 200000
-    hash_buffer: deque = field(default_factory=lambda: deque(maxlen=200000))
     buffer: PrioritizedReplayBuffer | None = field(default=None, init=False, repr=False)
     buffer_manager: BufferManager = field(default=None, init=False, repr=False)
     last_buffer_save: int = field(default=0, init=False, repr=False)
@@ -60,7 +58,7 @@ class TrainWorker:
     def __post_init__(self):
         self.manager = mp.Manager()
 
-        self.queue_data = self.manager.Queue()
+        self.queue_data = self.manager.Queue(maxsize=2000)
         self.event_start = self.manager.Event()
         self.queue_logs = self.manager.Queue()
         self.queue_dots = self.manager.Queue()
@@ -292,6 +290,12 @@ class TrainWorker:
 
         return self.__experienceWorkers
 
+    def _safe_log(self, msg: str):
+        try:
+            self.queue_logs.put_nowait(msg)
+        except (BrokenPipeError, EOFError, OSError):
+            pass
+
     def run(self):
         try:
             self.queue_logs.put_nowait("TrainWorker starting up.")
@@ -311,10 +315,13 @@ class TrainWorker:
                 self.run_workers_thread.start()
 
         except Exception as e:
-            self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
-            self.event_start.clear()
+            self._safe_log(f"{e}\n{traceback.print_exc()}")
+            try:
+                self.event_start.clear()
+            except (BrokenPipeError, EOFError, OSError):
+                pass
         finally:
-            self.queue_logs.put_nowait("TrainWorker setted up.")
+            self._safe_log("TrainWorker setted up.")
 
     def run_train(self):
         try:
@@ -335,11 +342,14 @@ class TrainWorker:
 
                     self.count += 1
         except Exception as e:
-            self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
+            self._safe_log(f"{e}\n{traceback.print_exc()}")
         finally:
-            self.event_start.clear()
+            try:
+                self.event_start.clear()
+            except (BrokenPipeError, EOFError, OSError):
+                pass
             self.save_buffer_to_disk()
-            self.queue_logs.put_nowait("Train stopped.")
+            self._safe_log("Train stopped.")
 
     def run_workers(self):
         try:
@@ -373,14 +383,17 @@ class TrainWorker:
                     t.join()
 
         except Exception as e:
-            self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
+            self._safe_log(f"{e}\n{traceback.print_exc()}")
         finally:
-            self.event_start.clear()
+            try:
+                self.event_start.clear()
+            except (BrokenPipeError, EOFError, OSError):
+                pass
             if processes:
                 for p in processes:
                     if p.is_alive():
                         p.terminate()
-            self.queue_logs.put_nowait("Workers stopped.")
+            self._safe_log("Workers stopped.")
 
     def run_queue(self):
         try:
@@ -394,12 +407,14 @@ class TrainWorker:
 
                 with self.buffer_lock:
                     self.buffer.add(item)
-                    self.hash_buffer.append(item[7])
         except Exception as e:
-            self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
+            self._safe_log(f"{e}\n{traceback.print_exc()}")
         finally:
-            self.event_start.clear()
-            self.queue_logs.put_nowait("Queue handler stopped.")
+            try:
+                self.event_start.clear()
+            except (BrokenPipeError, EOFError, OSError):
+                pass
+            self._safe_log("Queue handler stopped.")
 
     def send_model_state_dict_to_worker(self, send_conn: PipeConnection):
         try:
@@ -408,13 +423,15 @@ class TrainWorker:
                     model_state_dict = self.model.state_dict()
 
                 send_conn.send(model_state_dict)
-
-                self.queue_logs.put_nowait("Sent model state dict to worker.")
+                sleep(30)
         except Exception as e:
-            self.event_start.clear()
-            self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
+            try:
+                self.event_start.clear()
+            except (BrokenPipeError, EOFError, OSError):
+                pass
+            self._safe_log(f"{e}\n{traceback.print_exc()}")
         finally:
-            self.queue_logs.put_nowait("Stopped sending model state dict to worker.")
+            self._safe_log("Stopped sending model state dict to worker.")
 
     def evaluate_greedy(self):
         try:
@@ -460,10 +477,13 @@ class TrainWorker:
                 evaluation_count += 1
 
         except Exception as e:
-            self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
-            self.event_start.clear()
+            self._safe_log(f"{e}\n{traceback.print_exc()}")
+            try:
+                self.event_start.clear()
+            except (BrokenPipeError, EOFError, OSError):
+                pass
         finally:
-            self.queue_logs.put_nowait("Evaluation stopped.")
+            self._safe_log("Evaluation stopped.")
 
     __is_freeze: bool = False
 

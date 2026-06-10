@@ -1,4 +1,6 @@
 import pickle
+import tempfile
+import os
 import numpy as np
 from pathlib import Path
 from pokemon.PrioritizedReplayBuffer import PrioritizedReplayBuffer
@@ -25,8 +27,14 @@ class BufferManager:
                 'alpha': buffer.alpha,
                 'epsilon': buffer.epsilon,
             }
-            with open(self.buffer_path, 'wb') as f:
-                pickle.dump(buffer_state, f)
+            tmp_fd, tmp_path = tempfile.mkstemp(dir=self.buffer_dir, suffix='.tmp')
+            try:
+                with os.fdopen(tmp_fd, 'wb') as f:
+                    pickle.dump(buffer_state, f)
+                os.replace(tmp_path, self.buffer_path)
+            except Exception:
+                os.unlink(tmp_path)
+                raise
             return True
         except Exception as e:
             print(f"Error saving buffer: {e}")
