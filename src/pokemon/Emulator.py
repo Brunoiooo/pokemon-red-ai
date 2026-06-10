@@ -32,7 +32,7 @@ class Emulator:
     ]
 
     ticks_per_step_on_press = 16
-    ticks_per_step_after_press = 256
+    ticks_per_step_after_press = 16
     ALL_BUTTONS = ["a", "b", "start", "select", "left", "right", "up", "down"]
 
     __use_sdl: bool = False
@@ -65,6 +65,8 @@ class Emulator:
         if self.__pyboy is None:
             window_str = "SDL2" if self.use_sdl else "null"
             self.__pyboy = PyBoy(f"rom.gb", sound_emulated=False, window=window_str, cgb=False)
+            if not self.use_sdl:
+                self.__pyboy.set_emulation_speed(0)
             if self.__data is not None:
                 self.__data.pyboy = self.__pyboy
 

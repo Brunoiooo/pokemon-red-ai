@@ -27,7 +27,7 @@ class Data:
 
     in_menu_count: float = 0.0
     in_battle_count: float = 0.0
-    max_useless_count: int = 32
+    max_useless_count: int = 150
     __player_pokemon_size: int = 0x2C
     __pokemon_count: int = 6
     buffer_reward: float = 0.0

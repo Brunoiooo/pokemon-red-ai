@@ -54,6 +54,7 @@ class TrainWorker:
 
     max_last_saves: int = 10
     max_best_saves: int = 3
+    eval_interval_seconds: int = 120
 
     def __post_init__(self):
         self.manager = mp.Manager()
@@ -401,7 +402,7 @@ class TrainWorker:
 
             while self.event_start.is_set():
                 try:
-                    item = self.queue_data.get_nowait()
+                    item = self.queue_data.get(timeout=0.1)
                 except queue.Empty:
                     continue
 
@@ -475,6 +476,11 @@ class TrainWorker:
                 self.queue_logs.put_nowait(f"Finished evaluation {avg_ret:.6f}.")
 
                 evaluation_count += 1
+
+                for _ in range(self.eval_interval_seconds):
+                    if not self.event_start.is_set():
+                        break
+                    sleep(1)
 
         except Exception as e:
             self._safe_log(f"{e}\n{traceback.print_exc()}")
