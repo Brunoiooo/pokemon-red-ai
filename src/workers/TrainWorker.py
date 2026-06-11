@@ -65,6 +65,7 @@ class TrainWorker:
         self.event_start = self.manager.Event()
         self.queue_logs = self.manager.Queue()
         self.queue_dots = self.manager.Queue()
+        self.stats_queue = self.manager.Queue(maxsize=2000)
         self.model_lock = threading.RLock()
         self.files_lock = self.manager.RLock()
         self.eval_lock = threading.RLock()
@@ -188,8 +189,8 @@ class TrainWorker:
     @property
     def scaler(self):
         if self.__scaler is None and self.device == "cuda":
-            from torch.cuda.amp import GradScaler
-            self.__scaler = GradScaler()
+            from torch.amp import GradScaler
+            self.__scaler = GradScaler("cuda")
         return self.__scaler
 
     def _autocast(self):
@@ -295,6 +296,7 @@ class TrainWorker:
                 ExperienceWorker(
                     queue_logs=self.queue_logs,
                     queue_data=self.queue_data,
+                    stats_queue=self.stats_queue,
                     gamma=self.gamma,
                     window=self.train_use_sdl,
                     recv_conn=recv_conn,
@@ -356,6 +358,7 @@ class TrainWorker:
 
                     if self.count % 500 == 0:
                         self.save_buffer_to_disk()
+                        self.last_buffer_save = self.count
 
                     self.count += 1
         except Exception as e:
@@ -365,7 +368,8 @@ class TrainWorker:
                 self.event_start.clear()
             except (BrokenPipeError, EOFError, OSError):
                 pass
-            self.save_buffer_to_disk()
+            if self.count - self.last_buffer_save >= 50:
+                self.save_buffer_to_disk()
             self._safe_log("Train stopped.")
 
     def run_workers(self):
@@ -609,6 +613,8 @@ class TrainWorker:
         self.optimizer.zero_grad(set_to_none=True)
 
         total_td_errors = np.zeros(self.batch_size, dtype=np.float32)
+        _last_q_mean = 0.0
+        _loss_val = 0.0
 
         for i in range(self.grad_accum_steps):
             sl = slice(i * micro, (i + 1) * micro)
@@ -668,6 +674,7 @@ class TrainWorker:
                 log_p = torch.log(dist_sa.float() + 1e-8)
                 per_sample_loss = -(m * log_p).sum(dim=1)
                 total_td_errors[sl] = per_sample_loss.detach().cpu().numpy()
+                _last_q_mean = out["q"].detach().float().mean().item()
             else:
                 # Standard DQN fallback
                 q_sa = out.gather(1, a.view(-1, 1)).squeeze(1)
@@ -695,8 +702,10 @@ class TrainWorker:
                 td = target - q_sa
                 total_td_errors[sl] = td.detach().abs().cpu().numpy()
                 per_sample_loss = torch.nn.functional.smooth_l1_loss(q_sa, target, reduction="none")
+                _last_q_mean = q_sa.detach().float().mean().item()
 
             loss = (per_sample_loss * w).mean()
+            _loss_val = loss.item()
             loss = loss / self.grad_accum_steps
             if self.scaler is not None:
                 self.scaler.scale(loss).backward()
@@ -706,7 +715,7 @@ class TrainWorker:
         with self.model_lock:
             if self.scaler is not None:
                 self.scaler.unscale_(self.optimizer)
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+            grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0).item()
         if self.scaler is not None:
             self.scaler.step(self.optimizer)
             self.scaler.update()
@@ -719,6 +728,20 @@ class TrainWorker:
 
         self._opt_steps += 1
         self.soft_update_target()
+
+        if self._opt_steps % 50 == 0:
+            try:
+                self.stats_queue.put_nowait({
+                    "type": "train_step",
+                    "opt_step": self._opt_steps,
+                    "loss": _loss_val,
+                    "td_error_mean": float(total_td_errors.mean()),
+                    "td_error_max": float(total_td_errors.max()),
+                    "q_mean": _last_q_mean,
+                    "grad_norm": grad_norm,
+                })
+            except Exception:
+                pass
 
     def collate_states(self, list_of_dicts: tuple[Any, ...]):
         batch = {}

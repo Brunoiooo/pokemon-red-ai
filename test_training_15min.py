@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 import sys
+import warnings
+warnings.filterwarnings("ignore", message="Detected call of `lr_scheduler.step\\(\\)` before `optimizer.step\\(\\)`")
 sys.path.insert(0, "src")
 import time
 import torch
@@ -36,10 +38,22 @@ def main():
     last_count = 0
     last_opt = 0
     evals = []
+    last_train_stat = {}
+    last_ep_stat = {}
+    global_ep = 0
 
     try:
         while time.time() - start_time < 900:  # 15 minutes
             time.sleep(0.5)
+
+            # Collect training/episode stats
+            while not trainer.stats_queue.empty():
+                stat = trainer.stats_queue.get_nowait()
+                if stat.get("type") == "train_step":
+                    last_train_stat = stat
+                elif stat.get("type") == "episode":
+                    last_ep_stat = stat
+                    global_ep += 1
 
             # Print metrics every 30 seconds
             if time.time() - last_print > 30:
@@ -55,6 +69,23 @@ def main():
                 print(f"[{format_time(elapsed)}] Steps: {current_count:7d} ({steps_per_sec:5.1f} s/s) | "
                       f"Opt: {opt_steps:6d} ({opt_per_sec:4.1f} opt/s) | "
                       f"Buf: {buffer_pct:5.1f}% ({buffer_size:6d})")
+
+                if last_train_stat:
+                    print(f"           "
+                          f"Loss: {last_train_stat.get('loss', 0):.4f} | "
+                          f"TD_err: {last_train_stat.get('td_error_mean', 0):.3f} | "
+                          f"Q_mean: {last_train_stat.get('q_mean', 0):.3f} | "
+                          f"GradNorm: {last_train_stat.get('grad_norm', 0):.3f}")
+
+                if last_ep_stat:
+                    ac = last_ep_stat.get("action_counts", [0]*8)
+                    dominant = max(range(8), key=lambda i: ac[i]) if ac else 0
+                    action_names = ["A", "B", "Start", "Sel", "L", "R", "Up", "Dn"]
+                    print(f"           "
+                          f"Ep#{global_ep} len={last_ep_stat.get('episode_length', 0)} | "
+                          f"Eps={last_ep_stat.get('epsilon', 0):.4f} | "
+                          f"Rew={last_ep_stat.get('total_reward', 0):.3f} | "
+                          f"Top: {action_names[dominant]}({ac[dominant]})")
 
                 last_count = current_count
                 last_opt = opt_steps

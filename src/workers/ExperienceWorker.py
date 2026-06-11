@@ -23,17 +23,19 @@ from pokemon.ModelPokemon import ModelPokemon, get_model
 class ExperienceWorker:
     queue_logs: Queue
     queue_data: Queue
+    stats_queue: Queue
     window: Synchronized
     gamma: float
     recv_conn: PipeConnection
     event_start: Event
     files_lock: RLock
     td_error_steps = 10
-    start_save_chance = 0.4
-    max_stuck_epsilon = 0.02
+    start_save_chance = 0.8
+    max_stuck_epsilon = 0.15
     min_stuck_epsilon = 0.0
     epsilon_decay_steps: int = field(default=500_000, init=False)
     _total_steps: int = field(default=0, init=False)
+    _last_epsilon: float = field(default=0.0, init=False)
     _state_buffer: deque = field(default_factory=lambda: deque(maxlen=64), init=False)
     init_model_state_dict: dict[str, Any]
     max_episode_steps: int = 5000
@@ -119,8 +121,13 @@ class ExperienceWorker:
         self._state_buffer.clear()
         memory, inputs = self.emulator.reset(dir=self.random_save_path)
 
+        action_counter = [0] * 8
+        total_episode_reward = 0.0
+        step_count = 0
+
         while self.event_start.is_set():
             action = self.get_action(inputs)
+            action_counter[action] += 1
 
             if focused and keyboard.is_pressed("ctrl"):
                 key = keyboard.read_key()
@@ -146,6 +153,9 @@ class ExperienceWorker:
                 self.emulator.step(memory=memory, action=action)
             )
 
+            total_episode_reward += reward
+            step_count += 1
+
             self.buffer.append(
                 {
                     "inputs": self.detach_to_cpu(inputs),
@@ -161,6 +171,16 @@ class ExperienceWorker:
             )
 
             if truncated:
+                try:
+                    self.stats_queue.put_nowait({
+                        "type": "episode",
+                        "episode_length": step_count,
+                        "epsilon": self._last_epsilon,
+                        "action_counts": action_counter,
+                        "total_reward": total_episode_reward,
+                    })
+                except Exception:
+                    pass
                 break
 
             memory, inputs = next_memory, next_inputs
@@ -173,6 +193,7 @@ class ExperienceWorker:
     def get_action(self, inputs: dict[float]):
         frac = min(1.0, self._total_steps / self.epsilon_decay_steps)
         epsilon = self.max_stuck_epsilon - frac * (self.max_stuck_epsilon - self.min_stuck_epsilon)
+        self._last_epsilon = epsilon
         self._total_steps += 1
 
         model_inputs = inputs

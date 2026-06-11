@@ -3,6 +3,7 @@ import sys
 import warnings
 warnings.filterwarnings("ignore", message="Detected call of `lr_scheduler.step\\(\\)` before `optimizer.step\\(\\)`")
 sys.path.insert(0, "src")
+import csv
 import time
 import argparse
 import torch
@@ -52,7 +53,21 @@ def main():
     print(f"Eval GUI: {eval_gui_mode}")
 
     Path("logs").mkdir(exist_ok=True)
-    log_file = Path("logs") / f"train_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    session_name = datetime.now().strftime('%Y%m%d_%H%M%S')
+    log_file = Path("logs") / f"train_{session_name}.log"
+    log_file_handle = open(log_file, "w", buffering=1)
+
+    train_csv_path = Path("logs") / f"train_steps_{session_name}.csv"
+    episode_csv_path = Path("logs") / f"episodes_{session_name}.csv"
+    train_csv_file = open(train_csv_path, "w", newline="")
+    episode_csv_file = open(episode_csv_path, "w", newline="")
+    train_csv_writer = csv.DictWriter(train_csv_file, fieldnames=[
+        "opt_step", "timestamp", "loss", "td_error_mean", "td_error_max", "q_mean", "grad_norm"])
+    episode_csv_writer = csv.DictWriter(episode_csv_file, fieldnames=[
+        "episode", "timestamp", "length", "epsilon", "total_reward",
+        "action_0", "action_1", "action_2", "action_3", "action_4", "action_5", "action_6", "action_7"])
+    train_csv_writer.writeheader()
+    episode_csv_writer.writeheader()
 
     if args.reset_buffer:
         from utils.BufferManager import BufferManager
@@ -85,8 +100,10 @@ def main():
     last_count = 0
     last_print = time.time()
     last_opt = 0
-    log_messages = []
     evals = []
+    global_ep = 0
+    last_train_stat = {}
+    last_ep_stat = {}
 
     metrics = MetricsCollector()
 
@@ -97,9 +114,7 @@ def main():
             # Collect logs
             while not trainer.queue_logs.empty():
                 msg = trainer.queue_logs.get_nowait()
-                log_messages.append(msg)
-                if len(log_messages) > 10000:
-                    log_messages = log_messages[-5000:]
+                log_file_handle.write(msg + "\n")
 
             # Collect evaluation results
             while not trainer.queue_dots.empty():
@@ -124,6 +139,36 @@ def main():
                     print(f"Delta: {trend} {abs(delta):+.4f}")
                 print(f"{'='*70}\n")
 
+            # Collect training/episode stats
+            elapsed = time.time() - start_time
+            while not trainer.stats_queue.empty():
+                stat = trainer.stats_queue.get_nowait()
+                if stat.get("type") == "train_step":
+                    last_train_stat = stat
+                    train_csv_writer.writerow({
+                        "opt_step": stat["opt_step"],
+                        "timestamp": f"{elapsed:.1f}",
+                        "loss": f"{stat['loss']:.6f}",
+                        "td_error_mean": f"{stat['td_error_mean']:.6f}",
+                        "td_error_max": f"{stat['td_error_max']:.6f}",
+                        "q_mean": f"{stat['q_mean']:.6f}",
+                        "grad_norm": f"{stat['grad_norm']:.6f}",
+                    })
+                    train_csv_file.flush()
+                elif stat.get("type") == "episode":
+                    last_ep_stat = stat
+                    global_ep += 1
+                    ac = stat.get("action_counts", [0]*8)
+                    episode_csv_writer.writerow({
+                        "episode": global_ep,
+                        "timestamp": f"{elapsed:.1f}",
+                        "length": stat.get("episode_length", 0),
+                        "epsilon": f"{stat.get('epsilon', 0):.5f}",
+                        "total_reward": f"{stat.get('total_reward', 0):.4f}",
+                        **{f"action_{i}": ac[i] if i < len(ac) else 0 for i in range(8)},
+                    })
+                    episode_csv_file.flush()
+
             # Print metrics every 30 seconds
             if time.time() - last_print > 30:
                 elapsed = time.time() - start_time
@@ -141,6 +186,24 @@ def main():
                           f"Opt: {opt_steps:6d} ({opt_per_sec:4.1f} opt/s) | "
                           f"Buf: {buffer_pct:5.1f}%")
 
+                    if last_train_stat:
+                        print(f"           "
+                              f"Loss: {last_train_stat.get('loss', 0):.4f} | "
+                              f"TD_err: {last_train_stat.get('td_error_mean', 0):.3f} "
+                              f"(max {last_train_stat.get('td_error_max', 0):.2f}) | "
+                              f"Q_mean: {last_train_stat.get('q_mean', 0):.3f} | "
+                              f"GradNorm: {last_train_stat.get('grad_norm', 0):.3f}")
+
+                    if last_ep_stat:
+                        ac = last_ep_stat.get("action_counts", [0]*8)
+                        dominant = max(range(8), key=lambda i: ac[i]) if ac else 0
+                        action_names = ["A", "B", "Start", "Sel", "L", "R", "Up", "Dn"]
+                        print(f"           "
+                              f"Ep#{global_ep} len={last_ep_stat.get('episode_length', 0)} | "
+                              f"Eps={last_ep_stat.get('epsilon', 0):.4f} | "
+                              f"Rew={last_ep_stat.get('total_reward', 0):.3f} | "
+                              f"Top action: {action_names[dominant]}({ac[dominant]})")
+
                     # Collect metrics
                     metrics.add_step_metrics(
                         step=current_count,
@@ -148,6 +211,12 @@ def main():
                         buffer_size=buffer_size,
                         buffer_pct=buffer_pct,
                         steps_per_sec=steps_per_sec,
+                        loss=last_train_stat.get("loss", 0.0),
+                        td_error=last_train_stat.get("td_error_mean", 0.0),
+                        td_error_max=last_train_stat.get("td_error_max", 0.0),
+                        q_mean=last_train_stat.get("q_mean", 0.0),
+                        grad_norm=last_train_stat.get("grad_norm", 0.0),
+                        epsilon=last_ep_stat.get("epsilon", 0.0),
                     )
 
                     last_count = current_count
@@ -194,12 +263,18 @@ def main():
         print(f"Detailed metrics saved to: {metrics_file}\n")
 
     finally:
-        # Save logs
-        log_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(log_file, "w") as f:
-            for msg in log_messages:
-                f.write(msg + "\n")
+        # Flush remaining logs from queue
+        while not trainer.queue_logs.empty():
+            try:
+                log_file_handle.write(trainer.queue_logs.get_nowait() + "\n")
+            except Exception:
+                break
+        log_file_handle.close()
         print(f"Logs saved to: {log_file}")
+        train_csv_file.close()
+        episode_csv_file.close()
+        print(f"Training stats: {train_csv_path}")
+        print(f"Episode stats:  {episode_csv_path}")
 
 if __name__ == "__main__":
     main()
