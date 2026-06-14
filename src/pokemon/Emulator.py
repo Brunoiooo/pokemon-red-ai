@@ -17,23 +17,27 @@ import keyboard
 import time
 
 
+DURATION_BINS = [16, 32, 64, 128, 255]
+N_ACTIONS = 9       # 8 buttons + none
+N_META_ACTIONS = N_ACTIONS * len(DURATION_BINS)   # 45
+
+
 @dataclass
 class Emulator:
     files_lock: RLock
     saves = "saves"
     buttons = [
-        ["a"],
-        ["b"],
-        ["start"],
-        ["select"],
-        ["left"],
-        ["right"],
-        ["up"],
-        ["down"],
+        ["a"],       # 0
+        ["b"],       # 1
+        ["start"],   # 2
+        ["select"],  # 3
+        ["left"],    # 4
+        ["right"],   # 5
+        ["up"],      # 6
+        ["down"],    # 7
+        [],          # 8 — none (no button pressed)
     ]
 
-    ticks_per_step_on_press = 16
-    ticks_per_step_after_press = 16
     ALL_BUTTONS = ["a", "b", "start", "select", "left", "right", "up", "down"]
 
     __use_sdl: bool = False
@@ -98,12 +102,23 @@ class Emulator:
 
         return (bytes(self.pyboy.memory[0:0x10000]), self.data.inputs())
 
-    def step(self, memory: bytes, action: int):
-        self.ticks(action)
+    def step(self, memory: bytes, meta_action: int, render_each: bool = False):
+        action_idx = meta_action // len(DURATION_BINS)
+        duration = DURATION_BINS[meta_action % len(DURATION_BINS)]
 
-        reward = self.data.reward(memory=memory, action=action)
+        self.ticks(meta_action, render_each=render_each)
 
-        self.data.count(reward=reward, action=action, memory=memory)
+        milestone, step = self.data.reward(memory=memory, action=action_idx)
+
+        min_d = DURATION_BINS[0]
+        if step > 0:
+            step *= min_d / duration
+        elif step < 0:
+            step *= duration / min_d
+
+        reward = milestone + step
+
+        self.data.count(reward=reward, action=action_idx, memory=memory, duration=duration)
 
         terminated = self.data.terminated(memory)
 
@@ -111,6 +126,11 @@ class Emulator:
 
         if truncated:
             reward = self.data.truncated_reward
+            milestone = reward
+            step = 0.0
+
+        self.last_milestone = milestone
+        self.last_step = step
 
         if self.is_milestone(memory=memory):
             self.data.clean()
@@ -143,32 +163,34 @@ class Emulator:
         )
 
         while True:
-            action = 0
+            action_idx = 8  # none
 
             key = keyboard.read_key()
             if key == "up":
-                action = 6
+                action_idx = 6
             elif key == "down":
-                action = 7
+                action_idx = 7
             elif key == "left":
-                action = 4
+                action_idx = 4
             elif key == "right":
-                action = 5
+                action_idx = 5
             elif key == "a":
-                action = 0
+                action_idx = 0
             elif key == "b":
-                action = 1
+                action_idx = 1
             elif key == "space":
-                action = 2
+                action_idx = 2
             elif key == "enter":
-                action = 3
+                action_idx = 3
             elif key == "q":
                 break
             elif key == "e":
                 self.save_last_checkpoint("saves/manual")
 
+            meta_action = action_idx * len(DURATION_BINS) + 0  # 16-tick bin
+
             memory, inputs, reward, terminated, truncated = self.step(
-                memory=memory, action=action
+                memory=memory, meta_action=meta_action
             )
 
             # queue_logs.put_nowait(
@@ -213,16 +235,21 @@ class Emulator:
 
         self.pyboy.stop(False)
 
-    def ticks(self, action: int):
-        for button in self.buttons[action]:
+    def ticks(self, meta_action: int, render_each: bool = False):
+        action_idx = meta_action // len(DURATION_BINS)
+        duration = DURATION_BINS[meta_action % len(DURATION_BINS)]
+
+        for button in self.buttons[action_idx]:
             self.pyboy.button_press(button)
 
-        self.pyboy.tick(self.ticks_per_step_on_press)
+        if render_each:
+            for _ in range(duration):
+                self.pyboy.tick(1)
+        else:
+            self.pyboy.tick(duration)
 
-        for i in range(len(self.ALL_BUTTONS)):
-            self.pyboy.button_release(self.ALL_BUTTONS[i])
-
-        self.pyboy.tick(self.ticks_per_step_after_press)
+        for button in self.ALL_BUTTONS:
+            self.pyboy.button_release(button)
 
     def evaluate_greedy(
         self,
@@ -268,7 +295,7 @@ class Emulator:
             action = int(torch.argmax(q).item())
 
             next_memory, next_inputs, reward, terminated, truncated = self.step(
-                memory=memory, action=action
+                memory=memory, meta_action=action
             )
 
             if (
