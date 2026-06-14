@@ -13,6 +13,15 @@ from pathlib import Path
 from multiprocessing import set_start_method
 from workers.TrainWorker import TrainWorker
 from utils.MetricsCollector import MetricsCollector
+from pokemon.Emulator import DURATION_BINS, N_META_ACTIONS
+
+ACTION_NAMES = ["A", "B", "Start", "Sel", "L", "R", "Up", "Dn", "None"]
+
+
+def decode_meta_action(meta: int) -> str:
+    action_idx = meta // len(DURATION_BINS)
+    duration = DURATION_BINS[meta % len(DURATION_BINS)]
+    return f"{ACTION_NAMES[action_idx]}×{duration}"
 
 def format_time(seconds):
     hours, remainder = divmod(int(seconds), 3600)
@@ -34,6 +43,8 @@ def main():
                         help="Show GUI during evaluations only")
     parser.add_argument("--reset-buffer", "-rb", action="store_true",
                         help="Reset experience buffer (start fresh)")
+    parser.add_argument("--verbose", "-v", action="store_true",
+                        help="Print verbose logs (checkpoints, curriculum, worker events)")
 
     args = parser.parse_args()
 
@@ -51,6 +62,7 @@ def main():
     print(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"Mode: {gui_mode}")
     print(f"Eval GUI: {eval_gui_mode}")
+    print(f"Verbose: {'ON' if args.verbose else 'OFF'}")
 
     Path("logs").mkdir(exist_ok=True)
     session_name = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -65,7 +77,7 @@ def main():
         "opt_step", "timestamp", "loss", "td_error_mean", "td_error_max", "q_mean", "grad_norm"])
     episode_csv_writer = csv.DictWriter(episode_csv_file, fieldnames=[
         "episode", "timestamp", "length", "epsilon", "total_reward",
-        "action_0", "action_1", "action_2", "action_3", "action_4", "action_5", "action_6", "action_7"])
+        *[f"action_{i}" for i in range(N_META_ACTIONS)]])
     train_csv_writer.writeheader()
     episode_csv_writer.writeheader()
 
@@ -116,6 +128,11 @@ def main():
                 msg = trainer.queue_logs.get_nowait()
                 log_file_handle.write(msg + "\n")
 
+                # Verbose mode: print specific types of messages
+                if args.verbose:
+                    if any(keyword in msg for keyword in ["Checkpoint", "Curriculum", "reverting", "Worker", "Training"]):
+                        print(f"[LOG] {msg}")
+
             # Collect evaluation results
             while not trainer.queue_dots.empty():
                 count, avg_ret = trainer.queue_dots.get_nowait()
@@ -158,14 +175,14 @@ def main():
                 elif stat.get("type") == "episode":
                     last_ep_stat = stat
                     global_ep += 1
-                    ac = stat.get("action_counts", [0]*8)
+                    ac = stat.get("action_counts", [0]*N_META_ACTIONS)
                     episode_csv_writer.writerow({
                         "episode": global_ep,
                         "timestamp": f"{elapsed:.1f}",
                         "length": stat.get("episode_length", 0),
                         "epsilon": f"{stat.get('epsilon', 0):.5f}",
                         "total_reward": f"{stat.get('total_reward', 0):.4f}",
-                        **{f"action_{i}": ac[i] if i < len(ac) else 0 for i in range(8)},
+                        **{f"action_{i}": ac[i] if i < len(ac) else 0 for i in range(N_META_ACTIONS)},
                     })
                     episode_csv_file.flush()
 
@@ -195,14 +212,13 @@ def main():
                               f"GradNorm: {last_train_stat.get('grad_norm', 0):.3f}")
 
                     if last_ep_stat:
-                        ac = last_ep_stat.get("action_counts", [0]*8)
-                        dominant = max(range(8), key=lambda i: ac[i]) if ac else 0
-                        action_names = ["A", "B", "Start", "Sel", "L", "R", "Up", "Dn"]
+                        ac = last_ep_stat.get("action_counts", [0]*N_META_ACTIONS)
+                        dominant = max(range(N_META_ACTIONS), key=lambda i: ac[i]) if ac else 0
                         print(f"           "
                               f"Ep#{global_ep} len={last_ep_stat.get('episode_length', 0)} | "
                               f"Eps={last_ep_stat.get('epsilon', 0):.4f} | "
                               f"Rew={last_ep_stat.get('total_reward', 0):.3f} | "
-                              f"Top action: {action_names[dominant]}({ac[dominant]})")
+                              f"Top action: {decode_meta_action(dominant)}({ac[dominant]})")
 
                     # Collect metrics
                     metrics.add_step_metrics(

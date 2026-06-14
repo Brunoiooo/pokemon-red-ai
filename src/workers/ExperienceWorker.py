@@ -82,7 +82,9 @@ class ExperienceWorker:
             checkpoint_name = f"dynamic_ckpt_{len(self._checkpoint_stack)}"
             # Note: actual save would happen here if we had access to emulator state
             self._checkpoint_stack.append(checkpoint_name)
-            self.queue_logs.put(f"Checkpoint {len(self._checkpoint_stack)-1}: {reason}")
+            stack_depth = len(self._checkpoint_stack) - 1
+            truncates = self._truncate_counter
+            self.queue_logs.put(f"Checkpoint #{stack_depth}: {reason} | Stack depth: {stack_depth} | Truncates reset")
             self._truncate_counter = 0
         except Exception as e:
             self.queue_logs.put(f"Failed to save checkpoint: {e}")
@@ -92,10 +94,10 @@ class ExperienceWorker:
         self._truncate_counter += 1
         if self._truncate_counter >= 10:
             if len(self._checkpoint_stack) > 1:
-                self._checkpoint_stack.pop()
+                reverted_from = self._checkpoint_stack.pop()
                 reverted_to = self._checkpoint_stack[-1]
                 self._visited_maps_in_stack.clear()
-                self.queue_logs.put(f"Truncated 10x without progress - reverting to: {reverted_to}")
+                self.queue_logs.put(f"Truncate recovery: 10x in row | Reverting from {reverted_from} → {reverted_to} | Stack depth: {len(self._checkpoint_stack)-1}")
             self._truncate_counter = 0
 
     __model_state_dict: dict[str, Any] | None = None
