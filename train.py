@@ -53,7 +53,7 @@ def run(args):
     Path("logs").mkdir(exist_ok=True)
     session_name = datetime.now().strftime('%Y%m%d_%H%M%S')
     log_file = Path("logs") / f"train_{session_name}.log"
-    log_file_handle = open(log_file, "w", buffering=1)
+    log_file_handle = open(log_file, "w", buffering=1, encoding="utf-8")
 
     train_csv_path = Path("logs") / f"train_steps_{session_name}.csv"
     episode_csv_path = Path("logs") / f"episodes_{session_name}.csv"
