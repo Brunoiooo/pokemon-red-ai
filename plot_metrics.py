@@ -140,6 +140,23 @@ def print_summary(train_file, episode_file=None):
             action_names = ["A", "B", "Start", "Sel", "L", "R", "Up", "Dn"]
             print("Actions:   " + "  ".join(f"{n}={t/total_sum*100:.0f}%" for n, t in zip(action_names, totals)))
 
+def run(args):
+    train_csv = getattr(args, "train_csv", None)
+    if train_csv:
+        train_file = train_csv
+        session = Path(train_file).stem.replace("train_steps_", "")
+        episode_file = f"logs/episodes_{session}.csv"
+        if not os.path.exists(episode_file):
+            episode_file = None
+    else:
+        train_file, episode_file = find_latest_session()
+        if not train_file:
+            print("No training CSV files found in logs/")
+            return
+        print(f"Using: {train_file}")
+    plot(train_file, episode_file)
+
+
 if __name__ == "__main__":
     if len(sys.argv) > 1:
         train_file = sys.argv[1]

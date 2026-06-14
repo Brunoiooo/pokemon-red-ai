@@ -33,21 +33,7 @@ def print_header(msg):
     print(f"  {msg}")
     print(f"{'='*70}\n")
 
-def main():
-    parser = argparse.ArgumentParser(description="Pokemon Red AI Headless Training")
-    parser.add_argument("--gui", "-g", action="store_true",
-                        help="Enable GUI (show game window)")
-    parser.add_argument("--workers", "-w", type=int, default=5,
-                        help="Number of experience workers (default: 5)")
-    parser.add_argument("--eval-gui", "-eg", action="store_true",
-                        help="Show GUI during evaluations only")
-    parser.add_argument("--reset-buffer", "-rb", action="store_true",
-                        help="Reset experience buffer (start fresh)")
-    parser.add_argument("--verbose", "-v", action="store_true",
-                        help="Print verbose logs (checkpoints, curriculum, worker events)")
-
-    args = parser.parse_args()
-
+def run(args):
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
     torch.backends.cudnn.benchmark = True
@@ -291,6 +277,22 @@ def main():
         episode_csv_file.close()
         print(f"Training stats: {train_csv_path}")
         print(f"Episode stats:  {episode_csv_path}")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Pokemon Red AI Headless Training")
+    parser.add_argument("--gui", "-g", action="store_true",
+                        help="Enable GUI (show game window)")
+    parser.add_argument("--workers", "-w", type=int, default=5,
+                        help="Number of experience workers (default: 5)")
+    parser.add_argument("--eval-gui", "-eg", action="store_true",
+                        help="Show GUI during evaluations only")
+    parser.add_argument("--reset-buffer", "-rb", action="store_true",
+                        help="Reset experience buffer (start fresh)")
+    parser.add_argument("--verbose", "-v", action="store_true",
+                        help="Print verbose logs (checkpoints, curriculum, worker events)")
+    run(parser.parse_args())
+
 
 if __name__ == "__main__":
     main()

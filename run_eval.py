@@ -11,7 +11,7 @@ from multiprocessing import RLock
 
 import torch
 
-from pokemon.Emulator import Emulator
+from pokemon.Emulator import Emulator, N_META_ACTIONS, DURATION_BINS
 from pokemon.ModelPokemon import get_model
 
 os.environ.setdefault("CUDA_DEVICE_MAX_CONNECTIONS", "32")
@@ -19,7 +19,9 @@ torch.set_float32_matmul_precision("high")
 
 BADGE_NAMES = ["Boulder", "Cascade", "Thunder", "Rainbow", "Soul", "Marsh", "Volcano", "Earth"]
 
-ACTION_NAMES = ["A", "B", "Start", "Select", "Left", "Right", "Up", "Down"]
+_BTN_NAMES = ["A", "B", "Start", "Select", "Left", "Right", "Up", "Down", "None"]
+_DURATIONS = [16, 32, 64, 128, 255]
+ACTION_NAMES = [f"{_BTN_NAMES[i // len(_DURATIONS)]}_{_DURATIONS[i % len(_DURATIONS)]}" for i in range(len(_BTN_NAMES) * len(_DURATIONS))]
 
 
 def fmt_time(seconds: float) -> str:
@@ -38,11 +40,11 @@ def load_model(model_path: str, device: torch.device, files_lock):
 
 
 def run_episode(emulator: Emulator, model, device: torch.device, checkpoint: str,
-                max_steps: int, verbose: bool):
+                max_steps: int, verbose: bool, human_speed: bool = False):
     memory, inputs = emulator.reset(dir=checkpoint)
     total_reward = 0.0
     step = 0
-    action_counts = [0] * 8
+    action_counts = [0] * N_META_ACTIONS
     start = time.time()
 
     while step < max_steps:
@@ -57,15 +59,19 @@ def run_episode(emulator: Emulator, model, device: torch.device, checkpoint: str
         action_counts[action] += 1
 
         next_memory, next_inputs, reward, terminated, truncated = emulator.step(
-            memory=memory, action=action
+            memory=memory, meta_action=action, render_each=human_speed
         )
         total_reward += reward
 
-        if verbose and step % 500 == 0:
-            badges = sum(emulator.data.badges(emulator.pyboy.memory))
-            tiles = len(emulator.data.visited_positions)
-            elapsed = time.time() - start
-            print(f"  step={step:5d}  reward={total_reward:8.3f}  badges={badges}  tiles={tiles}  {fmt_time(elapsed)}")
+        if verbose:
+            btn = _BTN_NAMES[action // len(DURATION_BINS)]
+            dur = DURATION_BINS[action % len(DURATION_BINS)]
+            ms = emulator.last_milestone
+            st = emulator.last_step
+            if ms != 0.0 or st != 0.0:
+                badges = sum(emulator.data.badges(emulator.pyboy.memory))
+                tiles = len(emulator.data.visited_positions)
+                print(f"  step={step:5d}  {btn:6s} {dur:3d}t  milestone={ms:+.3f}  step={st:+.3f}  total={total_reward:8.3f}  badges={badges}  tiles={tiles}")
 
         if terminated or truncated:
             break
@@ -93,26 +99,7 @@ def print_separator(char="=", width=64):
     print(char * width)
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Evaluate a trained Pokemon Red AI model (dry run, no training)"
-    )
-    parser.add_argument("--model", "-m", default="models/best.pth",
-                        help="Path to .pth checkpoint (default: models/best.pth)")
-    parser.add_argument("--episodes", "-e", type=int, default=1,
-                        help="Number of episodes (default: 1)")
-    parser.add_argument("--checkpoint", "-c", default="start",
-                        help="Save-state dir under saves/ to start from (default: start)")
-    parser.add_argument("--max-steps", "-s", type=int, default=5000,
-                        help="Max steps per episode (default: 5000)")
-    parser.add_argument("--gui", action="store_true",
-                        help="Show game window during evaluation")
-    parser.add_argument("--verbose", "-v", action="store_true",
-                        help="Print progress every 500 steps")
-    parser.add_argument("--cpu", action="store_true",
-                        help="Force CPU even if CUDA is available")
-    args = parser.parse_args()
-
+def run(args):
     if not Path(args.model).exists():
         print(f"[ERROR] Model not found: {args.model}")
         sys.exit(1)
@@ -128,6 +115,7 @@ def main():
     print(f"  Max steps:   {args.max_steps}")
     print(f"  Checkpoint:  saves/{args.checkpoint}")
     print(f"  GUI:         {'yes' if args.gui else 'no'}")
+    print(f"  Speed:       {'1x (human)' if args.human_speed else 'max'}")
     print_separator()
 
     files_lock = RLock()
@@ -141,7 +129,9 @@ def main():
         sys.exit(1)
 
     emulator = Emulator(files_lock=files_lock)
-    emulator.use_sdl = args.gui
+    emulator.use_sdl = args.gui or args.human_speed
+    if args.human_speed:
+        emulator.pyboy.set_emulation_speed(1)
 
     all_results = []
 
@@ -154,6 +144,7 @@ def main():
             checkpoint=args.checkpoint,
             max_steps=args.max_steps,
             verbose=args.verbose,
+            human_speed=args.human_speed,
         )
         all_results.append(result)
 
@@ -184,6 +175,29 @@ def main():
         print(f"  Badges   avg={sum(badge_counts)/len(badge_counts):.2f}  max={max(badge_counts)}")
         print(f"  Total time: {fmt_time(sum(r['time'] for r in all_results))}")
         print_separator("-")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Evaluate a trained Pokemon Red AI model (dry run, no training)"
+    )
+    parser.add_argument("--model", "-m", default="models/best.pth",
+                        help="Path to .pth checkpoint (default: models/best.pth)")
+    parser.add_argument("--episodes", "-e", type=int, default=1,
+                        help="Number of episodes (default: 1)")
+    parser.add_argument("--checkpoint", "-c", default="start",
+                        help="Save-state dir under saves/ to start from (default: start)")
+    parser.add_argument("--max-steps", "-s", type=int, default=5000,
+                        help="Max steps per episode (default: 5000)")
+    parser.add_argument("--gui", action="store_true",
+                        help="Show game window during evaluation")
+    parser.add_argument("--human-speed", action="store_true",
+                        help="Run emulator at real-time speed (1x) instead of max speed")
+    parser.add_argument("--verbose", "-v", action="store_true",
+                        help="Print progress every 500 steps")
+    parser.add_argument("--cpu", action="store_true",
+                        help="Force CPU even if CUDA is available")
+    run(parser.parse_args())
 
 
 if __name__ == "__main__":

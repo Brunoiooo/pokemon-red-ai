@@ -100,6 +100,13 @@ def evaluate_model(model_path: str, num_episodes: int = 1, checkpoint: str = "st
     emulator.pyboy.stop(False)
     print("\n✓ Evaluation complete")
 
+def run(args):
+    if not Path(args.model).exists():
+        print(f"✗ Model file not found: {args.model}")
+        return
+    evaluate_model(args.model, num_episodes=args.episodes, checkpoint=args.checkpoint)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Evaluate Pokemon Red AI model")
     parser.add_argument("--model", "-m", type=str, default="models/best.pth",
@@ -108,14 +115,7 @@ def main():
                         help="Number of episodes to run (default: 1)")
     parser.add_argument("--checkpoint", "-c", type=str, default="start",
                         help="Starting checkpoint name (default: start)")
-
-    args = parser.parse_args()
-
-    if not Path(args.model).exists():
-        print(f"✗ Model file not found: {args.model}")
-        return
-
-    evaluate_model(args.model, num_episodes=args.episodes, checkpoint=args.checkpoint)
+    run(parser.parse_args())
 
 if __name__ == "__main__":
     main()

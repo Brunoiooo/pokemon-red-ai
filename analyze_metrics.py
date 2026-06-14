@@ -51,15 +51,7 @@ def analyze_metrics(metrics_file):
 
     print(f"{'='*70}\n")
 
-def main():
-    parser = argparse.ArgumentParser(description="Analyze training metrics")
-    parser.add_argument("--file", "-f", type=str,
-                        help="Metrics JSON file to analyze")
-    parser.add_argument("--latest", "-l", action="store_true",
-                        help="Analyze latest metrics file")
-
-    args = parser.parse_args()
-
+def run(args):
     if args.latest:
         log_dir = Path("logs")
         metrics_files = list(log_dir.glob("metrics_*.json"))
@@ -79,6 +71,16 @@ def main():
         return
 
     analyze_metrics(metrics_file)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Analyze training metrics")
+    parser.add_argument("--file", "-f", type=str,
+                        help="Metrics JSON file to analyze")
+    parser.add_argument("--latest", "-l", action="store_true",
+                        help="Analyze latest metrics file")
+
+    run(parser.parse_args())
 
 if __name__ == "__main__":
     main()
