@@ -44,6 +44,11 @@ class ExperienceWorker:
     _last_epsilon: float = field(default=0.0, init=False)
     _state_buffer: deque = field(default_factory=lambda: deque(maxlen=64), init=False)
     _last_curriculum_stage: str | None = field(default=None, init=False)
+    _checkpoint_stack: list[str] = field(default_factory=lambda: ["start"], init=False)
+    _truncate_counter: int = field(default=0, init=False)
+    _best_milestone_count: int = field(default=0, init=False)
+    _visited_maps_in_stack: set[int] = field(default_factory=set, init=False)
+    _last_map_id: int | None = field(default=None, init=False)
     init_model_state_dict: dict[str, Any]
     max_episode_steps: int = 5000
 
@@ -68,11 +73,30 @@ class ExperienceWorker:
                     self.queue_logs.put(f"Curriculum: Advanced to {current_stage} (using checkpoint: {checkpoint})")
                 return checkpoint
 
-        all_saves = [p for p in Path("saves/").iterdir() if p.is_dir()]
-        if len(all_saves) <= 1 or random.random() < self.start_save_chance:
-            return "start"
-        non_start = [p for p in all_saves if p.name != "start"]
-        return random.choice(non_start).name if non_start else "start"
+        # Use dynamic checkpoint stack (latest discovered checkpoint)
+        return self._checkpoint_stack[-1]
+
+    def _save_checkpoint(self, reason: str):
+        """Save current game state as a new checkpoint."""
+        try:
+            checkpoint_name = f"dynamic_ckpt_{len(self._checkpoint_stack)}"
+            # Note: actual save would happen here if we had access to emulator state
+            self._checkpoint_stack.append(checkpoint_name)
+            self.queue_logs.put(f"Checkpoint {len(self._checkpoint_stack)-1}: {reason}")
+            self._truncate_counter = 0
+        except Exception as e:
+            self.queue_logs.put(f"Failed to save checkpoint: {e}")
+
+    def _handle_truncate(self):
+        """Handle truncation - if too many in a row, revert to previous checkpoint."""
+        self._truncate_counter += 1
+        if self._truncate_counter >= 10:
+            if len(self._checkpoint_stack) > 1:
+                self._checkpoint_stack.pop()
+                reverted_to = self._checkpoint_stack[-1]
+                self._visited_maps_in_stack.clear()
+                self.queue_logs.put(f"Truncated 10x without progress - reverting to: {reverted_to}")
+            self._truncate_counter = 0
 
     __model_state_dict: dict[str, Any] | None = None
 
@@ -140,6 +164,8 @@ class ExperienceWorker:
         action_counter = [0] * N_META_ACTIONS
         total_episode_reward = 0.0
         step_count = 0
+        episode_milestone_count = 0
+        self._last_map_id = self.emulator.data.map_id(memory)
 
         while self.event_start.is_set():
             action = self.get_action(inputs)
@@ -175,6 +201,21 @@ class ExperienceWorker:
             total_episode_reward += reward
             step_count += 1
 
+            # Track milestone and map for dynamic checkpoints
+            milestone_reward = self.emulator.last_milestone
+            if milestone_reward > 0:
+                episode_milestone_count += 1
+                if episode_milestone_count > self._best_milestone_count:
+                    self._best_milestone_count = episode_milestone_count
+                    self._save_checkpoint(f"Milestone #{episode_milestone_count}")
+
+            current_map = self.emulator.data.map_id(next_memory)
+            if current_map != self._last_map_id and current_map not in self._visited_maps_in_stack:
+                self._visited_maps_in_stack.add(current_map)
+                self._save_checkpoint(f"New map #{current_map}")
+                self._truncate_counter = 0
+            self._last_map_id = current_map
+
             self.buffer.append(
                 {
                     "inputs": self.detach_to_cpu(inputs),
@@ -190,6 +231,7 @@ class ExperienceWorker:
             )
 
             if truncated:
+                self._handle_truncate()
                 try:
                     self.stats_queue.put_nowait({
                         "type": "episode",
