@@ -54,7 +54,6 @@ class TrainWorker:
     buffer_manager: BufferManager = field(default=None, init=False, repr=False)
     last_buffer_save: int = field(default=0, init=False, repr=False)
 
-    max_last_saves: int = 10
     max_best_saves: int = 3
     eval_interval_seconds: int = 120
 
@@ -303,8 +302,9 @@ class TrainWorker:
                     event_start=self.event_start,
                     init_model_state_dict=model_state_dict,
                     files_lock=self.files_lock,
+                    worker_id=i,
                 )
-                for recv_conn, send_conn in self.experienceWorkerPipes
+                for i, (recv_conn, send_conn) in enumerate(self.experienceWorkerPipes)
             ]
 
         return self.__experienceWorkers
@@ -470,7 +470,6 @@ class TrainWorker:
                 with self.eval_lock:
                     count = self.count
 
-                save_last = f"last_{evaluation_count % self.max_last_saves}"
                 save_best = f"best_{evaluation_count % self.max_best_saves}"
 
                 (avg_ret, steps) = Emulator(files_lock=self.files_lock).evaluate_greedy(
@@ -478,14 +477,14 @@ class TrainWorker:
                     queue_logs=self.queue_logs,
                     is_debug=False,
                     is_evaluation_window=self.is_evaluation_window.value,
-                    save_name=save_last,
+                    save_name="eval_tmp",
                 )
 
                 if self.best_eval_return < avg_ret:
                     self.save_best(avg_ret)
                     with self.files_lock:
                         shutil.copytree(
-                            f"saves/{save_last}",
+                            "saves/eval_tmp",
                             f"saves/{save_best}",
                             dirs_exist_ok=True,
                         )
