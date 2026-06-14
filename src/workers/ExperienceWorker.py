@@ -54,7 +54,6 @@ class ExperienceWorker:
     _checkpoint_attempts: int = field(default=0, init=False)
     _fallback_to_start: bool = field(default=False, init=False)
     _new_checkpoint_this_episode: bool = field(default=False, init=False)
-    _visited_maps: set = field(default_factory=set, init=False)
 
     @property
     def worker_checkpoint_path(self) -> str:
@@ -94,7 +93,6 @@ class ExperienceWorker:
         if self._checkpoint_attempts >= 10:
             self._fallback_to_start = True
             self._checkpoint_attempts = 0
-            self._visited_maps.clear()
             self.queue_logs.put(f"Worker {self.worker_id}: 10 failed attempts → fallback to start")
         else:
             self.queue_logs.put(f"Worker {self.worker_id}: attempt {self._checkpoint_attempts}/10 failed")
@@ -163,6 +161,9 @@ class ExperienceWorker:
         self._new_checkpoint_this_episode = False
         memory, inputs = self.emulator.reset(dir=self.random_save_path)
 
+        visited_maps = set(self.emulator.data.visited_maps)
+        visited_dialogs = set(self.emulator.data.visited_dialogs.keys())
+
         action_counter = [0] * N_META_ACTIONS
         total_episode_reward = 0.0
         step_count = 0
@@ -205,9 +206,15 @@ class ExperienceWorker:
                 self._save_checkpoint(f"Milestone reward")
 
             current_map = self.emulator.data.map_id(next_memory)
-            if current_map not in self._visited_maps:
-                self._visited_maps.add(current_map)
+            if current_map not in visited_maps:
+                visited_maps.add(current_map)
                 self._save_checkpoint(f"New map #{current_map}")
+
+            if self.emulator.data.is_dialog(next_memory):
+                current_dialog = self.emulator.data.get_dialog(next_memory)
+                if current_dialog not in visited_dialogs:
+                    visited_dialogs.add(current_dialog)
+                    self._save_checkpoint(f"New dialog {current_dialog}")
 
             self.buffer.append(
                 {
