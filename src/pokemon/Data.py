@@ -17,17 +17,19 @@ class Data:
     visited_dialogs: dict[tuple[int, int], int] = field(default_factory=dict)
     badge_reward: float = 1.0
     event_reward: float = 0.5
-    new_screen_reward: float = 0.002
+    new_screen_reward: float = 0.005
+    new_position_reward: float = 0.001
+    new_dialog_reward: float = 0.01
     new_pokedex_seen_reward: float = 0.1
     new_pokedex_own_reward: float = 0.25
     status_reward: float = 0.02
-    base_reward: float = -0.0001
+    base_reward: float = -0.0002
     truncated_reward: float = -0.02
     new_item_reward: float = 0.1
 
-    in_menu_count: float = 0.0
-    in_battle_count: float = 0.0
-    max_useless_count: int = 150
+    in_menu_ticks: float = 0.0
+    in_battle_ticks: float = 0.0
+    max_useless_ticks: int = 512
     __player_pokemon_size: int = 0x2C
     __pokemon_count: int = 6
     buffer_reward: float = 0.0
@@ -100,37 +102,37 @@ class Data:
     def clean(self):
         self.__visited_pokedex_own = None
         self.__visited_pokedex_seen = None
-        self.in_menu_count = 0
-        self.in_battle_count = 0
+        self.in_menu_ticks = 0
+        self.in_battle_ticks = 0
         self.buffer_reward = 0.0
         self.visited_positions = {}
         self.visited_maps = set()
         self.visited_dialogs = {}
 
-    def count(self, reward: float, action: int, memory: bytes | None = None):
+    def count(self, reward: float, action: int, memory: bytes | None = None, duration: int = 16):
         self.visited_pokedex_own = self.pokedex_own(self.pyboy.memory)
         self.visited_pokedex_seen = self.pokedex_seen(self.pyboy.memory)
 
         if self.is_world(self.pyboy.memory):
             pos = self.get_position()
-            self.visited_positions[pos] = self.visited_positions.get(pos, 0) + 1
+            self.visited_positions[pos] = self.visited_positions.get(pos, 0) + duration
 
         if self.is_menu(self.pyboy.memory):
-            self.in_menu_count += 1.0
+            self.in_menu_ticks += duration
         else:
-            self.in_menu_count = max(0, self.in_menu_count - 0.25)
+            self.in_menu_ticks = max(0, self.in_menu_ticks - 0.25 * duration)
 
         if self.is_battle(self.pyboy.memory):
             if self.number_of_turns_in_current_battle(
                 memory
             ) != self.number_of_turns_in_current_battle(self.pyboy.memory):
-                self.in_battle_count = 0
+                self.in_battle_ticks = 0
             else:
-                self.in_battle_count += 1.0
+                self.in_battle_ticks += duration
 
         if self.is_dialog(self.pyboy.memory):
             dialog = self.get_dialog()
-            self.visited_dialogs[dialog] = self.visited_dialogs.get(dialog, 0) + 1
+            self.visited_dialogs[dialog] = self.visited_dialogs.get(dialog, 0) + duration
 
         self.visited_maps.add(self.map_id(self.pyboy.memory))
 
@@ -273,59 +275,65 @@ class Data:
     def screen_tiles(self, memory: PyBoyMemoryView | bytes):
         return [memory[i] for i in range(0xC3A0, 0xC508)]
 
-    def reward(self, memory: bytes, action: int):
-        reward = 0.0
+    def reward(self, memory: bytes, action: int) -> tuple[float, float]:
+        milestone = 0.0
+        step = 0.0
 
-        reward += self.reward_core(memory)
+        milestone += self.reward_core(memory)
 
         if self.is_battle(self.pyboy.memory):
-            reward += self.reward_battle(memory)
+            milestone += self.reward_battle(memory)
 
         if self.is_battle(self.pyboy.memory) and self.number_of_turns_in_current_battle(
             memory
         ) == self.number_of_turns_in_current_battle(self.pyboy.memory):
-            self.buffer_reward += reward
-            reward = 0.0
+            self.buffer_reward += milestone
+            milestone = 0.0
         elif self.is_battle(self.pyboy.memory):
-            reward += self.buffer_reward * (1.0 if 0 < self.buffer_reward else 0.50)
+            milestone += self.buffer_reward * (1.0 if 0 < self.buffer_reward else 0.50)
             self.buffer_reward = 0.0
 
         if self.is_world(self.pyboy.memory):
-            reward += self.reward_position()
+            step += self.reward_position()
         elif self.is_dialog(self.pyboy.memory):
-            reward += self.reward_dialog(memory)
+            m, s = self.reward_dialog(memory)
+            milestone += m
+            step += s
         elif self.is_menu(self.pyboy.memory):
-            reward += self.in_menu_count / self.max_useless_count * self.base_reward
+            step += self.in_menu_ticks / self.max_useless_ticks * self.base_reward
         elif self.is_battle(self.pyboy.memory):
-            reward += self.reward_battle_useless_count(memory)
+            m, s = self.reward_battle_useless_count(memory)
+            milestone += m
+            step += s
 
-        return reward
+        return milestone, step
 
-    def reward_battle_useless_count(self, memory: bytes):
-        return (
-            self.new_screen_reward
-            if self.number_of_turns_in_current_battle(memory)
+    def reward_battle_useless_count(self, memory: bytes) -> tuple[float, float]:
+        if (
+            self.number_of_turns_in_current_battle(memory)
             != self.number_of_turns_in_current_battle(self.pyboy.memory)
             or not self.is_battle(memory)
             and self.is_battle(self.pyboy.memory)
-            else self.in_battle_count / self.max_useless_count * self.base_reward
-        )
+        ):
+            return self.new_screen_reward, 0.0
+        return 0.0, self.in_battle_ticks / self.max_useless_ticks * self.base_reward
 
-    def reward_dialog(self, memory: bytes):
-        return (
-            self.new_screen_reward
-            if self.dialog_id(memory) != self.dialog_id(self.pyboy.memory)
-            else self.visited_dialogs.get(self.get_dialog(), 0)
-            / self.max_useless_count
-            * self.base_reward
-        )
+    def reward_dialog(self, memory: bytes) -> tuple[float, float]:
+        dialog_changed = self.dialog_id(memory) != self.dialog_id(self.pyboy.memory)
+        current_dialog = self.get_dialog()
+        is_new_dialog = current_dialog not in self.visited_dialogs
+        dialog_reward = self.new_dialog_reward if is_new_dialog else self.new_screen_reward if dialog_changed else 0.0
+        visits = self.visited_dialogs.get(current_dialog, 0)
+        return dialog_reward, 0.0 if dialog_changed else visits / self.max_useless_ticks * self.base_reward
 
     def reward_position(self):
-        return (
-            self.visited_positions.get(self.get_position(), 0)
-            / self.max_useless_count
-            * self.base_reward
-        )
+        pos = self.get_position()
+        ticks_here = self.visited_positions.get(pos, 0)
+        is_new_position = ticks_here == 0
+        waste_factor = min(ticks_here, self.max_useless_ticks) / self.max_useless_ticks
+        exploration_reward = self.new_position_reward if is_new_position else 0.0
+        step_penalty = self.base_reward * (1.0 + waste_factor * 9.0)
+        return exploration_reward + step_penalty
 
     def is_menu_illegal_move(self, memory: bytes):
         return (
@@ -516,11 +524,11 @@ class Data:
     def truncated(self, memory: bytes):
         return (
             True
-            if self.max_useless_count
+            if self.max_useless_ticks
             <= self.visited_positions.get(self.get_position(), 0)
-            or self.max_useless_count <= self.visited_dialogs.get(self.get_dialog(), 0)
-            or self.max_useless_count <= self.in_battle_count
-            or self.max_useless_count <= self.in_menu_count
+            or self.max_useless_ticks <= self.visited_dialogs.get(self.get_dialog(), 0)
+            or self.max_useless_ticks <= self.in_battle_ticks
+            or self.max_useless_ticks <= self.in_menu_ticks
             else False
         )
 
@@ -582,11 +590,11 @@ class Data:
 
         data += self.data_normalizer(
             [
-                self.in_battle_count,
-                self.in_menu_count,
+                self.in_battle_ticks,
+                self.in_menu_ticks,
                 self.visited_dialogs.get(self.get_dialog(), 0),
             ],
-            max=self.max_useless_count,
+            max=self.max_useless_ticks,
         )
         data += self.player_data()
         data += self.pokedex_data()
@@ -606,7 +614,7 @@ class Data:
                 for dx in range(-self.map_vision_radius, self.map_vision_radius + 1)
                 for dy in range(-self.map_vision_radius, self.map_vision_radius + 1)
             ],
-            max=self.max_useless_count,
+            max=self.max_useless_ticks,
         )
 
         return data if self.is_world(memory) else [0] * len(data)
