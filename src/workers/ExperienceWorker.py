@@ -61,6 +61,9 @@ class ExperienceWorker:
 
     @property
     def random_save_path(self):
+        if not self._fallback_to_start and os.path.exists(f"saves/{self.worker_checkpoint_path}"):
+            return self.worker_checkpoint_path
+
         if CURRICULUM_ENABLED:
             checkpoint = get_checkpoint_for_episode(self._total_steps)
             if checkpoint:
@@ -70,8 +73,6 @@ class ExperienceWorker:
                     self.queue_logs.put(f"Curriculum: Advanced to {current_stage} (using checkpoint: {checkpoint})")
                 return checkpoint
 
-        if not self._fallback_to_start and os.path.exists(f"saves/{self.worker_checkpoint_path}"):
-            return self.worker_checkpoint_path
         return "start"
 
     def _save_checkpoint(self, reason: str):
