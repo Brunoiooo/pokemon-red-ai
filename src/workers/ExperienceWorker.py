@@ -15,8 +15,14 @@ from pathlib import Path
 import keyboard
 import numpy as np
 import torch
-from pokemon.Emulator import Emulator
+from pokemon.Emulator import Emulator, N_META_ACTIONS, DURATION_BINS
 from pokemon.ModelPokemon import ModelPokemon, get_model
+
+try:
+    from curriculum_config import get_checkpoint_for_episode, get_current_stage
+    CURRICULUM_ENABLED = True
+except ImportError:
+    CURRICULUM_ENABLED = False
 
 
 @dataclass
@@ -37,6 +43,7 @@ class ExperienceWorker:
     _total_steps: int = field(default=0, init=False)
     _last_epsilon: float = field(default=0.0, init=False)
     _state_buffer: deque = field(default_factory=lambda: deque(maxlen=64), init=False)
+    _last_curriculum_stage: str | None = field(default=None, init=False)
     init_model_state_dict: dict[str, Any]
     max_episode_steps: int = 5000
 
@@ -52,6 +59,15 @@ class ExperienceWorker:
 
     @property
     def random_save_path(self):
+        if CURRICULUM_ENABLED:
+            checkpoint = get_checkpoint_for_episode(self._total_steps)
+            if checkpoint:
+                current_stage = get_current_stage(self._total_steps)
+                if current_stage != self._last_curriculum_stage:
+                    self._last_curriculum_stage = current_stage
+                    self.queue_logs.put(f"Curriculum: Advanced to {current_stage} (using checkpoint: {checkpoint})")
+                return checkpoint
+
         all_saves = [p for p in Path("saves/").iterdir() if p.is_dir()]
         if len(all_saves) <= 1 or random.random() < self.start_save_chance:
             return "start"
@@ -121,7 +137,7 @@ class ExperienceWorker:
         self._state_buffer.clear()
         memory, inputs = self.emulator.reset(dir=self.random_save_path)
 
-        action_counter = [0] * 8
+        action_counter = [0] * N_META_ACTIONS
         total_episode_reward = 0.0
         step_count = 0
 
@@ -132,25 +148,28 @@ class ExperienceWorker:
             if focused and keyboard.is_pressed("ctrl"):
                 key = keyboard.read_key()
                 time.sleep(0.1)
+                action_idx = None
                 if key == "up":
-                    action = 6
+                    action_idx = 6
                 elif key == "down":
-                    action = 7
+                    action_idx = 7
                 elif key == "left":
-                    action = 4
+                    action_idx = 4
                 elif key == "right":
-                    action = 5
+                    action_idx = 5
                 elif key == "a":
-                    action = 0
+                    action_idx = 0
                 elif key == "b":
-                    action = 1
+                    action_idx = 1
                 elif key == "space":
-                    action = 2
+                    action_idx = 2
                 elif key == "enter":
-                    action = 3
+                    action_idx = 3
+                if action_idx is not None:
+                    action = action_idx * len(DURATION_BINS) + 0  # 16-tick bin
 
             next_memory, next_inputs, reward, terminated, truncated = (
-                self.emulator.step(memory=memory, action=action)
+                self.emulator.step(memory=memory, meta_action=action)
             )
 
             total_episode_reward += reward
@@ -207,7 +226,7 @@ class ExperienceWorker:
             self._state_buffer.append(out["z"].squeeze(0).detach().cpu())
 
         if random.random() < epsilon:
-            action = random.randint(0, len(self.emulator.buttons) - 1)
+            action = random.randint(0, N_META_ACTIONS - 1)
         else:
             q = out["q"] if isinstance(out, dict) else out
             q = q.squeeze(0)
