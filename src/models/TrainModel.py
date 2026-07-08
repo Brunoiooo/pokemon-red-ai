@@ -13,16 +13,10 @@ class TrainModel:
     __FILE_SETTINGS = "settings.json"
     evaluate_process: None | Process = None
     auto_mode_process: None | Process = None
+    dots: list[tuple[float, float]] = []
 
     def __init__(self):
-        self.train_worker = TrainWorker(
-            queue_logs=Manager().Queue(),
-            queue_data=Manager().Queue(),
-            event_start=Manager().Event(),
-            is_debug=Manager().Value("b", False),
-            is_evaluation_window=Manager().Value("b", False),
-            train_use_sdl=Manager().Value("b", False),
-        )
+        self.train_worker = TrainWorker()
 
     @property
     def settings(self) -> dict[str, Any]:
@@ -63,10 +57,12 @@ class TrainModel:
             )
 
         self.evaluate_process = Process(
-            target=Emulator().evaluate_greedy,
+            target=Emulator(files_lock=self.train_worker.files_lock).evaluate_greedy,
             kwargs={
                 "model_state_dict": get_model(
-                    "cpu", "best" if best_model else "latest"
+                    "cpu",
+                    files_lock=self.train_worker.files_lock,
+                    name="best" if best_model else "latest",
                 ).state_dict(),
                 "queue_logs": self.train_worker.queue_logs,
                 "is_debug": self.train_worker.is_debug.value,
@@ -83,7 +79,7 @@ class TrainModel:
             )
 
         self.auto_mode_process = Process(
-            target=Emulator().auto_mode,
+            target=Emulator(files_lock=self.train_worker.files_lock).auto_mode,
             kwargs={"queue_logs": self.train_worker.queue_logs},
         )
 

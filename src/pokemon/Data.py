@@ -1,3 +1,6 @@
+import hashlib
+from multiprocessing.synchronize import RLock
+import pickle
 from dataclasses import dataclass, field
 
 from pyboy import PyBoy, PyBoyMemoryView
@@ -7,29 +10,36 @@ import torch
 @dataclass
 class Data:
     pyboy: PyBoy
+    files_lock: RLock
 
-    visited_dialogs_count: dict[int, int] = field(default_factory=dict)
-    visited_dialogs_count_max: int = 32
-    visited_positions_count: dict[str, int] = field(default_factory=dict)
-    visited_maps_count: dict[int, int] = field(default_factory=dict)
-    max_visited_dialogs_count_reward: float = 0.02
-    max_visited_positions_count_reward: float = 0.01
-    max_visited_maps_count_reward: float = 0.01
-    useless_count: int = 0
-    max_useless_count: int = 32
-    punish_world_reward: float = -0.003
-    punish_dialog_menu_battle_reward: float = -0.01
-    __player_pokemon_size = 0x2C
-    __pokemon_count = 6
-    last_action = 0
-    last_reward = 0
-    buffer_reward = 0.0
-    last_game_mode_flags = [0, 0, 0, 0]
+    visited_screens: list[bytes] = field(default_factory=list)
+    visited_maps: set[int] = field(default_factory=set)
+    visited_dialogs: dict[tuple[int, int], int] = field(default_factory=dict)
+    badge_reward: float = 1.0
+    event_reward: float = 0.5
+    new_screen_reward: float = 0.005
+    new_position_reward: float = 0.001
+    new_dialog_reward: float = 0.01
+    new_pokedex_seen_reward: float = 0.1
+    new_pokedex_own_reward: float = 0.25
+    status_reward: float = 0.02
+    base_reward: float = -0.0002
+    truncated_reward: float = -0.02
+    new_item_reward: float = 0.1
 
-    __stored_pokemon_size = 0x21
-    __stored_pokemon_count = 20
+    in_menu_ticks: float = 0.0
+    in_battle_ticks: float = 0.0
+    max_useless_ticks: int = 512
+    __player_pokemon_size: int = 0x2C
+    __pokemon_count: int = 6
+    buffer_reward: float = 0.0
+
+    __stored_pokemon_size: int = 0x21
 
     __visited_pokedex_own: list[int] | None = None
+
+    visited_positions: dict[tuple[int, int, int], int] = field(default_factory=dict)
+    map_vision_radius: int = 5
 
     @property
     def visited_pokedex_own(self):
@@ -59,47 +69,122 @@ class Data:
             x | y for x, y in zip(value, self.visited_pokedex_seen)
         ]
 
+    def save(self, path: str):
+        with self.files_lock:
+            with open(f"{path}/__visited_pokedex_own.pkl", "wb") as f:
+                pickle.dump(self.__visited_pokedex_own, f)
+            with open(f"{path}/__visited_pokedex_seen.pkl", "wb") as f:
+                pickle.dump(self.__visited_pokedex_seen, f)
+            with open(f"{path}/buffer_reward.pkl", "wb") as f:
+                pickle.dump(self.buffer_reward, f)
+            with open(f"{path}/visited_positions.pkl", "wb") as f:
+                pickle.dump(self.visited_positions, f)
+            with open(f"{path}/visited_maps.pkl", "wb") as f:
+                pickle.dump(self.visited_maps, f)
+            with open(f"{path}/visited_dialogs.pkl", "wb") as f:
+                pickle.dump(self.visited_dialogs, f)
+
+    def load(self, path: str):
+        with self.files_lock:
+            with open(f"{path}/__visited_pokedex_own.pkl", "rb") as f:
+                self.__visited_pokedex_own = pickle.load(f)
+            with open(f"{path}/__visited_pokedex_seen.pkl", "rb") as f:
+                self.__visited_pokedex_seen = pickle.load(f)
+            with open(f"{path}/buffer_reward.pkl", "rb") as f:
+                self.buffer_reward = pickle.load(f)
+            with open(f"{path}/visited_positions.pkl", "rb") as f:
+                self.visited_positions = pickle.load(f)
+            with open(f"{path}/visited_maps.pkl", "rb") as f:
+                self.visited_maps = pickle.load(f)
+            with open(f"{path}/visited_dialogs.pkl", "rb") as f:
+                self.visited_dialogs = pickle.load(f)
+
     def clean(self):
         self.__visited_pokedex_own = None
         self.__visited_pokedex_seen = None
-        self.visited_dialogs_count = {}
-        self.visited_maps_count = {}
-        self.visited_positions_count = {}
-        self.useless_count = 0
-        self.last_action = 0
-        self.last_reward = 0
+        self.in_menu_ticks = 0
+        self.in_battle_ticks = 0
         self.buffer_reward = 0.0
-        self.last_game_mode_flags = self.game_mode_flags_data(self.pyboy.memory)
+        self.visited_positions = {}
+        self.visited_maps = set()
+        self.visited_dialogs = {}
 
-    def count(self, reward: float, action: int, memory: bytes | None = None):
-        self.last_action = action
-        self.last_reward = reward
+    def count(self, reward: float, action: int, memory: bytes | None = None, duration: int = 16):
+        self.visited_pokedex_own = self.pokedex_own(self.pyboy.memory)
+        self.visited_pokedex_seen = self.pokedex_seen(self.pyboy.memory)
 
-        if self.is_dialog(memory) and not self.is_menu_illegal_move(memory):
-            self.visited_dialogs_count.setdefault(self.dialog_id(memory), 0)
-            self.visited_dialogs_count[self.dialog_id(memory)] += 1
+        if self.is_world(self.pyboy.memory):
+            pos = self.get_position()
+            self.visited_positions[pos] = self.visited_positions.get(pos, 0) + duration
 
-        if self.is_world(memory):
-            self.visited_positions_count.setdefault(self.get_position(), 0)
-            self.visited_positions_count[self.get_position()] += 1
-
-        self.visited_pokedex_own = self.pokedex_own(memory)
-        self.visited_pokedex_seen = self.pokedex_seen(memory)
-
-        self.visited_maps_count.setdefault(self.map_id(memory), 0)
-        self.visited_maps_count[self.map_id(memory)] += 1
-
-        if reward <= 0.0:
-            self.useless_count += 1
+        if self.is_menu(self.pyboy.memory):
+            self.in_menu_ticks += duration
         else:
-            self.useless_count = 0
+            self.in_menu_ticks = max(0, self.in_menu_ticks - 0.25 * duration)
 
-        self.last_game_mode_flags = self.game_mode_flags_data(memory)
+        if self.is_battle(self.pyboy.memory):
+            if self.number_of_turns_in_current_battle(
+                memory
+            ) != self.number_of_turns_in_current_battle(self.pyboy.memory):
+                self.in_battle_ticks = 0
+            else:
+                self.in_battle_ticks += duration
+
+        if self.is_dialog(self.pyboy.memory):
+            dialog = self.get_dialog()
+            self.visited_dialogs[dialog] = self.visited_dialogs.get(dialog, 0) + duration
+
+        self.visited_maps.add(self.map_id(self.pyboy.memory))
+
+    def get_dialog(self, memory: bytes | None = None):
+        if memory is None:
+            memory = self.pyboy.memory
+
+        return (self.dialog_id(memory), self.map_id(memory))
+
+    def get_position(self, memory: bytes | None = None, offset_x=0, offset_y=0):
+        if memory is None:
+            memory = self.pyboy.memory
+
+        return (
+            self.position_x(memory) + offset_x,
+            self.position_y(memory) + offset_y,
+            self.map_id(memory),
+        )
+
+    def screen_tiles_hash(self, memory: PyBoyMemoryView | bytes | None = None):
+        return hashlib.blake2b(
+            bytes(self.screen_tiles(memory if memory else self.pyboy.memory)),
+            digest_size=16,
+        ).hexdigest()
 
     def inputs(self):
         return {
-            "continuous": torch.tensor(self.data(), dtype=torch.float32),
-            "last_action": torch.tensor(self.last_action, dtype=torch.long),
+            "screen_tiles": torch.tensor(
+                self.data_normalizer(self.screen_tiles(self.pyboy.memory)),
+                dtype=torch.float32,
+            ).view(1, 18, 20),
+            "core": torch.tensor(self.core_data(), dtype=torch.float32),
+            "battle": torch.tensor(self.battle_data(), dtype=torch.float32),
+            "menu_battle_dialog": torch.tensor(
+                self.menu_battle_dialog_data(), dtype=torch.float32
+            ),
+            "mode": torch.tensor(
+                self.game_mode_flags_data(self.pyboy.memory), dtype=torch.float32
+            ),
+            "progress": torch.tensor(
+                self.event_flags_data(self.pyboy.memory)
+                + self.badges(self.pyboy.memory),
+                dtype=torch.float32,
+            ),
+            "nav": torch.tensor(self.world_data(), dtype=torch.float32),
+            "inv": torch.tensor(
+                self.inventory_data(self.pyboy.memory), dtype=torch.float32
+            ),
+            "party": torch.tensor(
+                self.stored_pokemon_data(self.pyboy.memory),
+                dtype=torch.float32,
+            ),
             "map_id": torch.tensor(self.map_id(self.pyboy.memory), dtype=torch.long),
             "dialog_id": torch.tensor(
                 self.dialog_id(self.pyboy.memory), dtype=torch.long
@@ -160,69 +245,95 @@ class Data:
                 dtype=torch.long,
             ),
             "item_id": torch.tensor(
-                self.poke_mart_items(self.pyboy.memory)
-                + self.items_ids(self.pyboy.memory)
-                + self.stored_items_ids(self.pyboy.memory),
-                dtype=torch.long,
-            ),
-            "sprite_data_movement_statuses": torch.tensor(
-                self.sprite_data_movement_statuses(self.pyboy.memory),
-                dtype=torch.long,
-            ),
-            "sprite_data_facing_directions": torch.tensor(
-                self.sprite_data_facing_directions(self.pyboy.memory),
+                self.item_ids(),
                 dtype=torch.long,
             ),
         }
 
-    def reward(self, memory: bytes):
-        reward = 0.0
+    def item_ids(self, memory: PyBoyMemoryView | bytes | None = None):
+        if memory is None:
+            memory = self.pyboy.memory
 
-        reward += self.reward_core(memory)
+        data = [
+            self.poke_mart_items(memory)[self.real_current_menu_selected_item(memory)],
+            self.items_ids(memory)[self.real_current_menu_selected_item(memory)],
+            self.stored_items_ids(memory)[self.real_current_menu_selected_item(memory)],
+        ]
+
+        return data if self.is_eq_menu(memory) else [0] * len(data)
+
+    def is_eq_menu(self, memory: PyBoyMemoryView | bytes):
+        if memory is None:
+            memory = self.pyboy.memory
+
+        return (
+            True
+            if self.menu_position_x(memory) == 4 and self.menu_position_y(memory) == 5
+            else False
+        )
+
+    def screen_tiles(self, memory: PyBoyMemoryView | bytes):
+        return [memory[i] for i in range(0xC3A0, 0xC508)]
+
+    def reward(self, memory: bytes, action: int) -> tuple[float, float]:
+        milestone = 0.0
+        step = 0.0
+
+        milestone += self.reward_core(memory)
 
         if self.is_battle(self.pyboy.memory):
-            reward += self.reward_battle(memory)
-
-        if self.is_dialog(self.pyboy.memory):
-            reward += self.reward_dialog(memory)
-
-        if self.is_world(self.pyboy.memory):
-            reward += -0.001
-            reward += self.reward_position()
-            reward += self.reward_map(memory)
-            reward += self.reward_illegal_world_move(memory)
+            milestone += self.reward_battle(memory)
 
         if self.is_battle(self.pyboy.memory) and self.number_of_turns_in_current_battle(
             memory
         ) == self.number_of_turns_in_current_battle(self.pyboy.memory):
-            self.buffer_reward += reward
-            reward = 0.0
+            self.buffer_reward += milestone
+            milestone = 0.0
         elif self.is_battle(self.pyboy.memory):
-            reward += self.buffer_reward
+            milestone += self.buffer_reward * (1.0 if 0 < self.buffer_reward else 0.50)
             self.buffer_reward = 0.0
 
+        if self.is_world(self.pyboy.memory):
+            step += self.reward_position()
+        elif self.is_dialog(self.pyboy.memory):
+            m, s = self.reward_dialog(memory)
+            milestone += m
+            step += s
+        elif self.is_menu(self.pyboy.memory):
+            step += self.in_menu_ticks / self.max_useless_ticks * self.base_reward
+        elif self.is_battle(self.pyboy.memory):
+            m, s = self.reward_battle_useless_count(memory)
+            milestone += m
+            step += s
+
+        return milestone, step
+
+    def reward_battle_useless_count(self, memory: bytes) -> tuple[float, float]:
         if (
-            self.is_battle(self.pyboy.memory)
-            and self.is_battle(memory)
-            or self.is_menu(self.pyboy.memory)
-            and self.is_menu(memory)
-            or self.is_dialog(self.pyboy.memory)
-            and self.is_dialog(memory)
+            self.number_of_turns_in_current_battle(memory)
+            != self.number_of_turns_in_current_battle(self.pyboy.memory)
+            or not self.is_battle(memory)
+            and self.is_battle(self.pyboy.memory)
         ):
-            reward += self.reward_menu_illegal_move(memory)
+            return self.new_screen_reward, 0.0
+        return 0.0, self.in_battle_ticks / self.max_useless_ticks * self.base_reward
 
-        reward += self.reward_last_game_mode_flags(memory)
+    def reward_dialog(self, memory: bytes) -> tuple[float, float]:
+        dialog_changed = self.dialog_id(memory) != self.dialog_id(self.pyboy.memory)
+        current_dialog = self.get_dialog()
+        is_new_dialog = current_dialog not in self.visited_dialogs
+        dialog_reward = self.new_dialog_reward if is_new_dialog else self.new_screen_reward if dialog_changed else 0.0
+        visits = self.visited_dialogs.get(current_dialog, 0)
+        return dialog_reward, 0.0 if dialog_changed else visits / self.max_useless_ticks * self.base_reward
 
-        return reward
-
-    def reward_last_game_mode_flags(self, memory: bytes):
-        return (
-            self.punish_dialog_menu_battle_reward
-            if self.last_game_mode_flags == self.game_mode_flags_data(self.pyboy.memory)
-            and self.game_mode_flags_data(self.pyboy.memory)
-            != self.game_mode_flags_data(memory)
-            else 0.0
-        )
+    def reward_position(self):
+        pos = self.get_position()
+        ticks_here = self.visited_positions.get(pos, 0)
+        is_new_position = ticks_here == 0
+        waste_factor = min(ticks_here, self.max_useless_ticks) / self.max_useless_ticks
+        exploration_reward = self.new_position_reward if is_new_position else 0.0
+        step_penalty = self.base_reward * (1.0 + waste_factor * 9.0)
+        return exploration_reward + step_penalty
 
     def is_menu_illegal_move(self, memory: bytes):
         return (
@@ -232,16 +343,6 @@ class Data:
             and self.menu_position_y(self.pyboy.memory) == self.menu_position_y(memory)
             and self.tile_data(self.pyboy.memory) == self.tile_data(memory)
         )
-
-    def reward_menu_illegal_move(self, memory: bytes):
-        return (
-            self.punish_dialog_menu_battle_reward
-            if self.is_menu_illegal_move(memory)
-            else 0.0
-        )
-
-    def reward_illegal_world_move(self, memory: bytes):
-        return self.punish_world_reward if self.is_illegal_world_move(memory) else 0.0
 
     def reward_core(self, memory: bytes):
         reward = 0.0
@@ -256,13 +357,32 @@ class Data:
         reward += self.reward_player_pokemons_defenses(memory)
         reward += self.reward_player_pokemons_speeds(memory)
         reward += self.reward_player_pokemons_pps(memory)
+        reward += self.reward_map()
+        reward += self.reward_player_items(memory)
+        reward += self.reward_stored_items(memory)
 
         return reward
 
-    def reward_map(self, memory: bytes):
+    def reward_player_items(self, memory: bytes):
         return (
-            self.max_visited_maps_count_reward
-            if self.visited_maps_count.get(self.map_id(memory), 0) == 0
+            sum(self.items_quantities(self.pyboy.memory))
+            - sum(self.items_quantities(memory))
+        ) * self.new_item_reward
+
+    def reward_stored_items(self, memory: bytes):
+        return (
+            (
+                sum(self.stored_items_quantities(self.pyboy.memory))
+                - sum(self.stored_items_quantities(memory))
+            )
+            * self.new_item_reward
+            * 0.5
+        )
+
+    def reward_map(self):
+        return (
+            self.new_screen_reward
+            if self.map_id(self.pyboy.memory) not in self.visited_maps
             else 0.0
         )
 
@@ -294,9 +414,9 @@ class Data:
             if id_x == id_y and id_x != 0:
                 for status_x_bit, status_y_bit in zip(status_x, status_y):
                     if status_x_bit == 1 and status_y_bit == 0:
-                        reward += 0.3
+                        reward += self.status_reward
                     elif status_x_bit == 0 and status_y_bit == 1:
-                        reward -= 0.3
+                        reward += -self.status_reward
 
         return reward
 
@@ -399,16 +519,20 @@ class Data:
         return reward
 
     def terminated(self, memory: bytes):
+        return all(self.badges(self.pyboy.memory))
+
+    def truncated(self, memory: bytes):
         return (
             True
-            if 0 < self.reward_badges(memory) or 0 < self.reward_event_flags(memory)
+            if self.max_useless_ticks
+            <= self.visited_positions.get(self.get_position(), 0)
+            or self.max_useless_ticks <= self.visited_dialogs.get(self.get_dialog(), 0)
+            or self.max_useless_ticks <= self.in_battle_ticks
+            or self.max_useless_ticks <= self.in_menu_ticks
             else False
         )
 
-    def truncated(self, memory: bytes):
-        return True if self.max_useless_count <= self.useless_count else False
-
-    def is_illegal_world_move(self, memory: bytes):
+    def is_illegal_world_move(self, memory: bytes, action: int):
         return (
             self.is_world(self.pyboy.memory)
             and self.is_world(memory)
@@ -417,40 +541,12 @@ class Data:
             and self.position_y(self.pyboy.memory) == self.position_y(memory)
         )
 
-    def data(self):
-        data = []
-
-        data += self.core_data()
-        data += self.battle_data()
-        data += self.menu_battle_dialog_data()
-        data += self.dialog_world_data()
-        data += self.world_data()
-
-        return data
-
-    def dialog_world_data(self):
-        data = self.data_normalizer(
-            [
-                min(
-                    self.visited_dialogs_count.get(i, 0),
-                    self.visited_dialogs_count_max,
-                )
-                for i in range(1, 256)
-            ],
-            self.visited_dialogs_count_max,
-        )
-
-        return (
-            data
-            if self.is_dialog(self.pyboy.memory) or self.is_world(self.pyboy.memory)
-            else [0] * len(data)
-        )
-
     def menu_battle_dialog_data(self):
         data = self.data_normalizer(
             [
                 self.menu_position_x(self.pyboy.memory),
                 self.menu_position_y(self.pyboy.memory),
+                self.id_of_the_first_displayed_menu_item(self.pyboy.memory),
             ]
         ) + [
             self.current_menu_selected_item(self.pyboy.memory)
@@ -466,22 +562,7 @@ class Data:
         )
 
     def world_data(self):
-        data = [
-            min(self.visited_maps_count.get(self.map_id(self.pyboy.memory), 0), 1),
-        ]
-
-        data += [
-            min(
-                self.visited_positions_count.get(
-                    self.get_position(offset_x=offset_x, offset_y=offset_y), 0
-                ),
-                1,
-            )
-            for offset_x in range(-8, 9)
-            for offset_y in range(-8, 9)
-        ]
-
-        data += self.data_normalizer(
+        data = self.data_normalizer(
             [
                 self.position_x(self.pyboy.memory),
                 self.position_y(self.pyboy.memory),
@@ -507,23 +588,58 @@ class Data:
     def core_data(self):
         data = []
 
-        data += [min(self.useless_count / self.max_useless_count, 1)]
-        data += [max(min(self.last_reward, 1.0), -1.0)]
-        data += self.game_mode_flags_data(self.pyboy.memory)
-        data += self.last_game_mode_flags
+        data += self.data_normalizer(
+            [
+                self.in_battle_ticks,
+                self.in_menu_ticks,
+                self.visited_dialogs.get(self.get_dialog(), 0),
+            ],
+            max=self.max_useless_ticks,
+        )
         data += self.player_data()
         data += self.pokedex_data()
-        data += self.data_normalizer(self.items_quantities(self.pyboy.memory))
-        data += self.data_normalizer(
-            [self.player_money(self.pyboy.memory)], max=0xFFFFFF
-        )
-        data += self.badges(self.pyboy.memory)
-        data += self.data_normalizer(self.stored_items_quantities(self.pyboy.memory))
-        data += self.data_normalizer([self.game_coins(self.pyboy.memory)], max=0xFFFF)
-        data += self.event_flags_data(self.pyboy.memory)
-        data += self.stored_pokemon_data(self.pyboy.memory)
+        data += self.map_data()
 
         return data
+
+    def map_data(self, memory: PyBoyMemoryView | bytes | None = None):
+        if memory is None:
+            memory = self.pyboy.memory
+
+        data = self.data_normalizer(
+            [
+                self.visited_positions.get(
+                    self.get_position(memory, offset_x=dx, offset_y=dy), 0
+                )
+                for dx in range(-self.map_vision_radius, self.map_vision_radius + 1)
+                for dy in range(-self.map_vision_radius, self.map_vision_radius + 1)
+            ],
+            max=self.max_useless_ticks,
+        )
+
+        return data if self.is_world(memory) else [0] * len(data)
+
+    def inventory_data(self, memory: PyBoyMemoryView | bytes):
+        data = []
+
+        data += self.data_normalizer(
+            [
+                self.items_quantities(memory)[
+                    self.real_current_menu_selected_item(memory)
+                ]
+            ]
+        )
+        data += self.data_normalizer([self.player_money(memory)], max=0xFFFFFF)
+        data += self.data_normalizer(
+            [
+                self.stored_items_quantities(memory)[
+                    self.real_current_menu_selected_item(memory)
+                ]
+            ]
+        )
+        data += self.data_normalizer([self.game_coins(memory)], max=0xFFFF)
+
+        return data if self.is_eq_menu(memory) else [0] * len(data)
 
     def id_of_the_last_menu_item(self, memory: PyBoyMemoryView | bytes):
         return memory[0xCC28]
@@ -552,9 +668,6 @@ class Data:
     def type_of_battle(self, memory: PyBoyMemoryView | bytes):
         return memory[0xD057]
 
-    def get_position(self, offset_x=0, offset_y=0):
-        return f"{self.position_x(self.pyboy.memory) + offset_x}x{self.position_y(self.pyboy.memory) + offset_y}x{self.map_id(self.pyboy.memory)}"
-
     def is_world(self, memory: PyBoyMemoryView | bytes):
         return (
             True
@@ -580,19 +693,29 @@ class Data:
         )
 
     def sprite_data_ids(self, memory: PyBoyMemoryView | bytes):
-        return [memory[0xC100 + 0x10 * x] for x in range(16)]
+        data = [memory[0xC100 + 0x10 * x] for x in range(16)]
+
+        return data if self.is_world(memory) else [0] * len(data)
 
     def sprite_data_movement_statuses(self, memory: PyBoyMemoryView | bytes):
-        return [memory[0xC101 + 0x10 * x] for x in range(16)]
+        data = [memory[0xC101 + 0x10 * x] for x in range(16)]
+
+        return data if self.is_world(memory) else [0] * len(data)
 
     def sprite_data_facing_directions(self, memory: PyBoyMemoryView | bytes):
-        return [memory[0xC109 + 0x10 * x] for x in range(16)]
+        data = [memory[0xC109 + 0x10 * x] for x in range(16)]
+
+        return data if self.is_world(memory) else [0] * len(data)
 
     def sprite_data_y_positions(self, memory: PyBoyMemoryView | bytes):
-        return [memory[0xC204 + 0x10 * x] for x in range(16)]
+        data = [memory[0xC204 + 0x10 * x] for x in range(16)]
+
+        return data if self.is_world(memory) else [0] * len(data)
 
     def sprite_data_x_positions(self, memory: PyBoyMemoryView | bytes):
-        return [memory[0xC205 + 0x10 * x] for x in range(16)]
+        data = [memory[0xC205 + 0x10 * x] for x in range(16)]
+
+        return data if self.is_world(memory) else [0] * len(data)
 
     def menu_position_x(self, memory: PyBoyMemoryView | bytes):
         return memory[0xCC24]
@@ -602,6 +725,14 @@ class Data:
 
     def current_menu_selected_item(self, memory: PyBoyMemoryView | bytes):
         return memory[0xCC26]
+
+    def real_current_menu_selected_item(self, memory: PyBoyMemoryView | bytes):
+        return self.current_menu_selected_item(
+            memory
+        ) + self.id_of_the_first_displayed_menu_item(memory)
+
+    def id_of_the_first_displayed_menu_item(self, memory: PyBoyMemoryView | bytes):
+        return memory[0xCC36]
 
     def index_of_current_pokemon_send_out(self, memory: PyBoyMemoryView | bytes):
         return memory[0xCC2F]
@@ -658,9 +789,6 @@ class Data:
         data = data_bit + data_byte + data_2bytes
 
         return data if self.is_battle(self.pyboy.memory) else [0] * len(data)
-
-    def enemy_status(self, memory: PyBoyMemoryView | bytes):
-        return self.bits_extractor(memory[0xCFE9], end_bit=6)
 
     def bits_extractor(self, byte: int, start_bit=0, end_bit=7):
         if start_bit < 0 or end_bit > 7 or start_bit > end_bit:
@@ -863,7 +991,7 @@ class Data:
         data += self.data_normalizer(self.player_pokemons_pps(self.pyboy.memory))
 
         data += self.data_normalizer(
-            self.player_pokemons_levels(self.pyboy.memory),
+            self.player_pokemons_level(self.pyboy.memory),
         )
 
         data += self.data_normalizer(
@@ -953,7 +1081,7 @@ class Data:
             for i in range(self.__pokemon_count)
         ]
 
-    def player_pokemons_levels(self, memory: PyBoyMemoryView | bytes = None):
+    def player_pokemons_level(self, memory: PyBoyMemoryView | bytes = None):
         return [memory[0xD18C]]
 
     def player_pokemons_max_hps(self, memory: PyBoyMemoryView | bytes = None):
@@ -1150,56 +1278,90 @@ class Data:
         data = []
         data = self.data_normalizer(self.stored_pokemon_hps(memory), max=0xFFFF)
         data += self.data_normalizer(self.stored_pokemon_levels(memory))
-        data += self.data_normalizer(self.stored_pokemon_statuses(memory))
+        data += self.stored_pokemon_statuses(memory)
         data += self.data_normalizer(
             self.stored_pokemon_experiences(memory), max=0xFFFFFF
         )
         data += self.data_normalizer(self.stored_pokemon_pps(memory))
 
-        return data
+        return data if self.is_eq_menu(memory) else [0] * len(data)
 
     def stored_pokemon_pps(self, memory: PyBoyMemoryView | bytes):
         return [
-            memory[x + i * self.__stored_pokemon_size]
-            for i in range(self.__stored_pokemon_count)
+            memory[
+                x
+                + self.real_current_menu_selected_item(memory)
+                * self.__stored_pokemon_size
+            ]
             for x in range(0xDAB3, 0xDAB7)
         ]
 
     def stored_pokemon_experiences(self, memory: PyBoyMemoryView | bytes):
         return [
-            memory[0xDAA4 + i * self.__stored_pokemon_size]
-            | (memory[0xDAA5 + i * self.__stored_pokemon_size] << 8)
-            | (memory[0xDAA6 + i * self.__stored_pokemon_size] << 16)
-            for i in range(self.__stored_pokemon_count)
+            memory[
+                0xDAA4
+                + self.real_current_menu_selected_item(memory)
+                * self.__stored_pokemon_size
+            ]
+            | (
+                memory[
+                    0xDAA5
+                    + self.real_current_menu_selected_item(memory)
+                    * self.__stored_pokemon_size
+                ]
+                << 8
+            )
+            | (
+                memory[
+                    0xDAA6
+                    + self.real_current_menu_selected_item(memory)
+                    * self.__stored_pokemon_size
+                ]
+                << 16
+            )
         ]
 
     def stored_pokemon_moves(self, memory: PyBoyMemoryView | bytes):
         return [
-            memory[x + i * self.__stored_pokemon_size]
-            for i in range(self.__stored_pokemon_count)
+            memory[
+                x
+                + self.real_current_menu_selected_item(memory)
+                * self.__stored_pokemon_size
+            ]
             for x in range(0xDA9E, 0xDAA2)
         ]
 
     def stored_pokemon_types(self, memory: PyBoyMemoryView | bytes):
-        return [
-            memory[x + i * self.__stored_pokemon_size]
-            for i in range(self.__stored_pokemon_count)
+        data = [
+            memory[
+                x
+                + self.real_current_menu_selected_item(memory)
+                * self.__stored_pokemon_size
+            ]
             for x in range(0xDA9B, 0xDA9D)
         ]
+
+        return data if self.is_eq_menu(memory) else [0] * len(data)
 
     def stored_pokemon_statuses(self, memory: PyBoyMemoryView | bytes):
         return [
             bit
-            for i in range(self.__stored_pokemon_count)
             for bit in self.bits_extractor(
-                memory[0xDA9A + i * self.__stored_pokemon_size]
+                memory[
+                    0xDA9A
+                    + self.real_current_menu_selected_item(memory)
+                    * self.__stored_pokemon_size
+                ]
             )
         ]
 
     def stored_pokemon_levels(self, memory: PyBoyMemoryView | bytes):
         return [
-            memory[0xDA99 + i * self.__stored_pokemon_size]
-            for i in range(self.__stored_pokemon_count)
+            memory[
+                0xDA99
+                + self.real_current_menu_selected_item(memory)
+                * self.__stored_pokemon_size
+            ]
         ]
 
     def stored_pokemon_hps(self, memory: PyBoyMemoryView | bytes):
@@ -1207,34 +1369,32 @@ class Data:
             x | (y << 8)
             for x, y in zip(
                 [
-                    memory[0xDA97 + i * self.__stored_pokemon_size]
-                    for i in range(self.__stored_pokemon_count)
+                    memory[
+                        0xDA97
+                        + self.real_current_menu_selected_item(memory)
+                        * self.__stored_pokemon_size
+                    ]
                 ],
                 [
-                    memory[0xDA98 + i * self.__stored_pokemon_size]
-                    for i in range(self.__stored_pokemon_count)
+                    memory[
+                        0xDA98
+                        + self.real_current_menu_selected_item(memory)
+                        * self.__stored_pokemon_size
+                    ]
                 ],
             )
         ]
 
     def stored_pokemon_ids(self, memory: PyBoyMemoryView | bytes):
-        return [
-            memory[0xDA96 + i * self.__stored_pokemon_size]
-            for i in range(self.__stored_pokemon_count)
+        data = [
+            memory[
+                0xDA96
+                + self.real_current_menu_selected_item(memory)
+                * self.__stored_pokemon_size
+            ]
         ]
 
-    def reward_dialog(self, memory: bytes):
-        return (
-            self.max_visited_dialogs_count_reward
-            - min(
-                self.visited_dialogs_count.get(self.dialog_id(self.pyboy.memory), 0),
-                self.visited_dialogs_count_max,
-            )
-            / self.visited_dialogs_count_max
-            * self.max_visited_dialogs_count_reward
-            if not self.is_menu_illegal_move(memory)
-            else 0.0
-        )
+        return data if self.is_eq_menu(memory) else [0] * len(data)
 
     def tile_data(self, memory: PyBoyMemoryView | bytes):
         return [memory[i] for i in range(0xC490, 0xC4F1)]
@@ -1242,42 +1402,37 @@ class Data:
     def reward_battle(self, memory: bytes):
         reward = 0.0
 
-        reward += self.reward_players_substitute_hp(memory)
         reward += self.reward_enemy_hp(memory)
         reward += self.reward_enemy_status(memory)
         reward += self.reward_pokemon_current_hp(memory)
         reward += self.reward_pokemon_status(memory)
-        reward += self.reward_critical_hit_flag(memory)
-        reward += self.reward_one_hit_ko_flag(memory)
 
         return reward
 
-    def reward_position(self):
-        return (
-            self.max_visited_positions_count_reward
-            if self.visited_positions_count.get(self.get_position(), 0) == 0
-            else 0
-        )
-
-    def reward_players_substitute_hp(self, memory: bytes):
-        return (
-            self.players_substitute_hp(self.pyboy.memory)
-            - self.players_substitute_hp(memory)
-        ) / 255
-
-    def reward_enemy_substitute_hp(self, memory: bytes):
-        return (
-            self.enemy_substitute_hp(memory)
-            - self.enemy_substitute_hp(self.pyboy.memory)
-        ) / 255
-
     def reward_enemy_hp(self, memory: bytes):
-        return (
-            (self.enemy_hp(memory) - self.enemy_hp(self.pyboy.memory))
-            / self.enemy_max_hp(self.pyboy.memory)
-            if self.enemy_max_hp(self.pyboy.memory) != 0
-            else 0
-        )
+        if (
+            self.enemy_max_hp(self.pyboy.memory) == 0
+            or self.pokemon_max_hp(self.pyboy.memory) == 0
+        ):
+            return 0
+
+        diff = (
+            self.enemy_hp(memory) - self.enemy_hp(self.pyboy.memory)
+        ) / self.enemy_max_hp(self.pyboy.memory)
+
+        if self.enemy_max_hp(self.pyboy.memory) < self.pokemon_max_hp(
+            self.pyboy.memory
+        ):
+            diff += min(
+                (
+                    self.enemy_max_hp(self.pyboy.memory)
+                    - self.pokemon_max_hp(self.pyboy.memory)
+                )
+                / self.enemy_max_hp(self.pyboy.memory),
+                1.0,
+            )
+
+        return diff
 
     def reward_enemy_status(self, memory: bytes):
         reward = 0
@@ -1286,9 +1441,9 @@ class Data:
             self.enemy_status(memory), self.enemy_status(self.pyboy.memory)
         ):
             if bit_before == 0 and bit_after == 1:
-                reward += 0.3
+                reward += self.status_reward
             elif bit_before == 1 and bit_after == 0:
-                reward -= 0.3
+                reward += -self.status_reward
 
         return max(0, reward)
 
@@ -1310,27 +1465,11 @@ class Data:
             self.pokemon_status(memory), self.pokemon_status(self.pyboy.memory)
         ):
             if bit_before == 0 and bit_after == 1:
-                reward -= 0.3
+                reward += -self.status_reward
             elif bit_before == 1 and bit_after == 0:
-                reward += 0.3
+                reward += self.status_reward
 
         return reward
-
-    def reward_critical_hit_flag(self, memory: bytes):
-        return (
-            0.3
-            if self.critical_hit_flag(memory) == 0
-            and self.critical_hit_flag(self.pyboy.memory) == 1
-            else 0.0
-        )
-
-    def reward_one_hit_ko_flag(self, memory: bytes):
-        return (
-            0.3
-            if self.one_hit_ko_flag(memory) == 0
-            and self.one_hit_ko_flag(self.pyboy.memory) == 1
-            else 0.0
-        )
 
     def reward_pokedex(self, memory: bytes):
         return self.reward_pokedex_own(memory) + self.reward_pokedex_seen(memory)
@@ -1342,7 +1481,7 @@ class Data:
             self.visited_pokedex_own,
         ):
             if bit_before == 0 and bit_after == 1 and visited == 0:
-                return 0.5
+                return self.new_pokedex_own_reward
 
         return 0.0
 
@@ -1353,7 +1492,7 @@ class Data:
             self.visited_pokedex_seen,
         ):
             if bit_before == 0 and bit_after == 1 and visited == 0:
-                return 0.2
+                return self.new_pokedex_seen_reward
 
         return 0.0
 
@@ -1364,7 +1503,7 @@ class Data:
             self.badges(memory), self.badges(self.pyboy.memory)
         ):
             if bit_before == 0 and bit_after == 1:
-                reward += 1
+                reward += self.badge_reward
 
         return reward
 
@@ -1375,7 +1514,7 @@ class Data:
             self.event_flags_data(memory), self.event_flags_data(self.pyboy.memory)
         ):
             if flag_x == 0 and flag_y == 1:
-                reward += 1
+                reward += self.event_reward
 
         return reward
 
