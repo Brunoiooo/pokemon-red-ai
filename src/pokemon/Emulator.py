@@ -21,6 +21,13 @@ DURATION_BINS = [16, 32, 64, 128, 255]
 N_ACTIONS = 9       # 8 buttons + none
 N_META_ACTIONS = N_ACTIONS * len(DURATION_BINS)   # 45
 
+# Every RAM address Data.py reads falls within WRAM bank 0xC000-0xE000 (highest
+# literal is stored_pokemon_* around 0xDAB0, plus a menu-index offset bounded by
+# the in-game box/bag size of 20 items — max observed ~0xDD69, well under this
+# cutoff). Snapshotting only this window instead of the full 64KB address space
+# avoids copying ROM banks, echo RAM, OAM, and I/O registers that nothing reads.
+MEMORY_SNAPSHOT_END = 0xE000
+
 
 @dataclass
 class Emulator:
@@ -89,18 +96,24 @@ class Emulator:
     def reset(self, dir: str | None = None):
         path = f"{self.saves}/{dir}"
 
-        with self.files_lock:
-            with open(f"{path}/checkpoint.state", "rb") as f:
-                self.pyboy.load_state(f)
+        try:
+            with self.files_lock:
+                with open(f"{path}/checkpoint.state", "rb") as f:
+                    self.pyboy.load_state(f)
+        except Exception:
+            with self.files_lock:
+                with open(f"{self.saves}/start/checkpoint.state", "rb") as f:
+                    self.pyboy.load_state(f)
+            path = f"{self.saves}/start"
 
         self.data.clean()
 
         try:
             self.data.load(path=path)
-        except FileNotFoundError:
+        except Exception:
             pass
 
-        return (bytes(self.pyboy.memory[0:0x10000]), self.data.inputs())
+        return (bytes(self.pyboy.memory[0:MEMORY_SNAPSHOT_END]), self.data.inputs())
 
     def step(self, memory: bytes, meta_action: int, render_each: bool = False):
         action_idx = meta_action // len(DURATION_BINS)
@@ -136,7 +149,7 @@ class Emulator:
             self.data.clean()
 
         return (
-            bytes(self.pyboy.memory[0:0x10000]),
+            bytes(self.pyboy.memory[0:MEMORY_SNAPSHOT_END]),
             self.data.inputs(),
             reward,
             terminated,
@@ -244,9 +257,13 @@ class Emulator:
 
         if render_each:
             for _ in range(duration):
-                self.pyboy.tick(1)
+                self.pyboy.tick(1, render=True, sound=False)
         else:
-            self.pyboy.tick(duration)
+            # Observations are built purely from RAM (Data.py), never from the
+            # framebuffer, so skip PyBoy's render pass entirely unless the SDL
+            # window is actually showing (PyBoy's own docs recommend render=False
+            # for AI training, calling it a substantial and otherwise-needless cost).
+            self.pyboy.tick(duration, render=self.use_sdl, sound=False)
 
         for button in self.ALL_BUTTONS:
             self.pyboy.button_release(button)
@@ -317,9 +334,11 @@ class Emulator:
 
             memory, inputs = (next_memory, next_inputs)
 
+        badges_collected = sum(self.data.badges(self.pyboy.memory))
+
         self.pyboy.stop(False)
 
-        return total_reward, count
+        return total_reward, count, badges_collected
 
     def save_last_checkpoint(self, path: str):
         os.makedirs(path, exist_ok=True)

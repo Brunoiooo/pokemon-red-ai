@@ -8,12 +8,19 @@ class PrioritizedReplayBuffer:
         self.tree = SumTree(capacity)
         self.alpha = alpha
         self.epsilon = 0.01
+        self._max_priority = 1.0
 
     def add(self, data):
-        max_p = np.max(self.tree.tree[-self.tree.capacity :])
-        if max_p == 0:
-            max_p = 1.0
-        self.tree.add(max_p, data)
+        # Running max instead of np.max(tree[-capacity:]) on every insert — that
+        # scan is O(capacity) and was re-run for every single experience pushed
+        # by every actor, holding buffer_lock the whole time.
+        self.tree.add(self._max_priority, data)
+
+    def recompute_max_priority(self):
+        """Call once after restoring tree state from disk, since the running
+        max isn't persisted — a single O(capacity) scan here is fine."""
+        max_p = float(np.max(self.tree.tree[-self.tree.capacity:]))
+        self._max_priority = max_p if max_p > 0 else 1.0
 
     def sample(self, n: int, beta=0.4):
         batch = []
@@ -46,6 +53,8 @@ class PrioritizedReplayBuffer:
         for idx, error in zip(idxs, errors):
             p = (error + self.epsilon) ** self.alpha
             self.tree.update(idx, p)
+            if p > self._max_priority:
+                self._max_priority = p
 
     def __len__(self) -> int:
         return self.tree.n_entries

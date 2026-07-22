@@ -37,7 +37,6 @@ class ExperienceWorker:
     files_lock: RLock
     init_model_state_dict: dict[str, Any]
     worker_id: int = 0
-    max_episode_steps: int = 5000
 
     td_error_steps = 10
     start_save_chance = 0.8
@@ -151,7 +150,7 @@ class ExperienceWorker:
                 if self.recv_conn.poll(0.1):
                     self.model_state_dict = self.recv_conn.recv()
         except Exception as e:
-            self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
+            self.queue_logs.put_nowait(f"{e}\n{traceback.format_exc()}")
         finally:
             self.emulator.pyboy.stop(False)
             self.event_start.clear()

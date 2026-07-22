@@ -5,7 +5,7 @@ import time
 import torch
 import numpy as np
 from multiprocessing import RLock
-from pokemon.Emulator import Emulator
+from pokemon.Emulator import Emulator, N_META_ACTIONS
 from pokemon.ModelPokemon import get_model
 
 def benchmark_inference(num_steps: int = 1000):
@@ -21,11 +21,12 @@ def benchmark_inference(num_steps: int = 1000):
     model = get_model(device=device, files_lock=files_lock)
     model.eval()
 
-    dummy_input = {
-        "screen": torch.randn(1, 4, 144, 160, device=device).float(),
-        "map_id": torch.tensor([[0]], dtype=torch.long, device=device),
-        "position": torch.tensor([[0, 0]], dtype=torch.long, device=device),
-    }
+    # Build a real observation via a throwaway Emulator instead of a hand-rolled
+    # dict — the model expects the ~20-key structured dict Data.inputs() builds
+    # (screen_tiles/core/battle/.../item_id), not raw pixels.
+    bench_emulator = Emulator(files_lock=files_lock)
+    _, dummy_input = bench_emulator.reset(dir="start")
+    bench_emulator.pyboy.stop(False)
 
     # Warmup
     with torch.inference_mode():
@@ -68,9 +69,9 @@ def benchmark_emulation(num_steps: int = 1000):
 
     start = time.time()
     for i in range(num_steps):
-        action = np.random.randint(0, 8)
+        action = np.random.randint(0, N_META_ACTIONS)
         memory, inputs, reward, terminated, truncated = emulator.step(
-            memory=memory, action=action
+            memory=memory, meta_action=action
         )
 
         if terminated or truncated:
@@ -107,12 +108,13 @@ def benchmark_full_pipeline(num_steps: int = 500):
     for i in range(num_steps):
         # Inference
         with torch.inference_mode():
-            q = model(inputs)
+            out = model(inputs)
+            q = out["q"] if isinstance(out, dict) else out
             action = int(torch.argmax(q.squeeze(0)).item())
 
         # Emulation
         memory, inputs, reward, terminated, truncated = emulator.step(
-            memory=memory, action=action
+            memory=memory, meta_action=action
         )
 
         if terminated or truncated:

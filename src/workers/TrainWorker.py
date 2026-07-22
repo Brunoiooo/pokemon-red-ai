@@ -28,6 +28,38 @@ from utils.BufferManager import BufferManager
 from math import inf
 
 
+def _run_evaluate_greedy_process(
+    model_state_dict: dict[str, Any],
+    files_lock,
+    queue_logs,
+    is_evaluation_window: bool,
+    save_name: str,
+    result_queue,
+):
+    """Runs a full greedy-eval episode in its own OS process.
+
+    Greedy eval used to run as a Thread inside the learner process, so its PyBoy
+    stepping (pure Python, GIL-bound) directly stole GIL time from optimize_batch
+    every eval_interval_seconds. Actors already pay this cost in separate
+    processes; eval gets the same treatment here.
+    """
+    try:
+        result = Emulator(files_lock=files_lock).evaluate_greedy(
+            model_state_dict=model_state_dict,
+            queue_logs=queue_logs,
+            is_debug=False,
+            is_evaluation_window=is_evaluation_window,
+            save_name=save_name,
+        )
+        result_queue.put(result)
+    except Exception as e:
+        try:
+            queue_logs.put_nowait(f"Evaluation process failed: {e}\n{traceback.format_exc()}")
+        except (BrokenPipeError, EOFError, OSError):
+            pass
+        result_queue.put((0.0, 0, 0))
+
+
 @dataclass
 class TrainWorker:
     max_workers: int = field(default_factory=lambda: 5)
@@ -41,8 +73,10 @@ class TrainWorker:
     event_start: any = field(init=False)
     queue_logs: any = field(init=False)
     queue_dots: any = field(init=False)
+    queue_eval_details: any = field(init=False)
     model_lock: any = field(init=False)
     files_lock: any = field(init=False)
+    worker_files_locks: any = field(init=False)
     eval_lock: any = field(init=False)
     is_debug: any = field(init=False)
     buffer_lock: any = field(init=False)
@@ -64,9 +98,16 @@ class TrainWorker:
         self.event_start = self.manager.Event()
         self.queue_logs = self.manager.Queue()
         self.queue_dots = self.manager.Queue()
+        self.queue_eval_details = self.manager.Queue()
         self.stats_queue = self.manager.Queue(maxsize=2000)
         self.model_lock = threading.RLock()
+        # Shared lock: only for paths multiple actors could touch (eval_tmp,
+        # best_*, start). Each ExperienceWorker gets its own private lock below
+        # since it only ever reads/writes its own saves/worker_N directory —
+        # serializing that through one global lock was pure contention with no
+        # correctness benefit.
         self.files_lock = self.manager.RLock()
+        self.worker_files_locks = [self.manager.RLock() for _ in range(self.max_workers)]
         self.eval_lock = threading.RLock()
         self.is_debug = self.manager.Value("b", False)
         self.buffer_lock = threading.RLock()
@@ -99,7 +140,7 @@ class TrainWorker:
     gamma = 0.99
     criterion: torch.nn.SmoothL1Loss = field(default_factory=torch.nn.SmoothL1Loss)
     tau = 0.001
-    target_update_interval = 500
+    buffer_save_interval = 2000
     _opt_steps: int = 0
 
     per_alpha: float = 0.7
@@ -301,7 +342,7 @@ class TrainWorker:
                     recv_conn=recv_conn,
                     event_start=self.event_start,
                     init_model_state_dict=model_state_dict,
-                    files_lock=self.files_lock,
+                    files_lock=self.worker_files_locks[i],
                     worker_id=i,
                 )
                 for i, (recv_conn, send_conn) in enumerate(self.experienceWorkerPipes)
@@ -334,7 +375,7 @@ class TrainWorker:
                 self.run_workers_thread.start()
 
         except Exception as e:
-            self._safe_log(f"{e}\n{traceback.print_exc()}")
+            self._safe_log(f"{e}\n{traceback.format_exc()}")
             try:
                 self.event_start.clear()
             except (BrokenPipeError, EOFError, OSError):
@@ -356,13 +397,13 @@ class TrainWorker:
                                 f"Count: {self.count} | Buffer: {len(self.buffer)}"
                             )
 
-                    if self.count % 500 == 0:
+                    if self.count % self.buffer_save_interval == 0:
                         self.save_buffer_to_disk()
                         self.last_buffer_save = self.count
 
                     self.count += 1
         except Exception as e:
-            self._safe_log(f"{e}\n{traceback.print_exc()}")
+            self._safe_log(f"{e}\n{traceback.format_exc()}")
         finally:
             try:
                 self.event_start.clear()
@@ -404,7 +445,7 @@ class TrainWorker:
                     t.join()
 
         except Exception as e:
-            self._safe_log(f"{e}\n{traceback.print_exc()}")
+            self._safe_log(f"{e}\n{traceback.format_exc()}")
         finally:
             try:
                 self.event_start.clear()
@@ -429,7 +470,7 @@ class TrainWorker:
                 with self.buffer_lock:
                     self.buffer.add(item)
         except Exception as e:
-            self._safe_log(f"{e}\n{traceback.print_exc()}")
+            self._safe_log(f"{e}\n{traceback.format_exc()}")
         finally:
             try:
                 self.event_start.clear()
@@ -450,7 +491,7 @@ class TrainWorker:
                 self.event_start.clear()
             except (BrokenPipeError, EOFError, OSError):
                 pass
-            self._safe_log(f"{e}\n{traceback.print_exc()}")
+            self._safe_log(f"{e}\n{traceback.format_exc()}")
         finally:
             self._safe_log("Stopped sending model state dict to worker.")
 
@@ -463,7 +504,12 @@ class TrainWorker:
             while self.event_start.is_set():
 
                 with self.model_lock:
-                    model_state_dict = self.model.state_dict()
+                    # Move to CPU before crossing the process boundary — the eval
+                    # process loads the state dict into a CPU-only model anyway,
+                    # and this avoids relying on CUDA IPC for a plain spawn Process.
+                    model_state_dict = {
+                        k: v.detach().cpu() for k, v in self.model.state_dict().items()
+                    }
 
                 self.save_latest()
 
@@ -472,13 +518,27 @@ class TrainWorker:
 
                 save_best = f"best_{evaluation_count % self.max_best_saves}"
 
-                (avg_ret, steps) = Emulator(files_lock=self.files_lock).evaluate_greedy(
-                    model_state_dict=model_state_dict,
-                    queue_logs=self.queue_logs,
-                    is_debug=False,
-                    is_evaluation_window=self.is_evaluation_window.value,
-                    save_name="eval_tmp",
+                result_queue = self.manager.Queue()
+                p = Process(
+                    target=_run_evaluate_greedy_process,
+                    args=(
+                        model_state_dict,
+                        self.files_lock,
+                        self.queue_logs,
+                        self.is_evaluation_window.value,
+                        "eval_tmp",
+                        result_queue,
+                    ),
+                    daemon=True,
                 )
+                p.start()
+                p.join()
+
+                try:
+                    avg_ret, steps, badges = result_queue.get(timeout=5)
+                except queue.Empty:
+                    self.queue_logs.put_nowait("Evaluation process joined but produced no result.")
+                    avg_ret, steps, badges = 0.0, 0, 0
 
                 if self.best_eval_return < avg_ret:
                     self.save_best(avg_ret)
@@ -491,6 +551,7 @@ class TrainWorker:
 
                 with self.eval_lock:
                     self.queue_dots.put_nowait((count, avg_ret))
+                    self.queue_eval_details.put_nowait((count, avg_ret, steps, badges))
 
                 self.queue_logs.put_nowait(f"Finished evaluation {avg_ret:.6f}.")
 
@@ -502,7 +563,7 @@ class TrainWorker:
                     sleep(1)
 
         except Exception as e:
-            self._safe_log(f"{e}\n{traceback.print_exc()}")
+            self._safe_log(f"{e}\n{traceback.format_exc()}")
             try:
                 self.event_start.clear()
             except (BrokenPipeError, EOFError, OSError):
@@ -555,14 +616,22 @@ class TrainWorker:
             return
 
     def save_buffer_to_disk(self):
-        """Saves the replay buffer to disk. Call this periodically during training."""
+        """Saves the replay buffer to disk. Call this periodically during training.
+
+        Only the cheap reference-copy runs under buffer_lock; the multi-GB pickle
+        write happens afterwards without it, so run_queue (actors pushing new
+        experience) and optimize_batch (sampling) aren't stalled for the whole
+        write.
+        """
         try:
             with self.buffer_lock:
-                if self.buffer_manager.save_buffer(self.buffer):
-                    buffer_size_mb = self.buffer_manager.get_buffer_size()
-                    self.queue_logs.put_nowait(
-                        f"Saved replay buffer ({buffer_size_mb:.1f}MB, {len(self.buffer)} entries)"
-                    )
+                snapshot = self.buffer_manager.snapshot(self.buffer)
+
+            if self.buffer_manager.write_snapshot(snapshot):
+                buffer_size_mb = self.buffer_manager.get_buffer_size()
+                self.queue_logs.put_nowait(
+                    f"Saved replay buffer ({buffer_size_mb:.1f}MB, {snapshot['tree_n_entries']} entries)"
+                )
         except Exception as e:
             self.queue_logs.put_nowait(f"Error saving buffer: {e}")
 
