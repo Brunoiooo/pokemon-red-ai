@@ -15,7 +15,16 @@ def load_csv(path):
     with open(path, newline="") as f:
         reader = csv.DictReader(f)
         for row in reader:
-            rows.append({k: float(v) if v else 0.0 for k, v in row.items()})
+            parsed = {}
+            for k, v in row.items():
+                if v is None or v == "":
+                    parsed[k] = 0.0
+                    continue
+                try:
+                    parsed[k] = float(v)
+                except ValueError:
+                    parsed[k] = v
+            rows.append(parsed)
     return rows
 
 def find_all_sessions():
@@ -51,8 +60,10 @@ def load_all_train(sessions):
 
 def load_all_episodes(sessions):
     """Concatenate all episode CSVs with continuous episode numbers; None = gap."""
+    truncate_modes = ["position", "dialog", "battle", "menu"]
     all_rows = []
     ep_offset = 0
+    trunc_offsets = {m: 0 for m in truncate_modes}
     for _, ep_file in sessions:
         if not ep_file:
             continue
@@ -64,8 +75,17 @@ def load_all_episodes(sessions):
         for r in rows:
             r = dict(r)
             r["episode"] += ep_offset
+            for m in truncate_modes:
+                key = f"truncate_{m}"
+                if key in r:
+                    r[key] = r[key] + trunc_offsets[m]
             all_rows.append(r)
         ep_offset = max(r["episode"] for r in all_rows if r is not None) + 1
+        last = rows[-1]
+        for m in truncate_modes:
+            key = f"truncate_{m}"
+            if key in last:
+                trunc_offsets[m] += int(last[key])
     return all_rows
 
 def _plot_segments(ax, rows, x_key, y_key, **kwargs):
@@ -95,9 +115,14 @@ def plot(train_rows, ep_rows, title):
         print("No training data found.")
         return
 
-    fig = plt.figure(figsize=(14, 10))
+    real_ep = [r for r in ep_rows if r is not None] if ep_rows else []
+    truncate_modes = ["position", "dialog", "battle", "menu"]
+    has_truncate = bool(real_ep) and any(f"truncate_{m}" in real_ep[0] for m in truncate_modes)
+
+    n_rows = 4 if (real_ep and has_truncate) else (3 if real_ep else 2)
+    fig = plt.figure(figsize=(14, 3.2 * n_rows))
     fig.suptitle(title, fontsize=12)
-    gs = gridspec.GridSpec(3, 2, figure=fig, hspace=0.45, wspace=0.35)
+    gs = gridspec.GridSpec(n_rows, 2, figure=fig, hspace=0.45, wspace=0.35)
 
     ax = fig.add_subplot(gs[0, 0])
     _plot_segments(ax, train_rows, "opt_step", "loss", color="tab:blue", linewidth=0.8)
@@ -125,7 +150,6 @@ def plot(train_rows, ep_rows, title):
     ax.set_xlabel("Opt step")
     ax.legend(fontsize=8)
 
-    real_ep = [r for r in ep_rows if r is not None] if ep_rows else []
     if real_ep:
         ax = fig.add_subplot(gs[2, 0])
         _plot_segments(ax, ep_rows, "episode", "total_reward", color="tab:brown", linewidth=0.8)
@@ -135,7 +159,7 @@ def plot(train_rows, ep_rows, title):
 
         ax = fig.add_subplot(gs[2, 1])
         action_names = ["A", "B", "Start", "Sel", "L", "R", "Up", "Dn"]
-        totals = [sum(r[f"action_{i}"] for r in real_ep) for i in range(8)]
+        totals = [sum(r.get(f"action_{i}", 0) for r in real_ep) for i in range(8)]
         total_sum = max(sum(totals), 1)
         fracs = [t / total_sum for t in totals]
         bars = ax.bar(action_names, fracs, color=plt.cm.tab10.colors[:8])
@@ -144,6 +168,37 @@ def plot(train_rows, ep_rows, title):
         for bar, frac in zip(bars, fracs):
             ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.005,
                     f"{frac*100:.1f}%", ha="center", va="bottom", fontsize=7)
+
+        if has_truncate:
+            colors = ["tab:blue", "tab:orange", "tab:green", "tab:red"]
+            ax = fig.add_subplot(gs[3, 0])
+            for mode, color in zip(truncate_modes, colors):
+                key = f"truncate_{mode}"
+                _plot_segments(ax, ep_rows, "episode", key, label=mode, color=color, linewidth=0.8)
+            ax.set_title("Cumulative truncates by mode")
+            ax.set_xlabel("Episode")
+            ax.set_ylabel("Count")
+            ax.legend(fontsize=8)
+
+            ax = fig.add_subplot(gs[3, 1])
+            mode_counts = {m: 0 for m in truncate_modes}
+            for r in real_ep:
+                m = r.get("truncate_mode", "")
+                if isinstance(m, str) and m in mode_counts:
+                    mode_counts[m] += 1
+            # Fallback: derive from cumulative columns if truncate_mode missing
+            if not any(mode_counts.values()):
+                last = real_ep[-1]
+                mode_counts = {m: int(last.get(f"truncate_{m}", 0)) for m in truncate_modes}
+            total_trunc = max(sum(mode_counts.values()), 1)
+            fracs = [mode_counts[m] / total_trunc for m in truncate_modes]
+            bars = ax.bar(truncate_modes, fracs, color=colors)
+            top_mode = max(mode_counts, key=mode_counts.get) if any(mode_counts.values()) else "-"
+            ax.set_title(f"Truncate mode distribution (top={top_mode})")
+            ax.set_ylabel("Fraction")
+            for bar, frac, mode in zip(bars, fracs, truncate_modes):
+                ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.005,
+                        f"{mode_counts[mode]}\n{frac*100:.0f}%", ha="center", va="bottom", fontsize=7)
 
     out_path = Path("logs") / f"plot_{title.replace(' ', '_').replace('/', '-')}.png"
     plt.savefig(out_path, dpi=120, bbox_inches="tight")
@@ -177,10 +232,23 @@ def print_summary(train_rows, ep_rows):
         print(f"\n=== Episode stats ({len(real_ep)} episodes) ===")
         print(f"Reward:    min={min(rewards):.3f}  max={max(rewards):.3f}  avg={sum(rewards)/len(rewards):.3f}")
         print(f"Length:    min={min(lengths):.0f}  max={max(lengths):.0f}  avg={sum(lengths)/len(lengths):.0f}")
-        totals = [sum(r[f"action_{i}"] for r in real_ep) for i in range(8)]
+        totals = [sum(r.get(f"action_{i}", 0) for r in real_ep) for i in range(8)]
         total_sum = max(sum(totals), 1)
         action_names = ["A", "B", "Start", "Sel", "L", "R", "Up", "Dn"]
         print("Actions:   " + "  ".join(f"{n}={t/total_sum*100:.0f}%" for n, t in zip(action_names, totals)))
+
+        truncate_modes = ["position", "dialog", "battle", "menu"]
+        if any(f"truncate_{m}" in real_ep[0] for m in truncate_modes):
+            last = real_ep[-1]
+            counts = {m: int(last.get(f"truncate_{m}", 0)) for m in truncate_modes}
+            if not any(counts.values()):
+                counts = {m: 0 for m in truncate_modes}
+                for r in real_ep:
+                    m = r.get("truncate_mode", "")
+                    if isinstance(m, str) and m in counts:
+                        counts[m] += 1
+            top = max(counts, key=counts.get) if any(counts.values()) else "-"
+            print("Truncates: " + "  ".join(f"{m}={counts[m]}" for m in truncate_modes) + f"  top={top}")
 
 def run(args):
     train_csv = getattr(args, "train_csv", None)

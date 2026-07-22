@@ -239,6 +239,7 @@ class ExperienceWorker:
                         "epsilon": self._last_epsilon,
                         "action_counts": action_counter,
                         "total_reward": total_episode_reward,
+                        "truncate_mode": self.emulator.data.last_truncate_mode or "unknown",
                     })
                 except Exception:
                     pass

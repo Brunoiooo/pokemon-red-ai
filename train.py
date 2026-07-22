@@ -65,9 +65,13 @@ def run(args):
         "opt_step", "timestamp", "loss", "td_error_mean", "td_error_max", "q_mean", "grad_norm"])
     episode_csv_writer = csv.DictWriter(episode_csv_file, fieldnames=[
         "episode", "timestamp", "length", "epsilon", "total_reward",
+        "truncate_mode", "top_truncate_mode",
+        *[f"truncate_{m}" for m in Data.TRUNCATE_MODES],
         *[f"action_{i}" for i in range(N_META_ACTIONS)]])
     train_csv_writer.writeheader()
     episode_csv_writer.writeheader()
+
+    truncate_counts = {m: 0 for m in Data.TRUNCATE_MODES}
 
     if args.reset_buffer:
         from utils.BufferManager import BufferManager
@@ -171,12 +175,19 @@ def run(args):
                     last_ep_stat = stat
                     global_ep += 1
                     ac = stat.get("action_counts", [0]*N_META_ACTIONS)
+                    mode = stat.get("truncate_mode", "unknown")
+                    if mode in truncate_counts:
+                        truncate_counts[mode] += 1
+                    top_truncate_mode = max(truncate_counts, key=truncate_counts.get) if any(truncate_counts.values()) else ""
                     episode_csv_writer.writerow({
                         "episode": global_ep,
                         "timestamp": f"{elapsed:.1f}",
                         "length": stat.get("episode_length", 0),
                         "epsilon": f"{stat.get('epsilon', 0):.5f}",
                         "total_reward": f"{stat.get('total_reward', 0):.4f}",
+                        "truncate_mode": mode,
+                        "top_truncate_mode": top_truncate_mode,
+                        **{f"truncate_{m}": truncate_counts[m] for m in Data.TRUNCATE_MODES},
                         **{f"action_{i}": ac[i] if i < len(ac) else 0 for i in range(N_META_ACTIONS)},
                     })
                     episode_csv_file.flush()
@@ -209,13 +220,18 @@ def run(args):
                     if last_ep_stat:
                         ac = last_ep_stat.get("action_counts", [0]*N_META_ACTIONS)
                         dominant = max(range(N_META_ACTIONS), key=lambda i: ac[i]) if ac else 0
+                        top_trunc = max(truncate_counts, key=truncate_counts.get) if any(truncate_counts.values()) else "-"
+                        trunc_str = " ".join(f"{m[0].upper()}={truncate_counts[m]}" for m in Data.TRUNCATE_MODES)
                         print(f"           "
                               f"Ep#{global_ep} len={last_ep_stat.get('episode_length', 0)} | "
                               f"Eps={last_ep_stat.get('epsilon', 0):.4f} | "
                               f"Rew={last_ep_stat.get('total_reward', 0):.3f} | "
                               f"Top action: {decode_meta_action(dominant)}({ac[dominant]})")
+                        print(f"           "
+                              f"Truncates: {trunc_str} | top={top_trunc}")
 
                     # Collect metrics
+                    top_truncate_mode = max(truncate_counts, key=truncate_counts.get) if any(truncate_counts.values()) else ""
                     metrics.add_step_metrics(
                         step=current_count,
                         timestamp=elapsed,
@@ -228,6 +244,8 @@ def run(args):
                         q_mean=last_train_stat.get("q_mean", 0.0),
                         grad_norm=last_train_stat.get("grad_norm", 0.0),
                         epsilon=last_ep_stat.get("epsilon", 0.0),
+                        top_truncate_mode=top_truncate_mode,
+                        truncate_counts=dict(truncate_counts),
                     )
 
                     last_count = current_count

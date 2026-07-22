@@ -22,6 +22,8 @@ class StepMetrics:
     buffer_pct: float = 0.0
     epsilon: float = 0.0
     steps_per_sec: float = 0.0
+    top_truncate_mode: str = ""
+    truncate_counts: Dict[str, int] = field(default_factory=dict)
 
 @dataclass
 class EvalMetrics:

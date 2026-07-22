@@ -222,7 +222,8 @@ class Emulator:
             )
             queue_logs.put_nowait(f"visited_maps: {self.data.visited_maps}")
             queue_logs.put_nowait(
-                f"visited_dialogs: {self.data.visited_dialogs.get(self.data.get_dialog(), 0)}"
+                f"awaiting_prompt: {self.data.awaiting_prompt}, "
+                f"useless_prompt_ticks: {self.data.useless_prompt_ticks}"
             )
             queue_logs.put_nowait(
                 f"visited_positions: {self.data.visited_positions.get(self.data.get_position(), 0)}"

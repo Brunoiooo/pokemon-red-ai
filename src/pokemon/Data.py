@@ -2,6 +2,7 @@ import hashlib
 from multiprocessing.synchronize import RLock
 import pickle
 from dataclasses import dataclass, field
+from typing import ClassVar
 
 from pyboy import PyBoy, PyBoyMemoryView
 import torch
@@ -9,11 +10,23 @@ import torch
 
 @dataclass
 class Data:
+    TRUNCATE_MODES: ClassVar[tuple[str, ...]] = ("position", "dialog", "battle", "menu")
+
+    # Gen1 PROMPT_BUTTON ▼ at textbox bottom-right (hlcoord 18, 16).
+    PROMPT_ARROW_ADDR: ClassVar[int] = 0xC4F2
+    PROMPT_ARROW_TILE: ClassVar[int] = 0xEE
+    TEXTBOX_ROW_START: ClassVar[int] = 12
+    TEXTBOX_ROW_END: ClassVar[int] = 18  # exclusive
+    SCREEN_TILE_WIDTH: ClassVar[int] = 20
+    PROMPT_ARROW_X: ClassVar[int] = 18
+    PROMPT_ARROW_Y: ClassVar[int] = 16
+
     pyboy: PyBoy
     files_lock: RLock
 
     visited_screens: list[bytes] = field(default_factory=list)
     visited_maps: set[int] = field(default_factory=set)
+    # Presence / novelty only — not used as the dialog truncate fuse.
     visited_dialogs: dict[tuple[int, int], int] = field(default_factory=dict)
     badge_reward: float = 1.0
     event_reward: float = 0.5
@@ -30,9 +43,7 @@ class Data:
     in_menu_ticks: float = 0.0
     in_battle_ticks: float = 0.0
     max_useless_ticks: int = 512
-    # Dialogs get a longer budget than position/menu/battle: reading text
-    # takes real turns/attention a stuck-in-place or stuck-in-menu loop
-    # doesn't need, so a shorter fuse there would punish normal dialog reading.
+    # Budget for sitting on a ▼ prompt without advancing the page.
     max_useless_dialog_ticks: int = 512
     __player_pokemon_size: int = 0x2C
     __pokemon_count: int = 6
@@ -44,6 +55,18 @@ class Data:
 
     visited_positions: dict[tuple[int, int, int], int] = field(default_factory=dict)
     map_vision_radius: int = 5
+    last_truncate_mode: str | None = field(default=None, init=False, repr=False)
+
+    # Prompt-arrow dialog progress (not persisted — reset on clean/load).
+    awaiting_prompt: bool = field(default=False, init=False, repr=False)
+    useless_prompt_ticks: float = field(default=0.0, init=False, repr=False)
+    useless_printing_ticks: float = field(default=0.0, init=False, repr=False)
+    dialog_body_hash_prev: bytes | None = field(default=None, init=False, repr=False)
+
+    @property
+    def max_useless_printing_ticks(self) -> int:
+        """Hang limit while letter-printing with no ▼ yet (4× prompt budget)."""
+        return self.max_useless_dialog_ticks * 4
 
     @property
     def visited_pokedex_own(self):
@@ -102,6 +125,9 @@ class Data:
                 self.visited_maps = pickle.load(f)
             with open(f"{path}/visited_dialogs.pkl", "rb") as f:
                 self.visited_dialogs = pickle.load(f)
+        # Never restore a hot dialog fuse from disk — old pickles may still
+        # contain large per-script tick counters that are no longer the fuse.
+        self._reset_prompt_fuse()
 
     def clean(self):
         self.__visited_pokedex_own = None
@@ -112,6 +138,65 @@ class Data:
         self.visited_positions = {}
         self.visited_maps = set()
         self.visited_dialogs = {}
+        self._reset_prompt_fuse()
+
+    def _reset_prompt_fuse(self):
+        self.awaiting_prompt = False
+        self.useless_prompt_ticks = 0.0
+        self.useless_printing_ticks = 0.0
+        self.dialog_body_hash_prev = None
+
+    def prompt_arrow_on(self, memory: PyBoyMemoryView | bytes) -> bool:
+        return memory[self.PROMPT_ARROW_ADDR] == self.PROMPT_ARROW_TILE
+
+    def textbox_body_bytes(self, memory: PyBoyMemoryView | bytes) -> bytes:
+        """Textbox tile rows with prompt-arrow cell zeroed so blink is invisible."""
+        tiles = self.screen_tiles(memory)
+        width = self.SCREEN_TILE_WIDTH
+        body = bytearray()
+        for y in range(self.TEXTBOX_ROW_START, self.TEXTBOX_ROW_END):
+            row = y * width
+            for x in range(width):
+                if x == self.PROMPT_ARROW_X and y == self.PROMPT_ARROW_Y:
+                    body.append(0)
+                else:
+                    body.append(tiles[row + x])
+        return bytes(body)
+
+    def textbox_body_hash(self, memory: PyBoyMemoryView | bytes) -> bytes:
+        return hashlib.blake2b(self.textbox_body_bytes(memory), digest_size=8).digest()
+
+    def _update_dialog_prompt_state(self, duration: int):
+        mem = self.pyboy.memory
+        if not self.is_dialog(mem):
+            self._reset_prompt_fuse()
+            return
+
+        dialog = self.get_dialog()
+        # Novelty marker only — do not accumulate as a truncate fuse.
+        self.visited_dialogs[dialog] = 1
+
+        body_hash = self.textbox_body_hash(mem)
+        body_changed = (
+            self.dialog_body_hash_prev is not None
+            and body_hash != self.dialog_body_hash_prev
+        )
+
+        if self.prompt_arrow_on(mem):
+            self.awaiting_prompt = True
+
+        if body_changed:
+            self.awaiting_prompt = False
+            self.useless_prompt_ticks = 0.0
+            self.useless_printing_ticks = 0.0
+
+        if self.awaiting_prompt:
+            self.useless_prompt_ticks += duration
+            self.useless_printing_ticks = 0.0
+        else:
+            self.useless_printing_ticks += duration
+
+        self.dialog_body_hash_prev = body_hash
 
     def count(
         self,
@@ -140,11 +225,7 @@ class Data:
             else:
                 self.in_battle_ticks += duration
 
-        if self.is_dialog(self.pyboy.memory):
-            dialog = self.get_dialog()
-            self.visited_dialogs[dialog] = (
-                self.visited_dialogs.get(dialog, 0) + duration
-            )
+        self._update_dialog_prompt_state(duration=duration)
 
         self.visited_maps.add(self.map_id(self.pyboy.memory))
 
@@ -308,7 +389,7 @@ class Data:
         if self.is_world(self.pyboy.memory):
             step += self.reward_position()
         elif self.is_dialog(self.pyboy.memory):
-            m, s = self.reward_dialog(memory)
+            m, s = self.reward_dialog(memory, action=action)
             milestone += m
             step += s
         elif self.is_menu(self.pyboy.memory):
@@ -330,21 +411,36 @@ class Data:
             return self.new_screen_reward, 0.0
         return 0.0, self.in_battle_ticks / self.max_useless_ticks * self.base_reward
 
-    def reward_dialog(self, memory: bytes) -> tuple[float, float]:
-        dialog_changed = self.dialog_id(memory) != self.dialog_id(self.pyboy.memory)
+    def reward_dialog(self, memory: bytes, action: int = 8) -> tuple[float, float]:
         current_dialog = self.get_dialog()
         is_new_dialog = current_dialog not in self.visited_dialogs
-        dialog_reward = (
-            self.new_dialog_reward
-            if is_new_dialog
-            else self.new_screen_reward if dialog_changed else 0.0
+
+        body_hash = self.textbox_body_hash(self.pyboy.memory)
+        body_changed = (
+            self.dialog_body_hash_prev is not None
+            and body_hash != self.dialog_body_hash_prev
         )
-        visits = self.visited_dialogs.get(current_dialog, 0)
-        return dialog_reward, (
-            0.0
-            if dialog_changed
-            else visits / self.max_useless_dialog_ticks * self.base_reward
-        )
+
+        milestone = self.new_dialog_reward if is_new_dialog else 0.0
+        step = 0.0
+
+        # Advance past a ▼ prompt (A/B). Blink alone never changes body_hash.
+        if (
+            self.awaiting_prompt
+            and body_changed
+            and action in (0, 1)
+        ):
+            milestone += self.new_screen_reward
+
+        # Penalty only while stuck at prompt with no page change.
+        if self.awaiting_prompt and not body_changed:
+            step = (
+                self.useless_prompt_ticks
+                / self.max_useless_dialog_ticks
+                * self.base_reward
+            )
+
+        return milestone, step
 
     def reward_position(self):
         pos = self.get_position()
@@ -541,17 +637,24 @@ class Data:
     def terminated(self, memory: bytes):
         return all(self.badges(self.pyboy.memory))
 
+    def truncated_mode(self, memory: bytes) -> str | None:
+        """Return which stuck-mode triggered truncation, or None if not truncated."""
+        if self.max_useless_ticks <= self.visited_positions.get(self.get_position(), 0):
+            return "position"
+        if self.max_useless_dialog_ticks <= self.useless_prompt_ticks:
+            return "dialog"
+        if self.max_useless_printing_ticks <= self.useless_printing_ticks:
+            return "dialog"
+        if self.max_useless_ticks <= self.in_battle_ticks:
+            return "battle"
+        if self.max_useless_ticks <= self.in_menu_ticks:
+            return "menu"
+        return None
+
     def truncated(self, memory: bytes):
-        return (
-            True
-            if self.max_useless_ticks
-            <= self.visited_positions.get(self.get_position(), 0)
-            or self.max_useless_dialog_ticks
-            <= self.visited_dialogs.get(self.get_dialog(), 0)
-            or self.max_useless_ticks <= self.in_battle_ticks
-            or self.max_useless_ticks <= self.in_menu_ticks
-            else False
-        )
+        mode = self.truncated_mode(memory)
+        self.last_truncate_mode = mode
+        return mode is not None
 
     def is_illegal_world_move(self, memory: bytes, action: int):
         return (
@@ -614,7 +717,7 @@ class Data:
             max=self.max_useless_ticks,
         )
         data += self.data_normalizer(
-            [self.visited_dialogs.get(self.get_dialog(), 0)],
+            [self.useless_prompt_ticks],
             max=self.max_useless_dialog_ticks,
         )
         data += self.player_data()
