@@ -30,6 +30,10 @@ class Data:
     in_menu_ticks: float = 0.0
     in_battle_ticks: float = 0.0
     max_useless_ticks: int = 512
+    # Dialogs get a longer budget than position/menu/battle: reading text
+    # takes real turns/attention a stuck-in-place or stuck-in-menu loop
+    # doesn't need, so a shorter fuse there would punish normal dialog reading.
+    max_useless_dialog_ticks: int = 512 * 8
     __player_pokemon_size: int = 0x2C
     __pokemon_count: int = 6
     buffer_reward: float = 0.0
@@ -324,7 +328,7 @@ class Data:
         is_new_dialog = current_dialog not in self.visited_dialogs
         dialog_reward = self.new_dialog_reward if is_new_dialog else self.new_screen_reward if dialog_changed else 0.0
         visits = self.visited_dialogs.get(current_dialog, 0)
-        return dialog_reward, 0.0 if dialog_changed else visits / self.max_useless_ticks * self.base_reward
+        return dialog_reward, 0.0 if dialog_changed else visits / self.max_useless_dialog_ticks * self.base_reward
 
     def reward_position(self):
         pos = self.get_position()
@@ -526,7 +530,7 @@ class Data:
             True
             if self.max_useless_ticks
             <= self.visited_positions.get(self.get_position(), 0)
-            or self.max_useless_ticks <= self.visited_dialogs.get(self.get_dialog(), 0)
+            or self.max_useless_dialog_ticks <= self.visited_dialogs.get(self.get_dialog(), 0)
             or self.max_useless_ticks <= self.in_battle_ticks
             or self.max_useless_ticks <= self.in_menu_ticks
             else False
@@ -589,12 +593,12 @@ class Data:
         data = []
 
         data += self.data_normalizer(
-            [
-                self.in_battle_ticks,
-                self.in_menu_ticks,
-                self.visited_dialogs.get(self.get_dialog(), 0),
-            ],
+            [self.in_battle_ticks, self.in_menu_ticks],
             max=self.max_useless_ticks,
+        )
+        data += self.data_normalizer(
+            [self.visited_dialogs.get(self.get_dialog(), 0)],
+            max=self.max_useless_dialog_ticks,
         )
         data += self.player_data()
         data += self.pokedex_data()

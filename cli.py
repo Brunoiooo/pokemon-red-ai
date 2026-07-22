@@ -128,6 +128,9 @@ p_record.add_argument("--output", "-o", default="demos/demo.json",
                       help="Output JSON file (default: demos/demo.json)")
 p_record.add_argument("--max-steps", "-n", type=int, default=500,
                       help="Maximum steps to record (default: 500)")
+p_record.add_argument("--patience", "-p", type=int, default=8,
+                      help="Multiplier on the stuck/idle truncation budget, tuned up "
+                           "from the training default for human reading/reaction speed (default: 8)")
 
 # ---------------------------------------------------------------------------
 # plot

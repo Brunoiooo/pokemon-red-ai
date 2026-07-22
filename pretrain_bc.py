@@ -30,7 +30,7 @@ from torch.optim import AdamW
 from pokemon.Emulator import Emulator, DURATION_BINS
 from pokemon.ModelPokemon import get_model
 
-BUTTON_NAMES = ["A", "B", "Start", "Select", "Left", "Right", "Up", "Down"]
+BUTTON_NAMES = ["A", "B", "Start", "Select", "Left", "Right", "Up", "Down", "None"]
 BIN_16_IDX = 0  # index of 16-tick bin in DURATION_BINS
 
 
