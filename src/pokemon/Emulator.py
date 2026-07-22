@@ -276,70 +276,97 @@ class Emulator:
         is_debug: bool,
         is_evaluation_window: bool,
         save_name: str = "last",
+        start_dirs: list[str] | None = None,
+        n_episodes: int = 1,
+        use_transformer: bool = False,
     ):
         checkpoint = f"saves/{save_name}"
 
         self.use_sdl = is_evaluation_window
 
-        model = get_model(device="cpu", files_lock=self.files_lock)
+        model = get_model(
+            device="cpu",
+            files_lock=self.files_lock,
+            use_transformer=use_transformer,
+        )
         model.load_state_dict(model_state_dict)
         model.eval()
 
-        total_reward = 0.0
+        if not start_dirs:
+            start_dirs = ["start"]
 
-        memory, inputs = self.reset(dir="start")
+        episode_returns: list[float] = []
+        episode_steps: list[int] = []
+        episode_badges: list[int] = []
 
-        self.save_last_checkpoint(checkpoint)
+        for ep_i in range(n_episodes):
+            start_dir = start_dirs[ep_i % len(start_dirs)]
+            total_reward = 0.0
 
-        state_buffer = deque(maxlen=64)
-        count = 0
-        while True:
-            count += 1
+            memory, inputs = self.reset(dir=start_dir)
 
-            model_inputs = inputs
-            if state_buffer:
-                model_inputs = {
-                    **inputs,
-                    "state_sequence": torch.stack(list(state_buffer)).unsqueeze(0),
-                }
-
-            with torch.inference_mode():
-                out = model(model_inputs)
-                if isinstance(out, dict) and "z" in out:
-                    state_buffer.append(out["z"].squeeze(0).detach())
-                q = out["q"] if isinstance(out, dict) else out
-                q = q.squeeze(0)
-
-            action = int(torch.argmax(q).item())
-
-            next_memory, next_inputs, reward, terminated, truncated = self.step(
-                memory=memory, meta_action=action
-            )
-
-            if (
-                self.data.is_world(self.pyboy.memory)
-                and self.data.visited_positions.get(self.data.get_position(), 0) == 0
-            ):
+            if ep_i == 0:
                 self.save_last_checkpoint(checkpoint)
-                queue_logs.put_nowait(f"saved checkpoint {count}")
 
-            if terminated:
-                queue_logs.put_nowait(
-                    f"Evaluation terminated successfully with total reward: {total_reward:.2f}"
+            state_buffer = deque(maxlen=64)
+            count = 0
+            while True:
+                count += 1
+
+                model_inputs = inputs
+                if state_buffer:
+                    model_inputs = {
+                        **inputs,
+                        "state_sequence": torch.stack(list(state_buffer)).unsqueeze(0),
+                    }
+
+                with torch.inference_mode():
+                    out = model(model_inputs)
+                    if isinstance(out, dict) and "z" in out:
+                        state_buffer.append(out["z"].squeeze(0).detach())
+                    q = out["q"] if isinstance(out, dict) else out
+                    q = q.squeeze(0)
+
+                action = int(torch.argmax(q).item())
+
+                next_memory, next_inputs, reward, terminated, truncated = self.step(
+                    memory=memory, meta_action=action
                 )
 
-            total_reward += reward
+                if (
+                    self.data.is_world(self.pyboy.memory)
+                    and self.data.visited_positions.get(self.data.get_position(), 0) == 0
+                ):
+                    self.save_last_checkpoint(checkpoint)
+                    queue_logs.put_nowait(f"saved checkpoint {count}")
 
-            if truncated:
-                break
+                if terminated:
+                    queue_logs.put_nowait(
+                        f"Evaluation terminated successfully with total reward: {total_reward:.2f}"
+                    )
 
-            memory, inputs = (next_memory, next_inputs)
+                total_reward += reward
 
-        badges_collected = sum(self.data.badges(self.pyboy.memory))
+                if truncated or terminated:
+                    break
+
+                memory, inputs = (next_memory, next_inputs)
+
+            badges_collected = sum(self.data.badges(self.pyboy.memory))
+            episode_returns.append(total_reward)
+            episode_steps.append(count)
+            episode_badges.append(badges_collected)
+            queue_logs.put_nowait(
+                f"Eval episode {ep_i + 1}/{n_episodes} from '{start_dir}': "
+                f"return={total_reward:.4f} steps={count} badges={badges_collected}"
+            )
 
         self.pyboy.stop(False)
 
-        return total_reward, count, badges_collected
+        avg_return = float(sum(episode_returns) / len(episode_returns))
+        avg_steps = int(sum(episode_steps) / len(episode_steps))
+        avg_badges = float(sum(episode_badges) / len(episode_badges))
+        return avg_return, avg_steps, avg_badges
 
     def save_last_checkpoint(self, path: str):
         os.makedirs(path, exist_ok=True)

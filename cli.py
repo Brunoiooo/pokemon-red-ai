@@ -70,6 +70,8 @@ p_train.add_argument("--eval-gui", "-eg", action="store_true",
                      help="Show GUI during evaluations only")
 p_train.add_argument("--reset-buffer", "-rb", action="store_true",
                      help="Reset the replay buffer before starting")
+p_train.add_argument("--transformer", action="store_true",
+                     help="Enable Transformer memory module (off by default for speed)")
 
 # ---------------------------------------------------------------------------
 # eval

@@ -55,7 +55,19 @@ class NoisyLinear(nn.Module):
         return torch.nn.functional.linear(x, w, b)
 
 
-def get_model(device: str, files_lock: RLock, name: str | None = None):
+# Off by default for faster early training; enable via --transformer.
+DEFAULT_USE_TRANSFORMER = False
+
+
+def get_model(
+    device: str,
+    files_lock: RLock,
+    name: str | None = None,
+    use_transformer: bool | None = None,
+):
+    if use_transformer is None:
+        use_transformer = DEFAULT_USE_TRANSFORMER
+
     emulator = Emulator.Emulator(files_lock=files_lock)
 
     inputs = emulator.data.inputs()
@@ -86,7 +98,7 @@ def get_model(device: str, files_lock: RLock, name: str | None = None):
         outputs=len(emulator.buttons) * len(Emulator.DURATION_BINS),
         use_c51=True,
         use_noisy=True,
-        use_transformer=True,
+        use_transformer=use_transformer,
     ).to(device)
 
     emulator.pyboy.stop(False)
@@ -109,12 +121,20 @@ def get_model(device: str, files_lock: RLock, name: str | None = None):
     try:
         model.load_state_dict(state_dict, strict=True)
     except RuntimeError:
-        result = model.load_state_dict(state_dict, strict=False)
+        model_sd = model.state_dict()
+        filtered = {
+            k: v
+            for k, v in state_dict.items()
+            if k in model_sd and tuple(model_sd[k].shape) == tuple(v.shape)
+        }
+        skipped = len(state_dict) - len(filtered)
+        result = model.load_state_dict(filtered, strict=False)
         missing = len(result.missing_keys)
         unexpected = len(result.unexpected_keys)
         print(
             f"[ModelPokemon] Loaded checkpoint with mismatches "
-            f"(missing={missing}, unexpected={unexpected}). "
+            f"(compatible={len(filtered)}, skipped_shape={skipped}, "
+            f"missing={missing}, unexpected={unexpected}). "
             f"Architecture may have changed — consider --reset-buffer and fresh training."
         )
 
@@ -153,7 +173,7 @@ class ModelPokemon(nn.Module):
         outputs: int,
         use_c51: bool = True,
         use_noisy: bool = True,
-        use_transformer: bool = True,
+        use_transformer: bool = False,
     ):
         super().__init__()
 

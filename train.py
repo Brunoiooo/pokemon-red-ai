@@ -79,7 +79,10 @@ def run(args):
         if bm.delete_buffer():
             print("Replay buffer reset.\n")
 
-    trainer = TrainWorker(max_workers=args.workers)
+    trainer = TrainWorker(
+        max_workers=args.workers,
+        use_transformer=getattr(args, "transformer", False),
+    )
 
     # Set GUI mode
     trainer.train_use_sdl.value = args.gui
@@ -89,6 +92,12 @@ def run(args):
     print(f"Workers: {trainer.max_workers}")
     print(f"Batch size: {trainer.batch_size}")
     print(f"Learning rate: {trainer.lr:.2e}")
+    print(f"PER alpha: {trainer.per_alpha}")
+    print(f"N-step: {ExperienceWorker.td_error_steps}")
+    print(f"Target tau: {trainer.tau} every {trainer.target_update_every} steps")
+    print(f"Transformer: {'ON' if trainer.use_transformer else 'OFF'}")
+    print(f"Eval episodes: {trainer.eval_episodes} (EMA α={trainer.eval_ema_alpha})")
+    print(f"Model sync: {trainer.model_sync_interval_seconds}s / every {ExperienceWorker.model_sync_every_steps} env steps")
     print(f"Buffer capacity: {trainer.buffer_capacity}")
     print(f"Buffer entries: {len(trainer.buffer)}")
     print(f"Episode end: stuck >= {Data.max_useless_ticks} ticks (no hard step cap)")
@@ -316,6 +325,8 @@ def main():
                         help="Show GUI during evaluations only")
     parser.add_argument("--reset-buffer", "-rb", action="store_true",
                         help="Reset experience buffer (start fresh)")
+    parser.add_argument("--transformer", action="store_true",
+                        help="Enable Transformer memory module (off by default for speed)")
     parser.add_argument("--verbose", "-v", action="store_true",
                         help="Print verbose logs (checkpoints, curriculum, worker events)")
     run(parser.parse_args())

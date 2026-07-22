@@ -161,7 +161,7 @@ class MetricsCollector:
             avg_loss = statistics.mean(loss_values[-20:])
             if avg_loss > 10.0:
                 self.session.issues.append(f"High loss: {avg_loss:.2f} — possible Q-value divergence")
-                self.session.recommendations.append("Reduce learning rate (5e-4 → 1e-4) or reduce batch_size")
+                self.session.recommendations.append("Reduce learning rate (1.5e-4 → 5e-5) or reduce batch_size")
             if len(loss_values) > 10:
                 first_half = statistics.mean(loss_values[:len(loss_values)//2])
                 second_half = statistics.mean(loss_values[len(loss_values)//2:])

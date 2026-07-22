@@ -35,8 +35,11 @@ def _run_evaluate_greedy_process(
     is_evaluation_window: bool,
     save_name: str,
     result_queue,
+    start_dirs: list[str],
+    n_episodes: int,
+    use_transformer: bool,
 ):
-    """Runs a full greedy-eval episode in its own OS process.
+    """Runs greedy-eval episode(s) in its own OS process.
 
     Greedy eval used to run as a Thread inside the learner process, so its PyBoy
     stepping (pure Python, GIL-bound) directly stole GIL time from optimize_batch
@@ -50,6 +53,9 @@ def _run_evaluate_greedy_process(
             is_debug=False,
             is_evaluation_window=is_evaluation_window,
             save_name=save_name,
+            start_dirs=start_dirs,
+            n_episodes=n_episodes,
+            use_transformer=use_transformer,
         )
         result_queue.put(result)
     except Exception as e:
@@ -57,7 +63,7 @@ def _run_evaluate_greedy_process(
             queue_logs.put_nowait(f"Evaluation process failed: {e}\n{traceback.format_exc()}")
         except (BrokenPipeError, EOFError, OSError):
             pass
-        result_queue.put((0.0, 0, 0))
+        result_queue.put((0.0, 0, 0.0))
 
 
 @dataclass
@@ -90,6 +96,12 @@ class TrainWorker:
 
     max_best_saves: int = 3
     eval_interval_seconds: int = 120
+    eval_episodes: int = 3
+    eval_ema_alpha: float = 0.3
+    model_sync_interval_seconds: float = 1.5
+    use_transformer: bool = False
+    rollback_patience: int = 2
+    rollback_margin: float = 0.02
 
     def __post_init__(self):
         self.manager = mp.Manager()
@@ -135,15 +147,16 @@ class TrainWorker:
 
     batch_size = 512
     grad_accum_steps = 1
-    lr = 5e-4
+    lr = 1.5e-4
     weight_decay = 1e-4
     gamma = 0.99
     criterion: torch.nn.SmoothL1Loss = field(default_factory=torch.nn.SmoothL1Loss)
-    tau = 0.001
+    tau = 0.005
+    target_update_every: int = 4
     buffer_save_interval = 2000
     _opt_steps: int = 0
 
-    per_alpha: float = 0.7
+    per_alpha: float = 0.55
     per_beta_start: float = 0.4
     per_beta_frames: int = 2_000_000
 
@@ -165,7 +178,10 @@ class TrainWorker:
                 name = "best"
 
             self.__model = get_model(
-                device=self.device, files_lock=self.files_lock, name=name
+                device=self.device,
+                files_lock=self.files_lock,
+                name=name,
+                use_transformer=self.use_transformer,
             )
 
             self.__model.train()
@@ -177,7 +193,11 @@ class TrainWorker:
     @property
     def target_model(self):
         if not self.__target_model:
-            self.__target_model = get_model(self.device, files_lock=self.files_lock)
+            self.__target_model = get_model(
+                self.device,
+                files_lock=self.files_lock,
+                use_transformer=self.use_transformer,
+            )
 
             with self.model_lock:
                 self.__target_model.load_state_dict(self.model.state_dict())
@@ -250,6 +270,8 @@ class TrainWorker:
         return self.__gamma_tensor
 
     __best_eval_return: float | None = None
+    __ema_eval_return: float | None = None
+    _eval_regressions: int = 0
 
     @property
     def best_eval_return(self):
@@ -273,6 +295,18 @@ class TrainWorker:
     @best_eval_return.setter
     def best_eval_return(self, best_eval_return: float):
         self.__best_eval_return = best_eval_return
+
+    @property
+    def ema_eval_return(self) -> float | None:
+        return self.__ema_eval_return
+
+    def update_ema_eval(self, avg_return: float) -> float:
+        if self.__ema_eval_return is None:
+            self.__ema_eval_return = avg_return
+        else:
+            a = self.eval_ema_alpha
+            self.__ema_eval_return = a * avg_return + (1.0 - a) * self.__ema_eval_return
+        return self.__ema_eval_return
 
     __run_queue_thread: Thread | None = None
 
@@ -344,6 +378,7 @@ class TrainWorker:
                     init_model_state_dict=model_state_dict,
                     files_lock=self.worker_files_locks[i],
                     worker_id=i,
+                    use_transformer=self.use_transformer,
                 )
                 for i, (recv_conn, send_conn) in enumerate(self.experienceWorkerPipes)
             ]
@@ -485,7 +520,7 @@ class TrainWorker:
                     model_state_dict = self.model.state_dict()
 
                 send_conn.send(model_state_dict)
-                sleep(5)
+                sleep(self.model_sync_interval_seconds)
         except Exception as e:
             try:
                 self.event_start.clear()
@@ -494,6 +529,14 @@ class TrainWorker:
             self._safe_log(f"{e}\n{traceback.format_exc()}")
         finally:
             self._safe_log("Stopped sending model state dict to worker.")
+
+    def _eval_start_dirs(self) -> list[str]:
+        dirs = ["start"]
+        for i in range(self.max_best_saves):
+            name = f"best_{i}"
+            if os.path.isdir(f"saves/{name}"):
+                dirs.append(name)
+        return dirs
 
     def evaluate_greedy(self):
         try:
@@ -517,6 +560,7 @@ class TrainWorker:
                     count = self.count
 
                 save_best = f"best_{evaluation_count % self.max_best_saves}"
+                start_dirs = self._eval_start_dirs()
 
                 result_queue = self.manager.Queue()
                 p = Process(
@@ -528,6 +572,9 @@ class TrainWorker:
                         self.is_evaluation_window.value,
                         "eval_tmp",
                         result_queue,
+                        start_dirs,
+                        self.eval_episodes,
+                        self.use_transformer,
                     ),
                     daemon=True,
                 )
@@ -538,22 +585,36 @@ class TrainWorker:
                     avg_ret, steps, badges = result_queue.get(timeout=5)
                 except queue.Empty:
                     self.queue_logs.put_nowait("Evaluation process joined but produced no result.")
-                    avg_ret, steps, badges = 0.0, 0, 0
+                    avg_ret, steps, badges = 0.0, 0, 0.0
 
-                if self.best_eval_return < avg_ret:
-                    self.save_best(avg_ret)
+                ema_ret = self.update_ema_eval(float(avg_ret))
+
+                if self.best_eval_return < ema_ret:
+                    self.save_best(ema_ret)
+                    self._eval_regressions = 0
                     with self.files_lock:
                         shutil.copytree(
                             "saves/eval_tmp",
                             f"saves/{save_best}",
                             dirs_exist_ok=True,
                         )
+                else:
+                    self._eval_regressions += 1
+                    if (
+                        self._eval_regressions >= self.rollback_patience
+                        and ema_ret < self.best_eval_return - self.rollback_margin
+                    ):
+                        self.rollback_to_best()
+                        self._eval_regressions = 0
 
                 with self.eval_lock:
-                    self.queue_dots.put_nowait((count, avg_ret))
-                    self.queue_eval_details.put_nowait((count, avg_ret, steps, badges))
+                    self.queue_dots.put_nowait((count, ema_ret))
+                    self.queue_eval_details.put_nowait((count, ema_ret, steps, badges))
 
-                self.queue_logs.put_nowait(f"Finished evaluation {avg_ret:.6f}.")
+                self.queue_logs.put_nowait(
+                    f"Finished evaluation raw={avg_ret:.6f} ema={ema_ret:.6f} "
+                    f"(best={self.best_eval_return:.6f}, n={self.eval_episodes})."
+                )
 
                 evaluation_count += 1
 
@@ -598,6 +659,7 @@ class TrainWorker:
     freeze_max_delay: int = 10
 
     def freeze_model(self, avg_return: float):
+        """Legacy short freeze; prefer rollback_to_best for regression recovery."""
         if self.is_freeze and self.freeze_steps < self.freeze_max_steps:
             self.freeze_steps += 1
             return
@@ -614,6 +676,32 @@ class TrainWorker:
             )
             self.is_freeze = True
             return
+
+    def rollback_to_best(self):
+        path = "models/best.pth"
+        if not os.path.exists(path):
+            self.queue_logs.put_nowait("Rollback skipped: models/best.pth missing.")
+            return
+
+        try:
+            ckpt = torch.load(path, map_location=self.device)
+            state_dict = (
+                ckpt["model_state"]
+                if isinstance(ckpt, dict) and "model_state" in ckpt
+                else ckpt
+            )
+            with self.model_lock:
+                self.model.load_state_dict(state_dict, strict=False)
+                self.target_model.load_state_dict(self.model.state_dict())
+                # Optimizer must match restored weights; recreate on next access.
+                self.__optimizer = None
+                self.__scheduler = None
+            self.queue_logs.put_nowait(
+                f"Rolled back online+target to best.pth "
+                f"(best_return={self.best_eval_return:.6f})."
+            )
+        except Exception as e:
+            self.queue_logs.put_nowait(f"Rollback failed: {e}")
 
     def save_buffer_to_disk(self):
         """Saves the replay buffer to disk. Call this periodically during training.
@@ -795,7 +883,8 @@ class TrainWorker:
             self.buffer.update_priorities(idxs, total_td_errors.tolist())
 
         self._opt_steps += 1
-        self.soft_update_target()
+        if self._opt_steps % self.target_update_every == 0:
+            self.soft_update_target()
 
         if self._opt_steps % 50 == 0:
             try:

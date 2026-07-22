@@ -38,10 +38,13 @@ class ExperienceWorker:
     init_model_state_dict: dict[str, Any]
     worker_id: int = 0
 
-    td_error_steps = 10
+    td_error_steps = 5
     start_save_chance = 0.8
-    max_stuck_epsilon = 0.15
+    # Keep NoisyNet as primary exploration; epsilon is a light override only.
+    max_stuck_epsilon = 0.05
     min_stuck_epsilon = 0.0
+    use_transformer: bool = False
+    model_sync_every_steps: int = 50
 
     epsilon_decay_steps: int = field(default=500_000, init=False)
     _total_steps: int = field(default=0, init=False)
@@ -116,7 +119,11 @@ class ExperienceWorker:
     @property
     def model(self):
         if not self.__model:
-            self.__model = get_model(device="cpu", files_lock=self.files_lock)
+            self.__model = get_model(
+                device="cpu",
+                files_lock=self.files_lock,
+                use_transformer=self.use_transformer,
+            )
 
             self.__model.load_state_dict(self.model_state_dict)
 
@@ -247,7 +254,7 @@ class ExperienceWorker:
 
             memory, inputs = next_memory, next_inputs
 
-            if self._total_steps % 200 == 0 and self.recv_conn.poll():
+            if self._total_steps % self.model_sync_every_steps == 0 and self.recv_conn.poll():
                 self.model_state_dict = self.recv_conn.recv()
 
             self.emulator.use_sdl = bool(self.window.get())
