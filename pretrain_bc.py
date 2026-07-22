@@ -73,7 +73,7 @@ def replay_demo(demo_path: str, device: torch.device, files_lock) -> list[tuple]
         pass
 
     print(f"  Samples      : {len(samples)}")
-    counts = Counter(BUTTON_NAMES[a] for _, a in samples)
+    counts = Counter(BUTTON_NAMES[a // len(DURATION_BINS)] for _, a in samples)
     print("  Action distribution:")
     for btn, cnt in counts.most_common():
         bar = "#" * int(cnt / len(samples) * 30)
@@ -112,8 +112,8 @@ def train_bc(
 
             for inp, act in batch:
                 out = model(inp)
-                # out["q"] shape: [1, 8] — expected Q-value per action
-                q = out["q"].squeeze(0)   # [8]
+                # out["q"] shape: [1, N_META_ACTIONS] — Q-value per (button, duration) pair
+                q = out["q"].squeeze(0)   # [N_META_ACTIONS]
                 target = torch.tensor([act], dtype=torch.long, device=device)
                 loss = F.cross_entropy(q.unsqueeze(0), target) / len(batch)
                 # backward immediately — NoisyLinear resamples noise in-place,

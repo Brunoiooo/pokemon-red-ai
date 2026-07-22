@@ -33,7 +33,7 @@ class Data:
     # Dialogs get a longer budget than position/menu/battle: reading text
     # takes real turns/attention a stuck-in-place or stuck-in-menu loop
     # doesn't need, so a shorter fuse there would punish normal dialog reading.
-    max_useless_dialog_ticks: int = 512 * 8
+    max_useless_dialog_ticks: int = 512
     __player_pokemon_size: int = 0x2C
     __pokemon_count: int = 6
     buffer_reward: float = 0.0
@@ -113,7 +113,13 @@ class Data:
         self.visited_maps = set()
         self.visited_dialogs = {}
 
-    def count(self, reward: float, action: int, memory: bytes | None = None, duration: int = 16):
+    def count(
+        self,
+        reward: float,
+        action: int,
+        memory: bytes | None = None,
+        duration: int = 16,
+    ):
         self.visited_pokedex_own = self.pokedex_own(self.pyboy.memory)
         self.visited_pokedex_seen = self.pokedex_seen(self.pyboy.memory)
 
@@ -136,7 +142,9 @@ class Data:
 
         if self.is_dialog(self.pyboy.memory):
             dialog = self.get_dialog()
-            self.visited_dialogs[dialog] = self.visited_dialogs.get(dialog, 0) + duration
+            self.visited_dialogs[dialog] = (
+                self.visited_dialogs.get(dialog, 0) + duration
+            )
 
         self.visited_maps.add(self.map_id(self.pyboy.memory))
 
@@ -326,9 +334,17 @@ class Data:
         dialog_changed = self.dialog_id(memory) != self.dialog_id(self.pyboy.memory)
         current_dialog = self.get_dialog()
         is_new_dialog = current_dialog not in self.visited_dialogs
-        dialog_reward = self.new_dialog_reward if is_new_dialog else self.new_screen_reward if dialog_changed else 0.0
+        dialog_reward = (
+            self.new_dialog_reward
+            if is_new_dialog
+            else self.new_screen_reward if dialog_changed else 0.0
+        )
         visits = self.visited_dialogs.get(current_dialog, 0)
-        return dialog_reward, 0.0 if dialog_changed else visits / self.max_useless_dialog_ticks * self.base_reward
+        return dialog_reward, (
+            0.0
+            if dialog_changed
+            else visits / self.max_useless_dialog_ticks * self.base_reward
+        )
 
     def reward_position(self):
         pos = self.get_position()
@@ -530,7 +546,8 @@ class Data:
             True
             if self.max_useless_ticks
             <= self.visited_positions.get(self.get_position(), 0)
-            or self.max_useless_dialog_ticks <= self.visited_dialogs.get(self.get_dialog(), 0)
+            or self.max_useless_dialog_ticks
+            <= self.visited_dialogs.get(self.get_dialog(), 0)
             or self.max_useless_ticks <= self.in_battle_ticks
             or self.max_useless_ticks <= self.in_menu_ticks
             else False
