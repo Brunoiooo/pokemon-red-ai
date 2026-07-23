@@ -56,7 +56,9 @@ def run(args):
     curriculum_saves = get_curriculum_saves(stage)
 
     # SubprocVecEnv requires identical render_mode on every worker, so --gui
-    # enables SDL on all of them (one window per worker).
+    # enables SDL on all training workers. Eval stays headless: a second SDL
+    # PyBoy in the main process (DummyVecEnv) conflicts with the first and
+    # crashes on the next EvalCallback run if the window is left open.
     if args.gui and args.workers > 1:
         print(
             f"Note: --gui opens an SDL window on each of {args.workers} workers."
@@ -116,7 +118,7 @@ def run(args):
                 stage=stage,
                 curriculum_mix=0.0,
                 curriculum_saves=curriculum_saves[-1:],
-                render_mode=render_mode,
+                render_mode=None,
                 auto_advance=args.auto_curriculum,
             )
         ]
