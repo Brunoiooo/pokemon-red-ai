@@ -19,6 +19,7 @@ HOUSE_MAPS = frozenset({MAP_REDS_HOUSE_1F, MAP_REDS_HOUSE_2F})
 # Emulator button indices — A/B must be mashable to start and advance dialogs.
 ACTION_A = 0
 ACTION_B = 1
+ACTION_NONE = 8
 INTERACT_ACTIONS = frozenset({ACTION_A, ACTION_B})
 
 # Curriculum / episode goals (map, event flags, badges).
@@ -204,13 +205,20 @@ class Data:
         self._milestones_hit = set()
         self._start_map_id = self.map_id(self.pyboy.memory)
 
-    def _dialog_progressed(self, memory: bytes | None) -> bool:
-        """True when this step advanced dialog text (id and/or tiles)."""
+    def _dialog_progressed(self, memory: bytes | None, action: int | None = None) -> bool:
+        """True when this step meaningfully advanced dialog text.
+
+        Tilemap alone is NOT enough: the ▼ cursor / text blink changes tiles
+        every few frames with no input, which previously reset the stuck fuse
+        forever and rewarded noop.
+        """
         if memory is None or not self.is_dialog(self.pyboy.memory):
             return False
         if self.dialog_id(memory) != self.dialog_id(self.pyboy.memory):
             return True
-        # Same dialog_id can span many boxes; tilemap change = text advanced.
+        # Same dialog_id across boxes: only count tile change if agent pressed A/B.
+        if action is None or int(action) not in INTERACT_ACTIONS:
+            return False
         return self.screen_tiles_hash(memory) != self.screen_tiles_hash(
             self.pyboy.memory
         )
@@ -255,7 +263,7 @@ class Data:
         if self.is_dialog(self.pyboy.memory):
             dialog = self.get_dialog()
             self.visited_dialogs[dialog] = self.visited_dialogs.get(dialog, 0) + duration
-            if self._dialog_progressed(memory):
+            if self._dialog_progressed(memory, action):
                 self.in_dialog_ticks = 0
             else:
                 self.in_dialog_ticks += duration
@@ -449,7 +457,7 @@ class Data:
             if self.is_dialog(memory):
                 milestone += self.dialog_exit_reward
         elif self.is_dialog(self.pyboy.memory):
-            m, s = self.reward_dialog(memory)
+            m, s = self.reward_dialog(memory, action=action)
             milestone += m
             step += s
         elif self.is_menu(self.pyboy.memory):
@@ -522,9 +530,9 @@ class Data:
                 triggered = True
 
         # 2) Action pattern detection (sliding window).
-        # Never punish A/B spam: talking, confirming, and advancing text all
-        # require it. Movement ABAB / single-direction mash still penalized.
-        if not in_dialog and not interacting:
+        # A/B mash is allowed (talk / advance text). Noop and movement loops
+        # are not — especially noop camping inside a dialog.
+        if not interacting:
             actions = list(self.recent_actions) + [action]
             if len(actions) >= 4:
                 a, b, c, d = actions[-4], actions[-3], actions[-2], actions[-1]
@@ -540,6 +548,11 @@ class Data:
             if len(actions) >= 8 and len(set(actions[-8:])) == 1:
                 penalty += self.action_pattern_penalty
                 triggered = True
+
+        # Idle in dialog (noop) is never useful — nudge toward A/B.
+        if in_dialog and action == ACTION_NONE:
+            penalty += self.menu_spam_penalty
+            triggered = True
 
         # 3) Spatial loop: same tile revisited often in recent history.
         # World + non-interact only — standing to talk is not a movement loop.
@@ -573,24 +586,25 @@ class Data:
             return self.new_screen_reward, 0.0
         return 0.0, self.in_battle_ticks / self.max_useless_ticks * self.base_reward
 
-    def reward_dialog(self, memory: bytes) -> tuple[float, float]:
+    def reward_dialog(self, memory: bytes, action: int) -> tuple[float, float]:
         dialog_changed = self.dialog_id(memory) != self.dialog_id(self.pyboy.memory)
-        screen_changed = self.screen_tiles_hash(memory) != self.screen_tiles_hash(
-            self.pyboy.memory
+        interacting = int(action) in INTERACT_ACTIONS
+        # Require A/B for tile-based advance — cursor blink must not pay.
+        screen_advanced = interacting and (
+            self.screen_tiles_hash(memory)
+            != self.screen_tiles_hash(self.pyboy.memory)
         )
-        progressed = dialog_changed or screen_changed
+        progressed = dialog_changed or screen_advanced
         current_dialog = self.get_dialog()
         is_new_dialog = current_dialog not in self.visited_dialogs
         if is_new_dialog:
             dialog_reward = self.new_dialog_reward
         elif dialog_changed:
             dialog_reward = self.dialog_advance_reward
-        elif screen_changed:
-            # Same id, new text box / scroll — still progress.
+        elif screen_advanced:
             dialog_reward = self.dialog_advance_reward * 0.5
         else:
             dialog_reward = 0.0
-        # Waste only when stuck with no visible progress (mirrors battle turns).
         waste = (
             0.0
             if progressed
