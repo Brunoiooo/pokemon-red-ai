@@ -240,19 +240,30 @@ class Data:
             pos = self.get_position()
             stayed = memory is not None and self.get_position(memory) == pos
             interacting = int(action) in INTERACT_ACTIONS
-            # Standing still while mashing A/B is how you talk to NPCs. Counting
-            # those presses as "revisits" burns the stuck fuse and visit
-            # penalties before a dialog can even open.
+            # Stuck-fuse time always accumulates — including A/B mash. Otherwise
+            # the policy can stand in Oak's lab spamming A forever: sprite does
+            # not move, NPCs animate, and truncated() never fires until max_steps.
+            # Soft visit *penalties* still skip A/B so a normal talk can open.
+            self.visited_positions[pos] = (
+                self.visited_positions.get(pos, 0) + duration
+            )
             if not (stayed and interacting):
-                self.visited_positions[pos] = (
-                    self.visited_positions.get(pos, 0) + duration
-                )
                 self.position_visit_counts[pos] = (
                     self.position_visit_counts.get(pos, 0) + 1
                 )
                 self.recent_positions.append(pos)
             elif pos not in self.position_visit_counts:
                 self.position_visit_counts[pos] = 1
+        elif (
+            not self.is_battle(self.pyboy.memory)
+            and not self.is_dialog(self.pyboy.memory)
+        ):
+            # Script lock / menu with no movement (blocked, NPCs still walk):
+            # same stuck fuse as world. Skip during dialog — text uses its own fuse.
+            pos = self.get_position()
+            self.visited_positions[pos] = (
+                self.visited_positions.get(pos, 0) + duration
+            )
 
         if self.is_menu(self.pyboy.memory):
             self.in_menu_ticks += duration
@@ -538,22 +549,22 @@ class Data:
                 triggered = True
 
         # 2) Action pattern detection (sliding window).
-        # A/B mash is allowed (talk / advance text). Noop and movement loops
-        # are not — especially noop camping inside a dialog.
-        if not interacting:
-            actions = list(self.recent_actions) + [action]
-            if len(actions) >= 4:
-                a, b, c, d = actions[-4], actions[-3], actions[-2], actions[-1]
-                if (
-                    a == c
-                    and b == d
-                    and a != b
-                    and a not in INTERACT_ACTIONS
-                    and b not in INTERACT_ACTIONS
-                ):
-                    penalty += self.action_pattern_penalty
-                    triggered = True
-            if len(actions) >= 8 and len(set(actions[-8:])) == 1:
+        # Noop / movement loops always count. Prolonged A/B on the same tile
+        # without an open dialog is camping (Oak lab idle), not "talking".
+        actions = list(self.recent_actions) + [action]
+        if len(actions) >= 4:
+            a, b, c, d = actions[-4], actions[-3], actions[-2], actions[-1]
+            if (
+                a == c
+                and b == d
+                and a != b
+                and a not in INTERACT_ACTIONS
+                and b not in INTERACT_ACTIONS
+            ):
+                penalty += self.action_pattern_penalty
+                triggered = True
+        if len(actions) >= 8 and len(set(actions[-8:])) == 1:
+            if not interacting or not in_dialog:
                 penalty += self.action_pattern_penalty
                 triggered = True
 
@@ -885,14 +896,19 @@ class Data:
         # visited_dialogs — long scripts reuse one dialog_id for many boxes.
         # Also require is_dialog so lingering dialog_id in RAM cannot truncate
         # after the conversation already ended.
+        in_dialog = self.is_dialog(self.pyboy.memory)
         stuck_dialog = (
-            self.is_dialog(self.pyboy.memory)
-            and self.max_useless_dialog_ticks <= self.in_dialog_ticks
+            in_dialog and self.max_useless_dialog_ticks <= self.in_dialog_ticks
+        )
+        # Tile fuse pauses during dialog so long Oak/NPC text is not cut off.
+        stuck_tile = (
+            not in_dialog
+            and self.max_useless_ticks
+            <= self.visited_positions.get(self.get_position(), 0)
         )
         return (
             True
-            if self.max_useless_ticks
-            <= self.visited_positions.get(self.get_position(), 0)
+            if stuck_tile
             or stuck_dialog
             or self.max_useless_ticks <= self.in_battle_ticks
             or self.max_useless_ticks <= self.in_menu_ticks
