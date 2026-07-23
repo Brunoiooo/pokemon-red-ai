@@ -53,6 +53,17 @@ def run(args):
     max_steps = args.max_steps or get_stage_max_steps(stage)
     curriculum_saves = get_curriculum_saves(stage)
 
+    # SubprocVecEnv requires identical render_mode on every worker. A live SDL
+    # window is only practical with a single DummyVecEnv process.
+    if args.gui and args.workers > 1:
+        print(
+            f"Note: --gui forces --workers 1 "
+            f"(was {args.workers}; SubprocVecEnv cannot mix render modes)."
+        )
+        args.workers = 1
+
+    render_mode = "human" if args.gui else None
+
     print("=" * 70)
     print("  Pokemon Red AI — PPO Training (Stable-Baselines3)")
     print("=" * 70)
@@ -65,6 +76,7 @@ def run(args):
     print(f"Saves:      {curriculum_saves}")
     print(f"Log dir:    {log_dir}")
     print(f"Total steps:{args.timesteps:,}")
+    print(f"GUI:        {'ON' if args.gui else 'OFF'}")
     print("=" * 70)
 
     def _make(rank: int):
@@ -76,7 +88,7 @@ def run(args):
                 goal=goal,
                 curriculum_mix=args.curriculum_mix,
                 curriculum_saves=curriculum_saves,
-                render_mode="human" if args.gui and rank == 0 else None,
+                render_mode=render_mode,
             )
             env.reset(seed=args.seed + rank)
             return env

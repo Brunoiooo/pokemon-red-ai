@@ -43,7 +43,7 @@ Useful flags:
 | `--stage stage_2` | Push toward Badge 1 |
 | `--goal badge1` | Override episode success condition |
 | `--workers 8` | Parallel `SubprocVecEnv` envs |
-| `--gui` | Show window on worker 0 |
+| `--gui` | Show window (forces `--workers 1`) |
 | `--resume models/.../ppo_latest.zip` | Continue training |
 
 TensorBoard logs land under `logs/ppo_<timestamp>/`:
