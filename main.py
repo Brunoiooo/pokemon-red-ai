@@ -1,25 +1,29 @@
+#!/usr/bin/env python3
+"""Deprecated Tk GUI entrypoint.
+
+The TrainModel module is missing and the GUI is not on the PPO path.
+Use the CLI instead:
+
+  python cli.py train --workers 8
+  python cli.py eval --model models/.../best/best_model.zip
+"""
 import sys
-import torch
-import os
-from multiprocessing import set_start_method
-
-sys.path.append("src")
-
-from Router import Router
 
 
 def main():
-    torch.backends.cuda.matmul.allow_tf32 = True
-    torch.backends.cudnn.allow_tf32 = True
-    torch.backends.cudnn.benchmark = True
-    torch.set_float32_matmul_precision("high")
-
-    set_start_method("spawn", force=True)
-
-    os.environ.setdefault("CUDA_DEVICE_MAX_CONNECTIONS", "32")
-
-    Router().mainloop()
+    print(
+        "The Tk GUI (main.py) is deprecated / broken.\n"
+        "Use the PPO CLI:\n"
+        "  python cli.py train --workers 8 --stage stage_0\n"
+        "  python cli.py eval --model models/<run>/best/best_model.zip\n"
+        "\n"
+        "Legacy DQN:\n"
+        "  python cli.py train-dqn\n"
+        "  python cli.py eval-dqn --model models/best.pth\n",
+        file=sys.stderr,
+    )
+    return 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

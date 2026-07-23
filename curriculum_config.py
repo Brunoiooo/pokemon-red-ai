@@ -1,74 +1,119 @@
 """
-Curriculum Learning Configuration for Pokemon Red AI
+Curriculum Learning Configuration for Pokemon Red AI (PPO).
 
-Defines progressive training stages with different starting checkpoints.
-Agent starts from simpler stages and progresses to harder ones.
+Stages progress through early-game milestones:
+  stage_0 — leave the player's house / reach Pallet Town
+  stage_1 — reach Route 1 / tall grass
+  stage_2 — Oak's lab / rival path, push toward Badge 1
 
-Stages:
-  - stage_0: Start from beginning (Pallet Town)
-  - stage_1: After starter selection (unlock first battle, leveling)
-  - stage_2: After Badge 1 (more gym battles, exploration)
-  - stage_3: After Badge 3 (mid-game progression)
-
-NOTE: ranges are in raw environment *steps* (ExperienceWorker._total_steps),
-not episodes — that's the unit get_checkpoint_for_episode()/get_current_stage()
-are actually called with from ExperienceWorker.random_save_path. They used to
-be labeled/scaled as episode counts (e.g. "0-5000"), which made stage_0 expire
-after well under a single episode. Also note that once a worker saves its own
-checkpoint (saves/worker_N), ExperienceWorker.random_save_path prefers that over
-any curriculum stage — curriculum only applies before a worker has found its
-own checkpoint.
+Save directories under saves/<checkpoint>/checkpoint.state.
+If a stage save is missing, falls back to "start".
 """
+from __future__ import annotations
+
+import os
+
+from pokemon.Data import (
+    GOAL_BADGE_1,
+    GOAL_LEFT_HOUSE,
+    GOAL_OAKS_LAB,
+    GOAL_ROUTE_1,
+)
 
 CURRICULUM = {
-    # stage_0: steps 0-500k, start from "start" checkpoint
     "stage_0": {
-        "step_range": (0, 500_000),
         "checkpoint": "start",
-        "description": "Beginning: Pallet Town, learn to navigate and select starter",
-        "min_reward": 0.5,  # Minimum average episode reward to advance
+        "goal": GOAL_LEFT_HOUSE,
+        "max_steps": 2048,
+        "description": "Leave Red's house and enter Pallet Town",
         "enabled": True,
+        "earlier": [],
     },
-    # stage_1: steps 500k-2M, start from mid-game checkpoint
-    # Requires: creates saves/stage_1 with game progress to first gym
     "stage_1": {
-        "step_range": (500_000, 2_000_000),
         "checkpoint": "stage_1",
-        "description": "After starter: explore, level up, reach first gym",
-        "min_reward": 0.7,
-        "enabled": False,  # Set to True once saves/stage_1 exists
+        "goal": GOAL_ROUTE_1,
+        "max_steps": 4096,
+        "description": "Reach Route 1 / tall grass",
+        "enabled": True,
+        "earlier": ["start"],
     },
-    # stage_2: steps 2M+, start from early-mid game
     "stage_2": {
-        "step_range": (2_000_000, 10_000_000),
         "checkpoint": "stage_2",
-        "description": "After Badge 1: broader exploration, multiple gyms",
-        "min_reward": 0.8,
-        "enabled": False,  # Set to True once saves/stage_2 exists
+        "goal": GOAL_BADGE_1,
+        "max_steps": 8192,
+        "description": "Progress toward Pewter Gym / Badge 1",
+        "enabled": True,
+        "earlier": ["start", "stage_1"],
     },
 }
 
+
+def _save_exists(name: str) -> bool:
+    return os.path.isfile(f"saves/{name}/checkpoint.state")
+
+
+def resolve_checkpoint(name: str) -> str:
+    if _save_exists(name):
+        return name
+    return "start"
+
+
+def get_goal_for_stage(stage: str) -> str:
+    cfg = CURRICULUM.get(stage, CURRICULUM["stage_0"])
+    return cfg["goal"]
+
+
+def get_stage_max_steps(stage: str) -> int:
+    cfg = CURRICULUM.get(stage, CURRICULUM["stage_0"])
+    return int(cfg["max_steps"])
+
+
+def get_curriculum_saves(stage: str) -> list[str]:
+    """Ordered list of save dirs for curriculum mix (earlier … current)."""
+    cfg = CURRICULUM.get(stage, CURRICULUM["stage_0"])
+    saves: list[str] = []
+    for name in cfg.get("earlier", []):
+        saves.append(resolve_checkpoint(name))
+    saves.append(resolve_checkpoint(cfg["checkpoint"]))
+    # Deduplicate while preserving order.
+    seen: set[str] = set()
+    out: list[str] = []
+    for s in saves:
+        if s not in seen:
+            seen.add(s)
+            out.append(s)
+    return out or ["start"]
+
+
+# ---------------------------------------------------------------------------
+# Legacy DQN helpers (still imported by ExperienceWorker if used)
+# ---------------------------------------------------------------------------
 def get_checkpoint_for_episode(total_steps: int) -> str | None:
-    """
-    Get appropriate checkpoint for the worker's total environment steps so far.
-    Returns checkpoint name, or None if curriculum not applicable.
-    """
-    for stage_name, config in sorted(CURRICULUM.items(),
-                                     key=lambda x: x[1]["step_range"][0],
-                                     reverse=True):
-        if not config["enabled"]:
+    """Legacy step-range curriculum for Rainbow DQN workers."""
+    ranges = {
+        "stage_0": (0, 500_000),
+        "stage_1": (500_000, 2_000_000),
+        "stage_2": (2_000_000, 10_000_000),
+    }
+    for stage_name, (lo, hi) in sorted(ranges.items(), key=lambda x: x[1][0], reverse=True):
+        cfg = CURRICULUM.get(stage_name)
+        if not cfg or not cfg.get("enabled"):
             continue
-        step_start, step_end = config["step_range"]
-        if step_start <= total_steps < step_end:
-            return config["checkpoint"]
+        if lo <= total_steps < hi:
+            return resolve_checkpoint(cfg["checkpoint"])
     return None
 
+
 def get_current_stage(total_steps: int) -> str | None:
-    """Get current curriculum stage name."""
-    for stage_name, config in CURRICULUM.items():
-        if not config["enabled"]:
+    ranges = {
+        "stage_0": (0, 500_000),
+        "stage_1": (500_000, 2_000_000),
+        "stage_2": (2_000_000, 10_000_000),
+    }
+    for stage_name, (lo, hi) in ranges.items():
+        cfg = CURRICULUM.get(stage_name)
+        if not cfg or not cfg.get("enabled"):
             continue
-        step_start, step_end = config["step_range"]
-        if step_start <= total_steps < step_end:
+        if lo <= total_steps < hi:
             return stage_name
     return None

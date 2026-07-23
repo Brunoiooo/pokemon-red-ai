@@ -1,10 +1,27 @@
 import hashlib
+from collections import deque
 from multiprocessing.synchronize import RLock
 import pickle
 from dataclasses import dataclass, field
 
 from pyboy import PyBoy, PyBoyMemoryView
 import torch
+
+
+# Pokemon Red early-game map IDs (used for curriculum milestones).
+MAP_PALLET_TOWN = 0
+MAP_ROUTE_1 = 12
+MAP_REDS_HOUSE_2F = 37
+MAP_REDS_HOUSE_1F = 38
+MAP_OAKS_LAB = 40
+HOUSE_MAPS = frozenset({MAP_REDS_HOUSE_1F, MAP_REDS_HOUSE_2F})
+
+# Early-game success goals for terminated().
+GOAL_LEFT_HOUSE = "left_house"
+GOAL_ROUTE_1 = "route1"
+GOAL_OAKS_LAB = "oaks_lab"
+GOAL_BADGE_1 = "badge1"
+GOAL_ALL_BADGES = "all_badges"
 
 
 @dataclass
@@ -15,17 +32,32 @@ class Data:
     visited_screens: list[bytes] = field(default_factory=list)
     visited_maps: set[int] = field(default_factory=set)
     visited_dialogs: dict[tuple[int, int], int] = field(default_factory=dict)
-    badge_reward: float = 1.0
-    event_reward: float = 0.5
-    new_screen_reward: float = 0.005
-    new_position_reward: float = 0.001
-    new_dialog_reward: float = 0.01
-    new_pokedex_seen_reward: float = 0.1
-    new_pokedex_own_reward: float = 0.25
+
+    # Hierarchical rewards: macro >> meso >> micro (PokeRL / Whidden style).
+    badge_reward: float = 10.0          # macro
+    event_reward: float = 2.0           # macro
+    left_house_reward: float = 5.0      # macro early milestone
+    route1_reward: float = 5.0          # macro early milestone
+    oaks_lab_reward: float = 3.0        # meso/macro story
+    new_screen_reward: float = 0.1      # meso (new map)
+    new_position_reward: float = 0.01   # micro
+    new_dialog_reward: float = 0.05     # meso
+    new_pokedex_seen_reward: float = 0.5
+    new_pokedex_own_reward: float = 1.0
     status_reward: float = 0.02
-    base_reward: float = -0.0002
-    truncated_reward: float = -0.02
-    new_item_reward: float = 0.1
+    base_reward: float = -0.001
+    truncated_reward: float = -0.05
+    new_item_reward: float = 0.5
+
+    # Anti-loop / anti-spam penalties (PokeRL-style).
+    visit_penalty_soft: float = -0.01   # visit count > 3
+    visit_penalty_hard: float = -0.05   # visit count > 5
+    action_pattern_penalty: float = -0.02
+    spatial_loop_penalty: float = -0.03
+    menu_spam_penalty: float = -0.02
+
+    # Episode goal for terminated() — early milestones for PPO curriculum.
+    goal: str = GOAL_BADGE_1
 
     in_menu_ticks: float = 0.0
     in_battle_ticks: float = 0.0
@@ -43,7 +75,14 @@ class Data:
     __visited_pokedex_own: list[int] | None = None
 
     visited_positions: dict[tuple[int, int, int], int] = field(default_factory=dict)
+    position_visit_counts: dict[tuple[int, int, int], int] = field(default_factory=dict)
     map_vision_radius: int = 5
+
+    recent_actions: deque = field(default_factory=lambda: deque(maxlen=20))
+    recent_positions: deque = field(default_factory=lambda: deque(maxlen=16))
+    loop_flag: bool = False
+    _milestones_hit: set[str] = field(default_factory=set)
+    _start_map_id: int | None = None
 
     @property
     def visited_pokedex_own(self):
@@ -110,16 +149,26 @@ class Data:
         self.in_battle_ticks = 0
         self.buffer_reward = 0.0
         self.visited_positions = {}
+        self.position_visit_counts = {}
         self.visited_maps = set()
         self.visited_dialogs = {}
+        self.recent_actions.clear()
+        self.recent_positions.clear()
+        self.loop_flag = False
+        self._milestones_hit = set()
+        self._start_map_id = self.map_id(self.pyboy.memory)
 
     def count(self, reward: float, action: int, memory: bytes | None = None, duration: int = 16):
         self.visited_pokedex_own = self.pokedex_own(self.pyboy.memory)
         self.visited_pokedex_seen = self.pokedex_seen(self.pyboy.memory)
 
+        self.recent_actions.append(int(action))
+
         if self.is_world(self.pyboy.memory):
             pos = self.get_position()
             self.visited_positions[pos] = self.visited_positions.get(pos, 0) + duration
+            self.position_visit_counts[pos] = self.position_visit_counts.get(pos, 0) + 1
+            self.recent_positions.append(pos)
 
         if self.is_menu(self.pyboy.memory):
             self.in_menu_ticks += duration
@@ -162,12 +211,33 @@ class Data:
             digest_size=16,
         ).hexdigest()
 
+    def visit_mask_grid(self) -> list[list[float]]:
+        """Local visit-count mask centered on the player (PokeRL / Whidden style)."""
+        r = self.map_vision_radius
+        size = 2 * r + 1
+        if not self.is_world(self.pyboy.memory):
+            return [[0.0] * size for _ in range(size)]
+        grid: list[list[float]] = []
+        for dy in range(-r, r + 1):
+            row: list[float] = []
+            for dx in range(-r, r + 1):
+                visits = self.position_visit_counts.get(
+                    self.get_position(offset_x=dx, offset_y=dy), 0
+                )
+                row.append(min(visits, 10) / 10.0)
+            grid.append(row)
+        return grid
+
     def inputs(self):
+        r = self.map_vision_radius
         return {
             "screen_tiles": torch.tensor(
                 self.data_normalizer(self.screen_tiles(self.pyboy.memory)),
                 dtype=torch.float32,
             ).view(1, 18, 20),
+            "visit_mask": torch.tensor(
+                self.visit_mask_grid(), dtype=torch.float32
+            ).view(1, 2 * r + 1, 2 * r + 1),
             "core": torch.tensor(self.core_data(), dtype=torch.float32),
             "battle": torch.tensor(self.battle_data(), dtype=torch.float32),
             "menu_battle_dialog": torch.tensor(
@@ -284,6 +354,7 @@ class Data:
         step = 0.0
 
         milestone += self.reward_core(memory)
+        milestone += self.reward_story_milestones()
 
         if self.is_battle(self.pyboy.memory):
             milestone += self.reward_battle(memory)
@@ -310,7 +381,73 @@ class Data:
             milestone += m
             step += s
 
+        step += self.reward_anti_loop(action=action, memory=memory)
+
         return milestone, step
+
+    def reward_story_milestones(self) -> float:
+        """One-shot bonuses for early-game story progress."""
+        reward = 0.0
+        mid = self.map_id(self.pyboy.memory)
+
+        if GOAL_LEFT_HOUSE not in self._milestones_hit:
+            start = self._start_map_id
+            if start in HOUSE_MAPS and mid not in HOUSE_MAPS:
+                self._milestones_hit.add(GOAL_LEFT_HOUSE)
+                reward += self.left_house_reward
+
+        if GOAL_ROUTE_1 not in self._milestones_hit and mid == MAP_ROUTE_1:
+            self._milestones_hit.add(GOAL_ROUTE_1)
+            reward += self.route1_reward
+
+        if GOAL_OAKS_LAB not in self._milestones_hit and mid == MAP_OAKS_LAB:
+            self._milestones_hit.add(GOAL_OAKS_LAB)
+            reward += self.oaks_lab_reward
+
+        return reward
+
+    def reward_anti_loop(self, action: int, memory: bytes) -> float:
+        """Three-layer anti-loop + menu-spam penalties (PokeRL-style)."""
+        penalty = 0.0
+        triggered = False
+
+        # 1) Graduated position visit penalties.
+        if self.is_world(self.pyboy.memory):
+            visits = self.position_visit_counts.get(self.get_position(), 0)
+            if visits > 5:
+                penalty += self.visit_penalty_hard
+                triggered = True
+            elif visits > 3:
+                penalty += self.visit_penalty_soft
+                triggered = True
+
+        # 2) Action pattern detection (sliding window).
+        actions = list(self.recent_actions) + [int(action)]
+        if len(actions) >= 4:
+            a, b, c, d = actions[-4], actions[-3], actions[-2], actions[-1]
+            if a == c and b == d and a != b:
+                penalty += self.action_pattern_penalty
+                triggered = True
+        if len(actions) >= 8 and len(set(actions[-8:])) == 1:
+            penalty += self.action_pattern_penalty
+            triggered = True
+
+        # 3) Spatial loop: same tile revisited often in recent history.
+        if len(self.recent_positions) >= 8:
+            cur = self.get_position()
+            if sum(1 for p in self.recent_positions if p == cur) >= 3:
+                penalty += self.spatial_loop_penalty
+                triggered = True
+
+        # Menu spam: no menu state change.
+        if self.is_menu(self.pyboy.memory) and self.is_menu_illegal_move(memory):
+            penalty += self.menu_spam_penalty
+            triggered = True
+
+        if triggered:
+            self.loop_flag = True
+
+        return penalty
 
     def reward_battle_useless_count(self, memory: bytes) -> tuple[float, float]:
         if (
@@ -333,7 +470,8 @@ class Data:
     def reward_position(self):
         pos = self.get_position()
         ticks_here = self.visited_positions.get(pos, 0)
-        is_new_position = ticks_here == 0
+        visit_count = self.position_visit_counts.get(pos, 0)
+        is_new_position = visit_count == 0
         waste_factor = min(ticks_here, self.max_useless_ticks) / self.max_useless_ticks
         exploration_reward = self.new_position_reward if is_new_position else 0.0
         step_penalty = self.base_reward * (1.0 + waste_factor * 9.0)
@@ -522,8 +660,24 @@ class Data:
 
         return reward
 
+    def goal_reached(self) -> bool:
+        mid = self.map_id(self.pyboy.memory)
+        badges = self.badges(self.pyboy.memory)
+        if self.goal == GOAL_LEFT_HOUSE:
+            start = self._start_map_id
+            return bool(start in HOUSE_MAPS and mid not in HOUSE_MAPS)
+        if self.goal == GOAL_ROUTE_1:
+            return mid == MAP_ROUTE_1
+        if self.goal == GOAL_OAKS_LAB:
+            return mid == MAP_OAKS_LAB
+        if self.goal == GOAL_BADGE_1:
+            return bool(badges and badges[0])
+        if self.goal == GOAL_ALL_BADGES:
+            return all(badges)
+        return bool(badges and badges[0])
+
     def terminated(self, memory: bytes):
-        return all(self.badges(self.pyboy.memory))
+        return self.goal_reached()
 
     def truncated(self, memory: bytes):
         return (
@@ -535,6 +689,19 @@ class Data:
             or self.max_useless_ticks <= self.in_menu_ticks
             else False
         )
+
+    def current_milestone(self) -> str:
+        if GOAL_BADGE_1 in self._milestones_hit or (
+            self.badges(self.pyboy.memory) and self.badges(self.pyboy.memory)[0]
+        ):
+            return GOAL_BADGE_1
+        if GOAL_ROUTE_1 in self._milestones_hit:
+            return GOAL_ROUTE_1
+        if GOAL_OAKS_LAB in self._milestones_hit:
+            return GOAL_OAKS_LAB
+        if GOAL_LEFT_HOUSE in self._milestones_hit:
+            return GOAL_LEFT_HOUSE
+        return "start"
 
     def is_illegal_world_move(self, memory: bytes, action: int):
         return (

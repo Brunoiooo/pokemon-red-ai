@@ -1,4 +1,12 @@
 #!/usr/bin/env python3
+"""Legacy Rainbow DQN training entrypoint.
+
+Prefer PPO:
+  python cli.py train
+  python train_ppo.py
+
+This script keeps the old actor-learner DQN loop for ablations.
+"""
 import sys
 import warnings
 warnings.filterwarnings("ignore", message="Detected call of `lr_scheduler.step\\(\\)` before `optimizer.step\\(\\)`")

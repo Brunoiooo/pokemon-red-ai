@@ -156,6 +156,64 @@ class Emulator:
             truncated,
         )
 
+    def step_discrete(
+        self,
+        memory: bytes,
+        action_idx: int,
+        duration: int = 24,
+        render_each: bool = False,
+    ):
+        """PPO-friendly step: discrete button + fixed hold duration (no meta-actions)."""
+        action_idx = int(action_idx) % N_ACTIONS
+        duration = max(1, int(duration))
+
+        for button in self.buttons[action_idx]:
+            self.pyboy.button_press(button)
+
+        if render_each:
+            for _ in range(duration):
+                self.pyboy.tick(1, render=True, sound=False)
+        else:
+            self.pyboy.tick(duration, render=self.use_sdl, sound=False)
+
+        for button in self.ALL_BUTTONS:
+            self.pyboy.button_release(button)
+
+        milestone, step = self.data.reward(memory=memory, action=action_idx)
+
+        min_d = DURATION_BINS[0]
+        if step > 0:
+            step *= min_d / duration
+        elif step < 0:
+            step *= duration / min_d
+
+        reward = milestone + step
+        self.data.count(
+            reward=reward, action=action_idx, memory=memory, duration=duration
+        )
+
+        terminated = self.data.terminated(memory)
+        truncated = self.data.truncated(memory)
+
+        if truncated:
+            reward = self.data.truncated_reward
+            milestone = reward
+            step = 0.0
+
+        self.last_milestone = milestone
+        self.last_step = step
+
+        if self.is_milestone(memory=memory):
+            self.data.clean()
+
+        return (
+            bytes(self.pyboy.memory[0:MEMORY_SNAPSHOT_END]),
+            self.data.inputs(),
+            float(reward),
+            bool(terminated),
+            bool(truncated),
+        )
+
     def is_milestone(self, memory: bytes):
         return 0 < self.data.reward_event_flags(memory) or 0 < self.data.reward_badges(
             memory
