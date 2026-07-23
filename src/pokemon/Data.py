@@ -97,11 +97,13 @@ class Data:
 
     in_menu_ticks: float = 0.0
     in_battle_ticks: float = 0.0
+    in_dialog_ticks: float = 0.0
     max_useless_ticks: int = 512
-    # Dialogs get a longer budget than position/menu/battle: reading text
-    # takes real turns/attention a stuck-in-place or stuck-in-menu loop
-    # doesn't need, so a shorter fuse there would punish normal dialog reading.
-    max_useless_dialog_ticks: int = 512 * 2
+    # Stuck-in-dialog fuse. Resets whenever the dialog makes progress
+    # (dialog_id or screen tiles change) — Gen 1 often keeps the same
+    # dialog_id across many text boxes, so a per-id cumulative budget
+    # truncated long story scripts too early.
+    max_useless_dialog_ticks: int = 512 * 4
     __player_pokemon_size: int = 0x2C
     __pokemon_count: int = 6
     buffer_reward: float = 0.0
@@ -183,6 +185,7 @@ class Data:
         self.__visited_pokedex_seen = None
         self.in_menu_ticks = 0
         self.in_battle_ticks = 0
+        self.in_dialog_ticks = 0
         self.buffer_reward = 0.0
         self.visited_positions = {}
         self.position_visit_counts = {}
@@ -193,6 +196,17 @@ class Data:
         self.loop_flag = False
         self._milestones_hit = set()
         self._start_map_id = self.map_id(self.pyboy.memory)
+
+    def _dialog_progressed(self, memory: bytes | None) -> bool:
+        """True when this step advanced dialog text (id and/or tiles)."""
+        if memory is None or not self.is_dialog(self.pyboy.memory):
+            return False
+        if self.dialog_id(memory) != self.dialog_id(self.pyboy.memory):
+            return True
+        # Same dialog_id can span many boxes; tilemap change = text advanced.
+        return self.screen_tiles_hash(memory) != self.screen_tiles_hash(
+            self.pyboy.memory
+        )
 
     def count(self, reward: float, action: int, memory: bytes | None = None, duration: int = 16):
         self.visited_pokedex_own = self.pokedex_own(self.pyboy.memory)
@@ -222,6 +236,12 @@ class Data:
         if self.is_dialog(self.pyboy.memory):
             dialog = self.get_dialog()
             self.visited_dialogs[dialog] = self.visited_dialogs.get(dialog, 0) + duration
+            if self._dialog_progressed(memory):
+                self.in_dialog_ticks = 0
+            else:
+                self.in_dialog_ticks += duration
+        else:
+            self.in_dialog_ticks = 0
 
         self.visited_maps.add(self.map_id(self.pyboy.memory))
 
@@ -513,11 +533,20 @@ class Data:
 
     def reward_dialog(self, memory: bytes) -> tuple[float, float]:
         dialog_changed = self.dialog_id(memory) != self.dialog_id(self.pyboy.memory)
+        screen_changed = self.screen_tiles_hash(memory) != self.screen_tiles_hash(
+            self.pyboy.memory
+        )
+        progressed = dialog_changed or screen_changed
         current_dialog = self.get_dialog()
         is_new_dialog = current_dialog not in self.visited_dialogs
         dialog_reward = self.new_dialog_reward if is_new_dialog else self.new_screen_reward if dialog_changed else 0.0
-        visits = self.visited_dialogs.get(current_dialog, 0)
-        return dialog_reward, 0.0 if dialog_changed else visits / self.max_useless_dialog_ticks * self.base_reward
+        # Waste only when stuck with no visible progress (mirrors battle turns).
+        waste = (
+            0.0
+            if progressed
+            else self.in_dialog_ticks / self.max_useless_dialog_ticks * self.base_reward
+        )
+        return dialog_reward, waste
 
     def reward_position(self):
         pos = self.get_position()
@@ -781,11 +810,19 @@ class Data:
         return self.goal_reached()
 
     def truncated(self, memory: bytes):
+        # Stuck fuse uses in_dialog_ticks (resets on progress), not cumulative
+        # visited_dialogs — long scripts reuse one dialog_id for many boxes.
+        # Also require is_dialog so lingering dialog_id in RAM cannot truncate
+        # after the conversation already ended.
+        stuck_dialog = (
+            self.is_dialog(self.pyboy.memory)
+            and self.max_useless_dialog_ticks <= self.in_dialog_ticks
+        )
         return (
             True
             if self.max_useless_ticks
             <= self.visited_positions.get(self.get_position(), 0)
-            or self.max_useless_dialog_ticks <= self.visited_dialogs.get(self.get_dialog(), 0)
+            or stuck_dialog
             or self.max_useless_ticks <= self.in_battle_ticks
             or self.max_useless_ticks <= self.in_menu_ticks
             else False
@@ -893,7 +930,7 @@ class Data:
             max=self.max_useless_ticks,
         )
         data += self.data_normalizer(
-            [self.visited_dialogs.get(self.get_dialog(), 0)],
+            [self.in_dialog_ticks],
             max=self.max_useless_dialog_ticks,
         )
         data += self.player_data()
