@@ -55,12 +55,15 @@ def run(args):
     max_steps = args.max_steps or get_stage_max_steps(stage)
     curriculum_saves = get_curriculum_saves(stage)
 
-    # SDL window only on worker 0; other workers stay headless so you can
-    # keep --workers > 1 while watching one live env.
+    # SubprocVecEnv requires identical render_mode on every worker. With
+    # --workers > 1, keep training headless and put SDL on the eval env
+    # (shown during EvalCallback). With a single worker, train can use GUI.
+    train_gui = bool(args.gui and args.workers <= 1)
+    eval_gui = bool(args.gui)
     if args.gui and args.workers > 1:
         print(
-            f"Note: --gui shows SDL on worker 0 only "
-            f"({args.workers - 1} workers stay headless)."
+            f"Note: --gui with {args.workers} workers shows SDL during eval "
+            f"only (SubprocVecEnv cannot mix render modes)."
         )
 
     print("=" * 70)
@@ -89,7 +92,7 @@ def run(args):
                 stage=stage,
                 curriculum_mix=args.curriculum_mix,
                 curriculum_saves=curriculum_saves,
-                render_mode="human" if (args.gui and rank == 0) else None,
+                render_mode="human" if train_gui else None,
                 auto_advance=args.auto_curriculum,
             )
             env.reset(seed=args.seed + rank)
@@ -115,6 +118,7 @@ def run(args):
                 stage=stage,
                 curriculum_mix=0.0,
                 curriculum_saves=curriculum_saves[-1:],
+                render_mode="human" if eval_gui else None,
                 auto_advance=args.auto_curriculum,
             )
         ]

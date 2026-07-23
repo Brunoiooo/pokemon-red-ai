@@ -46,7 +46,7 @@ Useful flags:
 | `--no-auto-curriculum` | Keep a fixed stage/goal |
 | `--goal badge1` | Override episode success condition |
 | `--workers 8` | Parallel `SubprocVecEnv` envs |
-| `--gui` | Show SDL window on worker 0 (other workers stay headless) |
+| `--gui` | Show SDL window (live train if `--workers 1`, else during eval) |
 | `--resume` | Resume newest `ppo_latest.zip` (or pass a path) |
 | `--resume models/.../ppo_latest.zip` | Resume a specific checkpoint |
 
