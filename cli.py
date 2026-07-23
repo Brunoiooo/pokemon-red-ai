@@ -64,7 +64,8 @@ p_train.add_argument("--gamma", type=float, default=0.99)
 p_train.add_argument("--ent-coef", type=float, default=0.01)
 p_train.add_argument("--frame-skip", type=int, default=24)
 p_train.add_argument("--max-steps", type=int, default=None)
-p_train.add_argument("--stage", default="stage_0")
+p_train.add_argument("--stage", default="stage_left_house",
+                     help="Starting curriculum stage (see curriculum_config.STAGE_ORDER)")
 p_train.add_argument("--goal", default=None)
 p_train.add_argument("--auto-curriculum", action=argparse.BooleanOptionalAction, default=True,
                      help="Auto-advance stages when success rate is high (default: on)")
@@ -112,7 +113,8 @@ p_eval.add_argument("--checkpoint", "-c", default="start")
 p_eval.add_argument("--max-steps", "-s", type=int, default=None,
                     help="Override max steps (default: per-stage limit)")
 p_eval.add_argument("--frame-skip", type=int, default=24)
-p_eval.add_argument("--stage", default="stage_0", help="Starting curriculum stage")
+p_eval.add_argument("--stage", default="stage_left_house",
+                    help="Starting curriculum stage (see curriculum_config.STAGE_ORDER)")
 p_eval.add_argument(
     "--goal", default="left_house",
     help="Fixed goal when --no-auto-curriculum",

@@ -42,12 +42,13 @@ def run(args):
         get_goal_for_stage,
         get_stage_max_steps,
         next_stage,
+        resolve_stage_name,
     )
     from env.pokemon_red_env import PokemonRedEnv
 
     model_path = resolve_model_path(getattr(args, "model", None))
     auto = bool(getattr(args, "auto_curriculum", True))
-    stage = args.stage
+    stage = resolve_stage_name(args.stage)
 
     if auto:
         goal = get_goal_for_stage(stage)
@@ -81,7 +82,7 @@ def run(args):
     model = PPO.load(str(model_path), device="cpu" if args.cpu else "auto")
 
     for ep in range(args.episodes):
-        stage = args.stage
+        stage = resolve_stage_name(args.stage)
         if auto:
             _apply_stage(raw, stage, checkpoint=args.checkpoint)
 
@@ -103,7 +104,10 @@ def run(args):
 
             if terminated:
                 if auto:
-                    nxt = next_stage(stage)
+                    nxt = next_stage(
+                        stage,
+                        is_satisfied=raw.emu.data.is_goal_satisfied,
+                    )
                     if nxt is not None:
                         stages_cleared.append(stage)
                         print(
@@ -152,7 +156,7 @@ def main():
         help="Override max steps (default: per-stage curriculum limit)",
     )
     p.add_argument("--frame-skip", type=int, default=24)
-    p.add_argument("--stage", default="stage_0", help="Starting curriculum stage")
+    p.add_argument("--stage", default="stage_left_house", help="Starting curriculum stage")
     p.add_argument(
         "--goal", default="left_house",
         help="Fixed goal when --no-auto-curriculum",

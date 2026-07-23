@@ -16,12 +16,48 @@ MAP_REDS_HOUSE_1F = 38
 MAP_OAKS_LAB = 40
 HOUSE_MAPS = frozenset({MAP_REDS_HOUSE_1F, MAP_REDS_HOUSE_2F})
 
-# Early-game success goals for terminated().
+# Curriculum / episode goals (map, event flags, badges).
 GOAL_LEFT_HOUSE = "left_house"
 GOAL_ROUTE_1 = "route1"
 GOAL_OAKS_LAB = "oaks_lab"
+GOAL_OAKS_PARCEL = "oaks_parcel"
+GOAL_TOWN_MAP = "town_map"
+GOAL_FOUGHT_BROCK = "fought_brock"
+GOAL_FOUGHT_MISTY = "fought_misty"
+GOAL_FOUGHT_SURGE = "fought_surge"
+GOAL_FOUGHT_ERIKA = "fought_erika"
+GOAL_FOUGHT_KOGA = "fought_koga"
+GOAL_FOUGHT_SABRINA = "fought_sabrina"
+GOAL_FOUGHT_BLAINE = "fought_blaine"
+GOAL_FOUGHT_GIOVANNI = "fought_giovanni"
 GOAL_BADGE_1 = "badge1"
+GOAL_BADGE_2 = "badge2"
+GOAL_BADGE_3 = "badge3"
+GOAL_BADGE_4 = "badge4"
+GOAL_BADGE_5 = "badge5"
+GOAL_BADGE_6 = "badge6"
+GOAL_BADGE_7 = "badge7"
+GOAL_BADGE_8 = "badge8"
+GOAL_SS_ANNE = "ss_anne"
+GOAL_LAPRAS = "lapras"
+GOAL_SNORLAX = "snorlax"
+GOAL_ARTICUNO = "articuno"
+GOAL_ZAPDOS = "zapdos"
+GOAL_MOLTRES = "moltres"
+GOAL_FOSSIL = "fossil"
+GOAL_MEWTWO = "mewtwo"
 GOAL_ALL_BADGES = "all_badges"
+
+BADGE_GOALS = (
+    GOAL_BADGE_1,
+    GOAL_BADGE_2,
+    GOAL_BADGE_3,
+    GOAL_BADGE_4,
+    GOAL_BADGE_5,
+    GOAL_BADGE_6,
+    GOAL_BADGE_7,
+    GOAL_BADGE_8,
+)
 
 
 @dataclass
@@ -386,23 +422,39 @@ class Data:
         return milestone, step
 
     def reward_story_milestones(self) -> float:
-        """One-shot bonuses for early-game story progress."""
+        """One-shot bonuses for story / map progress (order-independent)."""
         reward = 0.0
         mid = self.map_id(self.pyboy.memory)
 
-        if GOAL_LEFT_HOUSE not in self._milestones_hit:
-            start = self._start_map_id
-            if start in HOUSE_MAPS and mid not in HOUSE_MAPS:
-                self._milestones_hit.add(GOAL_LEFT_HOUSE)
-                reward += self.left_house_reward
+        checks = [
+            (
+                GOAL_LEFT_HOUSE,
+                bool(self._start_map_id in HOUSE_MAPS and mid not in HOUSE_MAPS),
+                self.left_house_reward,
+            ),
+            (GOAL_ROUTE_1, mid == MAP_ROUTE_1, self.route1_reward),
+            (GOAL_OAKS_LAB, mid == MAP_OAKS_LAB, self.oaks_lab_reward),
+            (
+                GOAL_OAKS_PARCEL,
+                bool(self.have_oaks_parcel(self.pyboy.memory)),
+                self.event_reward,
+            ),
+            (
+                GOAL_TOWN_MAP,
+                bool(self.have_town_map(self.pyboy.memory)),
+                self.event_reward,
+            ),
+        ]
+        for name, hit, value in checks:
+            if name not in self._milestones_hit and hit:
+                self._milestones_hit.add(name)
+                reward += value
 
-        if GOAL_ROUTE_1 not in self._milestones_hit and mid == MAP_ROUTE_1:
-            self._milestones_hit.add(GOAL_ROUTE_1)
-            reward += self.route1_reward
-
-        if GOAL_OAKS_LAB not in self._milestones_hit and mid == MAP_OAKS_LAB:
-            self._milestones_hit.add(GOAL_OAKS_LAB)
-            reward += self.oaks_lab_reward
+        badges = self.badges(self.pyboy.memory)
+        for i, name in enumerate(BADGE_GOALS):
+            if name not in self._milestones_hit and i < len(badges) and badges[i]:
+                self._milestones_hit.add(name)
+                reward += self.badge_reward
 
         return reward
 
@@ -660,21 +712,70 @@ class Data:
 
         return reward
 
-    def goal_reached(self) -> bool:
-        mid = self.map_id(self.pyboy.memory)
-        badges = self.badges(self.pyboy.memory)
-        if self.goal == GOAL_LEFT_HOUSE:
-            start = self._start_map_id
-            return bool(start in HOUSE_MAPS and mid not in HOUSE_MAPS)
-        if self.goal == GOAL_ROUTE_1:
+    def is_goal_satisfied(self, goal: str) -> bool:
+        """Whether ``goal`` is already true in the current game state.
+
+        Used by curriculum to skip stages when flags/badges were obtained out
+        of the recommended STAGE_ORDER.
+        """
+        mem = self.pyboy.memory
+        mid = self.map_id(mem)
+        badges = self.badges(mem)
+
+        if goal == GOAL_LEFT_HOUSE:
+            return mid not in HOUSE_MAPS
+        if goal == GOAL_ROUTE_1:
             return mid == MAP_ROUTE_1
-        if self.goal == GOAL_OAKS_LAB:
+        if goal == GOAL_OAKS_LAB:
             return mid == MAP_OAKS_LAB
-        if self.goal == GOAL_BADGE_1:
-            return bool(badges and badges[0])
-        if self.goal == GOAL_ALL_BADGES:
-            return all(badges)
-        return bool(badges and badges[0])
+        if goal == GOAL_OAKS_PARCEL:
+            return bool(self.have_oaks_parcel(mem))
+        if goal == GOAL_TOWN_MAP:
+            return bool(self.have_town_map(mem))
+        if goal == GOAL_FOUGHT_BROCK:
+            return bool(self.fought_brock_yet(mem))
+        if goal == GOAL_FOUGHT_MISTY:
+            return bool(self.fought_misty_yet(mem))
+        if goal == GOAL_FOUGHT_SURGE:
+            return bool(self.fought_lt_surge_yet(mem))
+        if goal == GOAL_FOUGHT_ERIKA:
+            return bool(self.fought_erika_yet(mem))
+        if goal == GOAL_FOUGHT_KOGA:
+            return bool(self.fought_koga_yet(mem))
+        if goal == GOAL_FOUGHT_SABRINA:
+            return bool(self.fought_sabrina_yet(mem))
+        if goal == GOAL_FOUGHT_BLAINE:
+            return bool(self.fought_blaine_yet(mem))
+        if goal == GOAL_FOUGHT_GIOVANNI:
+            return bool(self.fought_giovanni_yet(mem))
+        if goal in BADGE_GOALS:
+            idx = BADGE_GOALS.index(goal)
+            return bool(idx < len(badges) and badges[idx])
+        if goal == GOAL_SS_ANNE:
+            return bool(self.is_ss_anne_here(mem))
+        if goal == GOAL_LAPRAS:
+            return bool(self.did_you_get_lapras_yet(mem))
+        if goal == GOAL_SNORLAX:
+            return bool(
+                self.fought_snorlax_yet_vermilion(mem)
+                or self.fought_snorlax_yet_celadon(mem)
+            )
+        if goal == GOAL_ARTICUNO:
+            return bool(self.fought_articuno_yet(mem))
+        if goal == GOAL_ZAPDOS:
+            return bool(self.fought_zapdos_yet(mem))
+        if goal == GOAL_MOLTRES:
+            return bool(self.fought_moltres_yet(mem))
+        if goal == GOAL_FOSSIL:
+            return bool(self.fossilized_pokemon(mem))
+        if goal == GOAL_MEWTWO:
+            return bool(self.mewtwo_can_be_caught(mem))
+        if goal == GOAL_ALL_BADGES:
+            return bool(badges) and all(badges)
+        return False
+
+    def goal_reached(self) -> bool:
+        return self.is_goal_satisfied(self.goal)
 
     def terminated(self, memory: bytes):
         return self.goal_reached()
@@ -691,16 +792,44 @@ class Data:
         )
 
     def current_milestone(self) -> str:
-        if GOAL_BADGE_1 in self._milestones_hit or (
-            self.badges(self.pyboy.memory) and self.badges(self.pyboy.memory)[0]
-        ):
-            return GOAL_BADGE_1
-        if GOAL_ROUTE_1 in self._milestones_hit:
-            return GOAL_ROUTE_1
-        if GOAL_OAKS_LAB in self._milestones_hit:
-            return GOAL_OAKS_LAB
-        if GOAL_LEFT_HOUSE in self._milestones_hit:
-            return GOAL_LEFT_HOUSE
+        # Furthest known goal that is currently satisfied (order-independent).
+        priority = (
+            GOAL_ALL_BADGES,
+            GOAL_MEWTWO,
+            GOAL_MOLTRES,
+            GOAL_ZAPDOS,
+            GOAL_ARTICUNO,
+            GOAL_SNORLAX,
+            GOAL_LAPRAS,
+            GOAL_FOSSIL,
+            GOAL_BADGE_8,
+            GOAL_FOUGHT_GIOVANNI,
+            GOAL_BADGE_7,
+            GOAL_FOUGHT_BLAINE,
+            GOAL_BADGE_6,
+            GOAL_FOUGHT_SABRINA,
+            GOAL_BADGE_5,
+            GOAL_FOUGHT_KOGA,
+            GOAL_BADGE_4,
+            GOAL_FOUGHT_ERIKA,
+            GOAL_BADGE_3,
+            GOAL_FOUGHT_SURGE,
+            GOAL_SS_ANNE,
+            GOAL_BADGE_2,
+            GOAL_FOUGHT_MISTY,
+            GOAL_BADGE_1,
+            GOAL_FOUGHT_BROCK,
+            GOAL_TOWN_MAP,
+            GOAL_OAKS_PARCEL,
+            GOAL_ROUTE_1,
+            GOAL_OAKS_LAB,
+            GOAL_LEFT_HOUSE,
+        )
+        for g in priority:
+            if self.is_goal_satisfied(g):
+                return g
+        if self._milestones_hit:
+            return sorted(self._milestones_hit)[-1]
         return "start"
 
     def is_illegal_world_move(self, memory: bytes, action: int):

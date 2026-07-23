@@ -19,7 +19,7 @@ class MilestoneCallback(BaseCallback):
         self,
         window: int = 100,
         auto_curriculum: bool = True,
-        start_stage: str = "stage_0",
+        start_stage: str = "stage_left_house",
         success_threshold: float | None = None,
         min_episodes: int | None = None,
         check_every: int | None = None,
@@ -49,10 +49,8 @@ class MilestoneCallback(BaseCallback):
 
         self._returns: deque[float] = deque(maxlen=window)
         self._loops: deque[int] = deque(maxlen=window)
-        self._left_house: deque[int] = deque(maxlen=window)
-        self._route1: deque[int] = deque(maxlen=window)
-        self._badge1: deque[int] = deque(maxlen=window)
         self._successes: deque[int] = deque(maxlen=window)
+        self._badges: deque[int] = deque(maxlen=window)
         self._ep_loop = None
         self._ep_milestones = None
 
@@ -139,15 +137,10 @@ class MilestoneCallback(BaseCallback):
             done = bool(dones[i]) if i < len(dones) else False
             if done:
                 self._loops.append(1 if self._ep_loop[i] else 0)
-                ms = self._ep_milestones[i]
-                self._left_house.append(1 if "left_house" in ms else 0)
-                self._route1.append(1 if "route1" in ms else 0)
-                self._badge1.append(
-                    1 if ("badge1" in ms or info.get("badges", 0) >= 1) else 0
-                )
                 # Current-goal success = natural terminated (not truncated).
                 success = bool(info.get("terminated", False))
                 self._successes.append(1 if success else 0)
+                self._badges.append(int(info.get("badges", 0) or 0))
 
                 if "episode" in info:
                     self._returns.append(float(info["episode"]["r"]))
@@ -160,21 +153,13 @@ class MilestoneCallback(BaseCallback):
         if len(self._loops) >= 10 and self.n_calls % self.check_every == 0:
             loop_rate = float(np.mean(self._loops))
             self.logger.record("pokemon/loop_episode_rate", loop_rate)
-            self.logger.record(
-                "pokemon/left_house_rate",
-                float(np.mean(self._left_house) if self._left_house else 0),
-            )
-            self.logger.record(
-                "pokemon/route1_rate",
-                float(np.mean(self._route1) if self._route1 else 0),
-            )
-            self.logger.record(
-                "pokemon/badge1_rate",
-                float(np.mean(self._badge1) if self._badge1 else 0),
-            )
             if self._successes:
                 self.logger.record(
                     "pokemon/goal_success_rate", float(np.mean(self._successes))
+                )
+            if self._badges:
+                self.logger.record(
+                    "pokemon/badges_mean", float(np.mean(self._badges))
                 )
             if self._returns:
                 self.logger.record(

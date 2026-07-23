@@ -29,6 +29,7 @@ def run(args):
         get_curriculum_saves,
         get_goal_for_stage,
         get_stage_max_steps,
+        resolve_stage_name,
     )
     from env.pokemon_red_env import PokemonRedEnv
     from ppo.callbacks import MilestoneCallback
@@ -49,7 +50,7 @@ def run(args):
     model_dir = Path("models") / f"ppo_{session}"
     model_dir.mkdir(parents=True, exist_ok=True)
 
-    stage = args.stage
+    stage = resolve_stage_name(args.stage)
     goal = args.goal or get_goal_for_stage(stage)
     max_steps = args.max_steps or get_stage_max_steps(stage)
     curriculum_saves = get_curriculum_saves(stage)
@@ -207,12 +208,12 @@ def build_argparser(parent=None):
     p.add_argument("--ent-coef", type=float, default=0.01)
     p.add_argument("--frame-skip", type=int, default=24)
     p.add_argument("--max-steps", type=int, default=None)
-    p.add_argument("--stage", default="stage_0",
-                   help="Starting curriculum stage: stage_0 | stage_1 | stage_2")
+    p.add_argument("--stage", default="stage_left_house",
+                   help="Starting curriculum stage (see curriculum_config.STAGE_ORDER)")
     p.add_argument("--goal", default=None,
-                   help="Override goal (disables matching stage goal; auto-curriculum still advances stages)")
+                   help="Override goal (auto-curriculum still advances stages)")
     p.add_argument("--auto-curriculum", action=argparse.BooleanOptionalAction, default=True,
-                   help="Auto-advance stage_0→1→2 when goal success rate is high (default: on)")
+                   help="Auto-advance through STAGE_ORDER when goal success rate is high (default: on)")
     p.add_argument("--curriculum-mix", type=float, default=0.3,
                    help="Probability of resetting to an earlier curriculum save")
     p.add_argument("--seed", type=int, default=0)
