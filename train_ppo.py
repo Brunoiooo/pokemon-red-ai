@@ -32,6 +32,7 @@ def run(args):
     )
     from env.pokemon_red_env import PokemonRedEnv
     from ppo.callbacks import MilestoneCallback
+    from ppo.checkpoints import resolve_model_path
     from ppo.features import PokemonFeaturesExtractor
 
     if args.cpu:
@@ -124,9 +125,12 @@ def run(args):
         net_arch=dict(pi=[256, 256], vf=[256, 256]),
     )
 
-    if args.resume:
-        print(f"Resuming from {args.resume}")
-        model = PPO.load(args.resume, env=train_env, device=device)
+    if args.resume is not None:
+        # nargs='?': bare --resume → "AUTO"; --resume path.zip → path
+        resume_arg = None if args.resume in ("", "AUTO") else args.resume
+        resume_path = resolve_model_path(resume_arg, prefer_latest=True)
+        print(f"Resuming from {resume_path}")
+        model = PPO.load(str(resume_path), env=train_env, device=device)
     else:
         model = PPO(
             policy="MultiInputPolicy",
@@ -212,7 +216,13 @@ def build_argparser(parent=None):
     p.add_argument("--curriculum-mix", type=float, default=0.3,
                    help="Probability of resetting to an earlier curriculum save")
     p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--resume", default=None, help="Path to .zip SB3 checkpoint")
+    p.add_argument(
+        "--resume",
+        nargs="?",
+        const="AUTO",
+        default=None,
+        help="Resume from .zip; omit path to auto-pick newest ppo_latest.zip (else best)",
+    )
     p.add_argument("--checkpoint-freq", type=int, default=100_000)
     p.add_argument("--eval-freq", type=int, default=50_000)
     p.add_argument("--eval-episodes", type=int, default=3)

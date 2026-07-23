@@ -47,7 +47,8 @@ Useful flags:
 | `--goal badge1` | Override episode success condition |
 | `--workers 8` | Parallel `SubprocVecEnv` envs |
 | `--gui` | Show window (forces `--workers 1`) |
-| `--resume models/.../ppo_latest.zip` | Continue training |
+| `--resume` | Resume newest `ppo_latest.zip` (or pass a path) |
+| `--resume models/.../ppo_latest.zip` | Resume a specific checkpoint |
 
 TensorBoard logs land under `logs/ppo_<timestamp>/`:
 

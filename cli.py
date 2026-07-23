@@ -70,7 +70,13 @@ p_train.add_argument("--auto-curriculum", action=argparse.BooleanOptionalAction,
                      help="Auto-advance stages when success rate is high (default: on)")
 p_train.add_argument("--curriculum-mix", type=float, default=0.3)
 p_train.add_argument("--seed", type=int, default=0)
-p_train.add_argument("--resume", default=None)
+p_train.add_argument(
+    "--resume",
+    nargs="?",
+    const="AUTO",
+    default=None,
+    help="Resume from .zip; omit path to auto-pick newest ppo_latest/best",
+)
 p_train.add_argument("--checkpoint-freq", type=int, default=100_000)
 p_train.add_argument("--eval-freq", type=int, default=50_000)
 p_train.add_argument("--eval-episodes", type=int, default=3)
