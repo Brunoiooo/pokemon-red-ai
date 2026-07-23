@@ -11,6 +11,7 @@ Commands:
   eval-dqn    Evaluate a legacy DQN .pth checkpoint
   pretrain    Behavioral-cloning pre-training from a human demo (legacy DQN)
   record      Record human gameplay for BC pre-training
+  save-stage  Play manually and save a mid-game state for a curriculum stage
   plot        Plot training metrics from CSV logs
   analyze     Analyze a training metrics JSON
   benchmark   Run inference / emulation / pipeline benchmarks
@@ -158,6 +159,30 @@ p_record.add_argument("--output", "-o", default="demos/demo.json")
 p_record.add_argument("--max-steps", "-n", type=int, default=500)
 p_record.add_argument("--patience", "-p", type=int, default=8)
 
+p_save_stage = sub.add_parser(
+    "save-stage",
+    parents=[_global],
+    help="Play manually and save a mid-game state for a curriculum stage",
+)
+p_save_stage.add_argument(
+    "--stage",
+    "-s",
+    default=None,
+    help="Stage / folder under saves/ (e.g. stage_oaks_lab)",
+)
+p_save_stage.add_argument(
+    "--from",
+    dest="from_checkpoint",
+    default="start",
+    help="Save dir to load first (default: start)",
+)
+p_save_stage.add_argument(
+    "--list",
+    "-l",
+    action="store_true",
+    help="List curriculum stages and which already have saves",
+)
+
 p_plot = sub.add_parser("plot", parents=[_global], help="Plot training CSV metrics")
 p_plot.add_argument("train_csv", nargs="?", default=None, metavar="TRAIN_CSV")
 
@@ -194,6 +219,10 @@ def main():
 
     elif args.command == "record":
         import record_demo as _m
+        _m.run(args)
+
+    elif args.command == "save-stage":
+        import create_stage_save as _m
         _m.run(args)
 
     elif args.command == "plot":
