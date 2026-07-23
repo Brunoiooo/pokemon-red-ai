@@ -36,7 +36,8 @@ parser = argparse.ArgumentParser(
     epilog=(
         "Examples:\n"
         "  python cli.py train --workers 8 --stage stage_0\n"
-        "  python cli.py eval --model models/ppo_*/best/best_model.zip\n"
+        "  python cli.py eval --gui\n"
+        "  python cli.py eval --model models/ppo_<timestamp>/best/best_model.zip --gui\n"
         "  python cli.py train-dqn --workers 5\n"
         "  python cli.py eval-dqn --model models/best.pth\n"
     ),
@@ -93,12 +94,19 @@ p_eval = sub.add_parser(
     parents=[_global],
     help="Evaluate a PPO .zip checkpoint",
 )
-p_eval.add_argument("--model", "-m", default="models/best/best_model.zip")
+p_eval.add_argument(
+    "--model", "-m", default=None,
+    help="PPO .zip checkpoint (default: newest models/ppo_*/best/best_model.zip, "
+         "else ppo_latest.zip)",
+)
 p_eval.add_argument("--episodes", "-e", type=int, default=3)
 p_eval.add_argument("--checkpoint", "-c", default="start")
 p_eval.add_argument("--max-steps", "-s", type=int, default=5000)
 p_eval.add_argument("--frame-skip", type=int, default=24)
-p_eval.add_argument("--goal", default="badge1")
+p_eval.add_argument(
+    "--goal", default="left_house",
+    help="Episode success goal (default: left_house)",
+)
 p_eval.add_argument("--stochastic", action="store_true")
 
 # ---------------------------------------------------------------------------
