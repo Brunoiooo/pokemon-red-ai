@@ -107,10 +107,9 @@ class Data:
     in_battle_ticks: float = 0.0
     in_dialog_ticks: float = 0.0
     max_useless_ticks: int = 512
-    # Stuck-in-dialog fuse. Resets whenever the dialog makes progress
-    # (dialog_id or screen tiles change) — Gen 1 often keeps the same
-    # dialog_id across many text boxes, so a per-id cumulative budget
-    # truncated long story scripts too early.
+    # Hard stuck fuse while a single dialog_id is on screen. Does NOT reset on
+    # tile blink / A presses — only on dialog_id change or leaving dialog.
+    # 512*4 @ frame_skip 24 ≈ 85 steps; enough for a box, not infinite camp.
     max_useless_dialog_ticks: int = 512 * 4
     __player_pokemon_size: int = 0x2C
     __pokemon_count: int = 6
@@ -129,6 +128,9 @@ class Data:
     loop_flag: bool = False
     _milestones_hit: set[str] = field(default_factory=set)
     _start_map_id: int | None = None
+    # Distinct dialog screen hashes seen for the current dialog_id. Blink frames
+    # revisit old hashes; only a *new* hash counts as text progress.
+    _dialog_screens_seen: set[str] = field(default_factory=set)
 
     @property
     def visited_pokedex_own(self):
@@ -203,25 +205,30 @@ class Data:
         self.recent_positions.clear()
         self.loop_flag = False
         self._milestones_hit = set()
+        self._dialog_screens_seen = set()
         self._start_map_id = self.map_id(self.pyboy.memory)
 
     def _dialog_progressed(self, memory: bytes | None, action: int | None = None) -> bool:
-        """True when this step meaningfully advanced dialog text.
+        """True when dialog text advanced to a new unique screen.
 
-        Tilemap alone is NOT enough: the ▼ cursor / text blink changes tiles
-        every few frames with no input, which previously reset the stuck fuse
-        forever and rewarded noop.
+        Cursor blink oscillates between a few tilemaps — those hashes are
+        remembered so they do not reset the stuck fuse or pay advance rewards.
         """
-        if memory is None or not self.is_dialog(self.pyboy.memory):
+        if not self.is_dialog(self.pyboy.memory):
             return False
-        if self.dialog_id(memory) != self.dialog_id(self.pyboy.memory):
-            return True
-        # Same dialog_id across boxes: only count tile change if agent pressed A/B.
-        if action is None or int(action) not in INTERACT_ACTIONS:
-            return False
-        return self.screen_tiles_hash(memory) != self.screen_tiles_hash(
-            self.pyboy.memory
+
+        id_changed = (
+            memory is not None
+            and self.dialog_id(memory) != self.dialog_id(self.pyboy.memory)
         )
+        if id_changed:
+            self._dialog_screens_seen = set()
+
+        screen_hash = self.screen_tiles_hash(self.pyboy.memory)
+        if screen_hash not in self._dialog_screens_seen:
+            self._dialog_screens_seen.add(screen_hash)
+            return True
+        return False
 
     def count(self, reward: float, action: int, memory: bytes | None = None, duration: int = 16):
         self.visited_pokedex_own = self.pokedex_own(self.pyboy.memory)
@@ -269,6 +276,7 @@ class Data:
                 self.in_dialog_ticks += duration
         else:
             self.in_dialog_ticks = 0
+            self._dialog_screens_seen = set()
 
         self.visited_maps.add(self.map_id(self.pyboy.memory))
 
@@ -588,23 +596,22 @@ class Data:
 
     def reward_dialog(self, memory: bytes, action: int) -> tuple[float, float]:
         dialog_changed = self.dialog_id(memory) != self.dialog_id(self.pyboy.memory)
-        interacting = int(action) in INTERACT_ACTIONS
-        # Require A/B for tile-based advance — cursor blink must not pay.
-        screen_advanced = interacting and (
-            self.screen_tiles_hash(memory)
-            != self.screen_tiles_hash(self.pyboy.memory)
-        )
-        progressed = dialog_changed or screen_advanced
+        # Peek whether this screen is new WITHOUT mutating seen-set here;
+        # count() owns the set updates after reward.
+        screen_hash = self.screen_tiles_hash(self.pyboy.memory)
+        new_screen = screen_hash not in self._dialog_screens_seen
         current_dialog = self.get_dialog()
         is_new_dialog = current_dialog not in self.visited_dialogs
         if is_new_dialog:
             dialog_reward = self.new_dialog_reward
         elif dialog_changed:
             dialog_reward = self.dialog_advance_reward
-        elif screen_advanced:
+        elif new_screen and int(action) in INTERACT_ACTIONS:
+            # New text frame via A/B — not cursor blink (blink hashes already seen).
             dialog_reward = self.dialog_advance_reward * 0.5
         else:
             dialog_reward = 0.0
+        progressed = dialog_changed or (new_screen and int(action) in INTERACT_ACTIONS)
         waste = (
             0.0
             if progressed
