@@ -16,6 +16,11 @@ MAP_REDS_HOUSE_1F = 38
 MAP_OAKS_LAB = 40
 HOUSE_MAPS = frozenset({MAP_REDS_HOUSE_1F, MAP_REDS_HOUSE_2F})
 
+# Emulator button indices — A/B must be mashable to start and advance dialogs.
+ACTION_A = 0
+ACTION_B = 1
+INTERACT_ACTIONS = frozenset({ACTION_A, ACTION_B})
+
 # Curriculum / episode goals (map, event flags, badges).
 GOAL_LEFT_HOUSE = "left_house"
 GOAL_ROUTE_1 = "route1"
@@ -77,7 +82,9 @@ class Data:
     oaks_lab_reward: float = 3.0        # meso/macro story
     new_screen_reward: float = 0.1      # meso (new map)
     new_position_reward: float = 0.01   # micro
-    new_dialog_reward: float = 0.05     # meso
+    new_dialog_reward: float = 0.1      # meso — enter a new dialog
+    dialog_advance_reward: float = 0.02 # meso — dialog_id changed while reading
+    dialog_exit_reward: float = 0.05    # meso — finished / left a dialog
     new_pokedex_seen_reward: float = 0.5
     new_pokedex_own_reward: float = 1.0
     status_reward: float = 0.02
@@ -216,9 +223,21 @@ class Data:
 
         if self.is_world(self.pyboy.memory):
             pos = self.get_position()
-            self.visited_positions[pos] = self.visited_positions.get(pos, 0) + duration
-            self.position_visit_counts[pos] = self.position_visit_counts.get(pos, 0) + 1
-            self.recent_positions.append(pos)
+            stayed = memory is not None and self.get_position(memory) == pos
+            interacting = int(action) in INTERACT_ACTIONS
+            # Standing still while mashing A/B is how you talk to NPCs. Counting
+            # those presses as "revisits" burns the stuck fuse and visit
+            # penalties before a dialog can even open.
+            if not (stayed and interacting):
+                self.visited_positions[pos] = (
+                    self.visited_positions.get(pos, 0) + duration
+                )
+                self.position_visit_counts[pos] = (
+                    self.position_visit_counts.get(pos, 0) + 1
+                )
+                self.recent_positions.append(pos)
+            elif pos not in self.position_visit_counts:
+                self.position_visit_counts[pos] = 1
 
         if self.is_menu(self.pyboy.memory):
             self.in_menu_ticks += duration
@@ -426,12 +445,17 @@ class Data:
 
         if self.is_world(self.pyboy.memory):
             step += self.reward_position()
+            # Completing a dialog is progress; without this, reading text is pure cost.
+            if self.is_dialog(memory):
+                milestone += self.dialog_exit_reward
         elif self.is_dialog(self.pyboy.memory):
             m, s = self.reward_dialog(memory)
             milestone += m
             step += s
         elif self.is_menu(self.pyboy.memory):
             step += self.in_menu_ticks / self.max_useless_ticks * self.base_reward
+            if self.is_dialog(memory):
+                milestone += self.dialog_exit_reward
         elif self.is_battle(self.pyboy.memory):
             m, s = self.reward_battle_useless_count(memory)
             milestone += m
@@ -482,9 +506,13 @@ class Data:
         """Three-layer anti-loop + menu-spam penalties (PokeRL-style)."""
         penalty = 0.0
         triggered = False
+        action = int(action)
+        in_dialog = self.is_dialog(self.pyboy.memory)
+        interacting = action in INTERACT_ACTIONS
 
         # 1) Graduated position visit penalties.
-        if self.is_world(self.pyboy.memory):
+        # Skip while pressing A/B in world — that is the talk-to-NPC attempt.
+        if self.is_world(self.pyboy.memory) and not interacting:
             visits = self.position_visit_counts.get(self.get_position(), 0)
             if visits > 5:
                 penalty += self.visit_penalty_hard
@@ -494,18 +522,32 @@ class Data:
                 triggered = True
 
         # 2) Action pattern detection (sliding window).
-        actions = list(self.recent_actions) + [int(action)]
-        if len(actions) >= 4:
-            a, b, c, d = actions[-4], actions[-3], actions[-2], actions[-1]
-            if a == c and b == d and a != b:
+        # Never punish A/B spam: talking, confirming, and advancing text all
+        # require it. Movement ABAB / single-direction mash still penalized.
+        if not in_dialog and not interacting:
+            actions = list(self.recent_actions) + [action]
+            if len(actions) >= 4:
+                a, b, c, d = actions[-4], actions[-3], actions[-2], actions[-1]
+                if (
+                    a == c
+                    and b == d
+                    and a != b
+                    and a not in INTERACT_ACTIONS
+                    and b not in INTERACT_ACTIONS
+                ):
+                    penalty += self.action_pattern_penalty
+                    triggered = True
+            if len(actions) >= 8 and len(set(actions[-8:])) == 1:
                 penalty += self.action_pattern_penalty
                 triggered = True
-        if len(actions) >= 8 and len(set(actions[-8:])) == 1:
-            penalty += self.action_pattern_penalty
-            triggered = True
 
         # 3) Spatial loop: same tile revisited often in recent history.
-        if len(self.recent_positions) >= 8:
+        # World + non-interact only — standing to talk is not a movement loop.
+        if (
+            self.is_world(self.pyboy.memory)
+            and not interacting
+            and len(self.recent_positions) >= 8
+        ):
             cur = self.get_position()
             if sum(1 for p in self.recent_positions if p == cur) >= 3:
                 penalty += self.spatial_loop_penalty
@@ -539,7 +581,15 @@ class Data:
         progressed = dialog_changed or screen_changed
         current_dialog = self.get_dialog()
         is_new_dialog = current_dialog not in self.visited_dialogs
-        dialog_reward = self.new_dialog_reward if is_new_dialog else self.new_screen_reward if dialog_changed else 0.0
+        if is_new_dialog:
+            dialog_reward = self.new_dialog_reward
+        elif dialog_changed:
+            dialog_reward = self.dialog_advance_reward
+        elif screen_changed:
+            # Same id, new text box / scroll — still progress.
+            dialog_reward = self.dialog_advance_reward * 0.5
+        else:
+            dialog_reward = 0.0
         # Waste only when stuck with no visible progress (mirrors battle turns).
         waste = (
             0.0
