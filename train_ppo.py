@@ -33,7 +33,7 @@ def run(args):
     )
     from env.pokemon_red_env import PokemonRedEnv
     from ppo.callbacks import MilestoneCallback
-    from ppo.checkpoints import resolve_model_path
+    from ppo.checkpoints import atomic_model_save, resolve_model_path
     from ppo.features import PokemonFeaturesExtractor
 
     if args.cpu:
@@ -192,7 +192,7 @@ def run(args):
         print("\nInterrupted - saving latest model...")
     finally:
         out = model_dir / "ppo_latest.zip"
-        model.save(str(out))
+        atomic_model_save(model, out)
         print(f"Saved: {out}")
         train_env.close()
         eval_env.close()
