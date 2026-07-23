@@ -33,7 +33,7 @@ class Data:
     # Dialogs get a longer budget than position/menu/battle: reading text
     # takes real turns/attention a stuck-in-place or stuck-in-menu loop
     # doesn't need, so a shorter fuse there would punish normal dialog reading.
-    max_useless_dialog_ticks: int = 512 * 8
+    max_useless_dialog_ticks: int = 512 * 2
     __player_pokemon_size: int = 0x2C
     __pokemon_count: int = 6
     buffer_reward: float = 0.0
