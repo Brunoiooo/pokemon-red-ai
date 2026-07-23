@@ -147,6 +147,7 @@ class PokemonRedEnv(gym.Env):
         save_state: str | None = None,
         curriculum_saves: list[str] | None = None,
         curriculum_mix: float | None = None,
+        reset_steps: bool = False,
     ) -> dict[str, Any]:
         """Hot-update goal / episode length / saves (for auto-curriculum)."""
         if goal is not None:
@@ -161,6 +162,11 @@ class PokemonRedEnv(gym.Env):
             self.curriculum_saves = list(curriculum_saves)
         if curriculum_mix is not None:
             self.curriculum_mix = float(curriculum_mix)
+        if reset_steps:
+            self._step_count = 0
+            self._episode_loop = False
+            if self._emu is not None:
+                self.emu.data.loop_flag = False
         return {
             "goal": self.goal,
             "max_steps": self.max_steps,

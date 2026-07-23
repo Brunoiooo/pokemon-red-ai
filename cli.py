@@ -103,11 +103,19 @@ p_eval.add_argument(
 )
 p_eval.add_argument("--episodes", "-e", type=int, default=3)
 p_eval.add_argument("--checkpoint", "-c", default="start")
-p_eval.add_argument("--max-steps", "-s", type=int, default=5000)
+p_eval.add_argument("--max-steps", "-s", type=int, default=None,
+                    help="Override max steps (default: per-stage limit)")
 p_eval.add_argument("--frame-skip", type=int, default=24)
+p_eval.add_argument("--stage", default="stage_0", help="Starting curriculum stage")
 p_eval.add_argument(
     "--goal", default="left_house",
-    help="Episode success goal (default: left_house)",
+    help="Fixed goal when --no-auto-curriculum",
+)
+p_eval.add_argument(
+    "--auto-curriculum",
+    action=argparse.BooleanOptionalAction,
+    default=True,
+    help="On goal success, advance to next stage without reset (default: on)",
 )
 p_eval.add_argument("--stochastic", action="store_true")
 

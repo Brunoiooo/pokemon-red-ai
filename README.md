@@ -66,7 +66,14 @@ Watch especially:
 ## Evaluate (PPO)
 
 ```bash
-python cli.py eval --model models/ppo_<timestamp>/best/best_model.zip --episodes 5 --gui
+python cli.py eval --gui
+```
+
+Auto-picks the newest `best_model.zip` / `ppo_latest.zip`. With **auto-curriculum** (default), one episode keeps playing after each goal: leave house → Route 1 → Badge 1 (prints `✓ stage_0 cleared → advancing to stage_1`).
+
+```bash
+python cli.py eval --gui --no-auto-curriculum --goal left_house   # fixed single goal
+python cli.py eval --model models/ppo_<timestamp>/best/best_model.zip --gui
 ```
 
 ## Curriculum
