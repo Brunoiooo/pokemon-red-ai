@@ -55,16 +55,13 @@ def run(args):
     max_steps = args.max_steps or get_stage_max_steps(stage)
     curriculum_saves = get_curriculum_saves(stage)
 
-    # SubprocVecEnv requires identical render_mode on every worker. A live SDL
-    # window is only practical with a single DummyVecEnv process.
+    # SDL window only on worker 0; other workers stay headless so you can
+    # keep --workers > 1 while watching one live env.
     if args.gui and args.workers > 1:
         print(
-            f"Note: --gui forces --workers 1 "
-            f"(was {args.workers}; SubprocVecEnv cannot mix render modes)."
+            f"Note: --gui shows SDL on worker 0 only "
+            f"({args.workers - 1} workers stay headless)."
         )
-        args.workers = 1
-
-    render_mode = "human" if args.gui else None
 
     print("=" * 70)
     print("  Pokemon Red AI — PPO Training (Stable-Baselines3)")
@@ -92,7 +89,7 @@ def run(args):
                 stage=stage,
                 curriculum_mix=args.curriculum_mix,
                 curriculum_saves=curriculum_saves,
-                render_mode=render_mode,
+                render_mode="human" if (args.gui and rank == 0) else None,
                 auto_advance=args.auto_curriculum,
             )
             env.reset(seed=args.seed + rank)

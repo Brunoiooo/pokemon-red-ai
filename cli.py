@@ -28,7 +28,7 @@ _g.add_argument("--cpu", action="store_true",
 _g.add_argument("--verbose", "-v", action="store_true",
                 help="Verbose output")
 _g.add_argument("--gui", action="store_true",
-                help="Show the game window (where applicable)")
+                help="Show the game window (train: worker 0 only; eval: full)")
 
 parser = argparse.ArgumentParser(
     prog="pokemon-ai",
