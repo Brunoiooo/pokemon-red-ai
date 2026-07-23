@@ -18,21 +18,6 @@ def _raw_env(env):
     return cur
 
 
-def _apply_stage(raw, stage: str, checkpoint: str | None = None) -> None:
-    from curriculum_config import get_curriculum_saves, get_goal_for_stage, get_stage_max_steps
-
-    saves = get_curriculum_saves(stage)
-    save = checkpoint if checkpoint else saves[-1]
-    raw.set_curriculum(
-        goal=get_goal_for_stage(stage),
-        max_steps=get_stage_max_steps(stage),
-        save_state=save,
-        curriculum_saves=saves,
-        curriculum_mix=0.0,
-        reset_steps=True,
-    )
-
-
 def run(args):
     from stable_baselines3 import PPO
     from stable_baselines3.common.monitor import Monitor
@@ -41,7 +26,6 @@ def run(args):
         get_curriculum_saves,
         get_goal_for_stage,
         get_stage_max_steps,
-        next_stage,
         resolve_stage_name,
     )
     from env.pokemon_red_env import PokemonRedEnv
@@ -66,12 +50,14 @@ def run(args):
         max_steps=max_steps,
         frame_skip=args.frame_skip,
         goal=goal,
+        stage=stage,
         render_mode="human" if args.gui else None,
         curriculum_mix=0.0,
         curriculum_saves=saves,
+        auto_advance=auto,
     )
-    # Monitor forbids step() after terminated; auto-curriculum continues the
-    # same playthrough across stages, so skip Monitor in that mode.
+    # Monitor forbids step() after terminated; in-place advance keeps the
+    # episode alive, so Monitor is fine. Still skip when auto for clarity.
     if not auto:
         env = Monitor(env)
     raw = _raw_env(env)
@@ -84,7 +70,16 @@ def run(args):
     for ep in range(args.episodes):
         stage = resolve_stage_name(args.stage)
         if auto:
-            _apply_stage(raw, stage, checkpoint=args.checkpoint)
+            saves = get_curriculum_saves(stage)
+            raw.set_curriculum(
+                stage=stage,
+                goal=get_goal_for_stage(stage),
+                max_steps=get_stage_max_steps(stage) if not args.max_steps else args.max_steps,
+                save_state=args.checkpoint if args.checkpoint != "start" else saves[-1],
+                curriculum_saves=saves,
+                curriculum_mix=0.0,
+                reset_steps=True,
+            )
 
         obs, info = env.reset()
         total = 0.0
@@ -98,35 +93,17 @@ def run(args):
             total += float(reward)
             steps += 1
 
-            if truncated:
-                done = True
-                break
+            if info.get("goal_success"):
+                cleared = info.get("cleared_stage") or stage
+                stages_cleared.append(cleared)
+                stage = info.get("stage") or stage
+                print(
+                    f"  ✓ {cleared} cleared (goal={get_goal_for_stage(cleared)}) "
+                    f"→ advancing to {stage} "
+                    f"(goal={info.get('goal')})"
+                )
 
-            if terminated:
-                if auto:
-                    nxt = next_stage(
-                        stage,
-                        is_satisfied=raw.emu.data.is_goal_satisfied,
-                    )
-                    if nxt is not None:
-                        stages_cleared.append(stage)
-                        print(
-                            f"  ✓ {stage} cleared (goal={get_goal_for_stage(stage)}) "
-                            f"→ advancing to {nxt} "
-                            f"(goal={get_goal_for_stage(nxt)})"
-                        )
-                        stage = nxt
-                        # Keep playing from current game state; only change goal/horizon.
-                        raw.set_curriculum(
-                            goal=get_goal_for_stage(stage),
-                            max_steps=get_stage_max_steps(stage),
-                            reset_steps=True,
-                        )
-                        # If a Monitor was wrapped somehow, allow further steps.
-                        if hasattr(env, "needs_reset"):
-                            env.needs_reset = False
-                        continue
-                    stages_cleared.append(stage)
+            if truncated or terminated:
                 done = True
 
         print(
@@ -134,7 +111,7 @@ def run(args):
             f"return={total:.3f} steps={steps} "
             f"map={info.get('map_id')} badges={info.get('badges')} "
             f"milestone={info.get('milestone')} "
-            f"stage={stage} cleared={stages_cleared or '-'} "
+            f"stage={info.get('stage', stage)} cleared={stages_cleared or '-'} "
             f"loop={info.get('loop_flag')} "
             f"term={info.get('terminated')} trunc={info.get('truncated')}"
         )

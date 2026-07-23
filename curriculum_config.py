@@ -306,3 +306,18 @@ def get_current_stage(total_steps: int) -> str | None:
         if lo <= total_steps < hi:
             return stage_name
     return None
+
+
+def stage_for_goal(goal: str) -> str:
+    """First curriculum stage that targets ``goal`` (fallback: left_house)."""
+    for name in STAGE_ORDER:
+        cfg = CURRICULUM.get(name)
+        if cfg and cfg.get("goal") == goal:
+            return name
+    return "stage_left_house"
+
+
+# Goal one-hot for policy observations (order matches STAGE_ORDER).
+GOAL_ORDER = [CURRICULUM[s]["goal"] for s in STAGE_ORDER]
+GOAL_INDEX = {g: i for i, g in enumerate(GOAL_ORDER)}
+N_GOALS = len(GOAL_ORDER)

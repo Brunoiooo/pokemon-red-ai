@@ -1,13 +1,29 @@
 """Gymnasium environment wrapping PyBoy + Data for PPO training."""
 from __future__ import annotations
 
+import sys
+from pathlib import Path
 from threading import RLock
 from typing import Any
+
+# curriculum_config lives at repo root (not under src/).
+_ROOT = Path(__file__).resolve().parents[2]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
 import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 
+from curriculum_config import (
+    GOAL_INDEX,
+    N_GOALS,
+    get_curriculum_saves,
+    get_goal_for_stage,
+    get_stage_max_steps,
+    next_stage,
+    stage_for_goal,
+)
 from pokemon.Data import (
     GOAL_BADGE_1,
     GOAL_LEFT_HOUSE,
@@ -15,7 +31,7 @@ from pokemon.Data import (
     GOAL_ROUTE_1,
     Data,
 )
-from pokemon.Emulator import MEMORY_SNAPSHOT_END, N_ACTIONS, Emulator
+from pokemon.Emulator import N_ACTIONS, Emulator
 
 # Flattened float feature groups from Data.inputs() (excluding images / raw ids).
 _VECTOR_FLOAT_KEYS = (
@@ -44,8 +60,9 @@ _ID_SEQ_KEYS = (
     "item_id",
 )
 
-# Sizes measured from a live reset (must stay in sync with Data.py).
-VECTOR_DIM = 793
+# Base feature vector + curriculum goal one-hot.
+_BASE_VECTOR_DIM = 793
+VECTOR_DIM = _BASE_VECTOR_DIM + N_GOALS
 VISIT_MASK_SIZE = 2 * 5 + 1  # map_vision_radius default
 
 
@@ -63,15 +80,20 @@ class PokemonRedEnv(gym.Env):
         render_mode: str | None = None,
         curriculum_mix: float = 0.0,
         curriculum_saves: list[str] | None = None,
+        auto_advance: bool = True,
+        stage: str | None = None,
     ):
         super().__init__()
         self.save_state = save_state
         self.max_steps = int(max_steps)
         self.frame_skip = int(frame_skip)
         self.goal = goal
+        self.stage = stage or stage_for_goal(goal)
         self.render_mode = render_mode
         self.curriculum_mix = float(curriculum_mix)
         self.curriculum_saves = list(curriculum_saves or [save_state])
+        # When True, goal success advances curriculum in-place (train == eval).
+        self.auto_advance = bool(auto_advance)
 
         self._lock = RLock()
         self._emu: Emulator | None = None
@@ -107,6 +129,13 @@ class PokemonRedEnv(gym.Env):
             self._emu.use_sdl = self.render_mode == "human"
         return self._emu
 
+    def _goal_one_hot(self) -> np.ndarray:
+        oh = np.zeros(N_GOALS, dtype=np.float32)
+        idx = GOAL_INDEX.get(self.goal)
+        if idx is not None:
+            oh[idx] = 1.0
+        return oh
+
     def _torch_inputs_to_obs(self, inputs: dict) -> dict[str, np.ndarray]:
         floats: list[np.ndarray] = []
         for key in _VECTOR_FLOAT_KEYS:
@@ -120,9 +149,10 @@ class PokemonRedEnv(gym.Env):
             arr = inputs[key].detach().cpu().numpy().astype(np.float32).ravel() / 255.0
             floats.append(arr)
 
+        floats.append(self._goal_one_hot())
+
         vector = np.concatenate(floats, axis=0)
         if vector.shape[0] != VECTOR_DIM:
-            # Pad / trim defensively if Data feature sizes drift.
             out = np.zeros(VECTOR_DIM, dtype=np.float32)
             n = min(VECTOR_DIM, vector.shape[0])
             out[:n] = vector[:n]
@@ -148,10 +178,16 @@ class PokemonRedEnv(gym.Env):
         curriculum_saves: list[str] | None = None,
         curriculum_mix: float | None = None,
         reset_steps: bool = False,
+        stage: str | None = None,
+        clear_visits: bool = False,
     ) -> dict[str, Any]:
         """Hot-update goal / episode length / saves (for auto-curriculum)."""
+        if stage is not None:
+            self.stage = str(stage)
         if goal is not None:
             self.goal = str(goal)
+            if stage is None:
+                self.stage = stage_for_goal(self.goal)
             if self._emu is not None:
                 self.emu.data.goal = self.goal
         if max_steps is not None:
@@ -167,13 +203,43 @@ class PokemonRedEnv(gym.Env):
             self._episode_loop = False
             if self._emu is not None:
                 self.emu.data.loop_flag = False
+        if clear_visits and self._emu is not None:
+            # Fresh exploration pressure toward the next goal.
+            data = self.emu.data
+            data.visited_positions.clear()
+            data.position_visit_counts.clear()
+            data.recent_positions.clear()
+            data.in_menu_ticks = 0
+            data.in_battle_ticks = 0
+            data.in_dialog_ticks = 0
+            data._dialog_screens_seen = set()
         return {
             "goal": self.goal,
+            "stage": self.stage,
             "max_steps": self.max_steps,
             "save_state": self.save_state,
             "curriculum_saves": list(self.curriculum_saves),
             "curriculum_mix": self.curriculum_mix,
         }
+
+    def _advance_after_goal(self) -> tuple[bool, str | None]:
+        """Advance curriculum in-place. Returns (advanced, cleared_stage)."""
+        cleared = self.stage
+        nxt = next_stage(
+            self.stage,
+            is_satisfied=self.emu.data.is_goal_satisfied,
+        )
+        if nxt is None:
+            return False, cleared
+        self.set_curriculum(
+            stage=nxt,
+            goal=get_goal_for_stage(nxt),
+            max_steps=get_stage_max_steps(nxt),
+            curriculum_saves=get_curriculum_saves(nxt),
+            reset_steps=True,
+            clear_visits=True,
+        )
+        return True, cleared
 
     def _pick_save(self, options: dict | None) -> str:
         if options and options.get("save"):
@@ -193,11 +259,18 @@ class PokemonRedEnv(gym.Env):
         self.emu.data.goal = self.goal
         if options and options.get("goal"):
             self.emu.data.goal = str(options["goal"])
+            self.goal = str(options["goal"])
+            self.stage = stage_for_goal(self.goal)
         self._memory = memory
         self._step_count = 0
         self._episode_loop = False
         obs = self._torch_inputs_to_obs(inputs)
-        info = self._info(terminated=False, truncated=False)
+        info = self._info(
+            terminated=False,
+            truncated=False,
+            goal_success=False,
+            cleared_stage=None,
+        )
         return obs, info
 
     def step(self, action: int):
@@ -216,11 +289,33 @@ class PokemonRedEnv(gym.Env):
         if self._step_count >= self.max_steps:
             truncated = True
 
+        goal_success = False
+        cleared_stage: str | None = None
+        # Train/eval parity: success advances in-place instead of ending the episode.
+        if terminated and self.auto_advance and not truncated:
+            advanced, cleared_stage = self._advance_after_goal()
+            if advanced:
+                goal_success = True
+                terminated = False
+                # Obs must reflect the new goal one-hot immediately.
+                inputs = self.emu.data.inputs()
+
         obs = self._torch_inputs_to_obs(inputs)
-        info = self._info(terminated=terminated, truncated=truncated)
+        info = self._info(
+            terminated=terminated,
+            truncated=truncated,
+            goal_success=goal_success,
+            cleared_stage=cleared_stage,
+        )
         return obs, float(reward), bool(terminated), bool(truncated), info
 
-    def _info(self, terminated: bool, truncated: bool) -> dict[str, Any]:
+    def _info(
+        self,
+        terminated: bool,
+        truncated: bool,
+        goal_success: bool = False,
+        cleared_stage: str | None = None,
+    ) -> dict[str, Any]:
         data: Data = self.emu.data
         mem = self.emu.pyboy.memory
         badges = data.badges(mem)
@@ -236,6 +331,9 @@ class PokemonRedEnv(gym.Env):
             "terminated": terminated,
             "truncated": truncated,
             "goal": data.goal,
+            "stage": self.stage,
+            "goal_success": bool(goal_success),
+            "cleared_stage": cleared_stage,
         }
 
     def render(self):
@@ -263,6 +361,8 @@ def make_pokemon_env(
     seed: int = 0,
     curriculum_mix: float = 0.3,
     curriculum_saves: list[str] | None = None,
+    auto_advance: bool = True,
+    stage: str | None = None,
 ):
     """Factory for SubprocVecEnv workers."""
 
@@ -274,6 +374,8 @@ def make_pokemon_env(
             goal=goal,
             curriculum_mix=curriculum_mix,
             curriculum_saves=curriculum_saves,
+            auto_advance=auto_advance,
+            stage=stage,
         )
         env.reset(seed=seed + rank)
         return env

@@ -53,11 +53,13 @@ class MilestoneCallback(BaseCallback):
         self._badges: deque[int] = deque(maxlen=window)
         self._ep_loop = None
         self._ep_milestones = None
+        self._ep_goal_hit = None
 
     def _on_training_start(self) -> None:
         n = self.training_env.num_envs
         self._ep_loop = [False] * n
         self._ep_milestones = [set() for _ in range(n)]
+        self._ep_goal_hit = [False] * n
         self.logger.record("pokemon/curriculum_stage_idx", self._stage_idx())
 
     def _stage_idx(self) -> int:
@@ -78,6 +80,7 @@ class MilestoneCallback(BaseCallback):
             save_state=saves[-1],
             curriculum_saves=saves,
             curriculum_mix=self.curriculum_mix,
+            stage=stage,
         )
 
     def _try_advance(self) -> None:
@@ -135,10 +138,14 @@ class MilestoneCallback(BaseCallback):
                 self._ep_milestones[i].add(cur)
 
             done = bool(dones[i]) if i < len(dones) else False
+            if info.get("goal_success"):
+                self._ep_goal_hit[i] = True
+
             if done:
                 self._loops.append(1 if self._ep_loop[i] else 0)
-                # Current-goal success = natural terminated (not truncated).
-                success = bool(info.get("terminated", False))
+                success = bool(
+                    self._ep_goal_hit[i] or info.get("terminated", False)
+                )
                 self._successes.append(1 if success else 0)
                 self._badges.append(int(info.get("badges", 0) or 0))
 
@@ -149,6 +156,7 @@ class MilestoneCallback(BaseCallback):
 
                 self._ep_loop[i] = False
                 self._ep_milestones[i] = set()
+                self._ep_goal_hit[i] = False
 
         if len(self._loops) >= 10 and self.n_calls % self.check_every == 0:
             loop_rate = float(np.mean(self._loops))

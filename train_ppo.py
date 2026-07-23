@@ -89,9 +89,11 @@ def run(args):
                 max_steps=max_steps,
                 frame_skip=args.frame_skip,
                 goal=goal,
+                stage=stage,
                 curriculum_mix=args.curriculum_mix,
                 curriculum_saves=curriculum_saves,
                 render_mode=render_mode,
+                auto_advance=args.auto_curriculum,
             )
             env.reset(seed=args.seed + rank)
             return env
@@ -113,8 +115,10 @@ def run(args):
                 max_steps=max_steps,
                 frame_skip=args.frame_skip,
                 goal=goal,
+                stage=stage,
                 curriculum_mix=0.0,
                 curriculum_saves=curriculum_saves[-1:],
+                auto_advance=args.auto_curriculum,
             )
         ]
     )
