@@ -100,6 +100,10 @@ class PokemonRedEnv(gym.Env):
         self._memory: bytes | None = None
         self._step_count = 0
         self._episode_loop = False
+        # Base curriculum owned by the trainer/callback. In-episode auto_advance
+        # is ephemeral — reset() restores these so workers don't permanently
+        # drift to later stages and stop counting the current goal.
+        self._store_base_curriculum()
 
         self.action_space = spaces.Discrete(N_ACTIONS)
         self.observation_space = spaces.Dict(
@@ -170,6 +174,22 @@ class PokemonRedEnv(gym.Env):
             "vector": vector,
         }
 
+    def _store_base_curriculum(self) -> None:
+        self._base_stage = self.stage
+        self._base_goal = self.goal
+        self._base_max_steps = self.max_steps
+        self._base_save_state = self.save_state
+        self._base_curriculum_saves = list(self.curriculum_saves)
+        self._base_curriculum_mix = self.curriculum_mix
+
+    def _restore_base_curriculum(self) -> None:
+        self.stage = self._base_stage
+        self.goal = self._base_goal
+        self.max_steps = self._base_max_steps
+        self.save_state = self._base_save_state
+        self.curriculum_saves = list(self._base_curriculum_saves)
+        self.curriculum_mix = self._base_curriculum_mix
+
     def set_curriculum(
         self,
         goal: str | None = None,
@@ -180,8 +200,14 @@ class PokemonRedEnv(gym.Env):
         reset_steps: bool = False,
         stage: str | None = None,
         clear_visits: bool = False,
+        permanent: bool = True,
     ) -> dict[str, Any]:
-        """Hot-update goal / episode length / saves (for auto-curriculum)."""
+        """Hot-update goal / episode length / saves (for auto-curriculum).
+
+        ``permanent=True`` (default) updates the base stage used on ``reset``
+        — for MilestoneCallback / eval episode starts. ``permanent=False`` is
+        for in-episode auto_advance only (restored on the next reset).
+        """
         if stage is not None:
             self.stage = str(stage)
         if goal is not None:
@@ -198,6 +224,8 @@ class PokemonRedEnv(gym.Env):
             self.curriculum_saves = list(curriculum_saves)
         if curriculum_mix is not None:
             self.curriculum_mix = float(curriculum_mix)
+        if permanent:
+            self._store_base_curriculum()
         if reset_steps:
             self._step_count = 0
             self._episode_loop = False
@@ -220,10 +248,15 @@ class PokemonRedEnv(gym.Env):
             "save_state": self.save_state,
             "curriculum_saves": list(self.curriculum_saves),
             "curriculum_mix": self.curriculum_mix,
+            "base_stage": self._base_stage,
         }
 
     def _advance_after_goal(self) -> tuple[bool, str | None]:
-        """Advance curriculum in-place. Returns (advanced, cleared_stage)."""
+        """Advance curriculum in-place. Returns (advanced, cleared_stage).
+
+        Ephemeral: does not change the base stage, so ``reset()`` returns to
+        the trainer-assigned curriculum until MilestoneCallback advances it.
+        """
         cleared = self.stage
         nxt = next_stage(
             self.stage,
@@ -235,9 +268,10 @@ class PokemonRedEnv(gym.Env):
             stage=nxt,
             goal=get_goal_for_stage(nxt),
             max_steps=get_stage_max_steps(nxt),
-            curriculum_saves=get_curriculum_saves(nxt),
+            # Keep base saves; only the live goal/max_steps change this episode.
             reset_steps=True,
             clear_visits=True,
+            permanent=False,
         )
         return True, cleared
 
@@ -254,6 +288,8 @@ class PokemonRedEnv(gym.Env):
 
     def reset(self, *, seed: int | None = None, options: dict | None = None):
         super().reset(seed=seed)
+        # Drop any in-episode auto_advance; train on the assigned stage.
+        self._restore_base_curriculum()
         save = self._pick_save(options)
         memory, inputs = self.emu.reset(dir=save)
         self.emu.data.goal = self.goal
@@ -261,6 +297,7 @@ class PokemonRedEnv(gym.Env):
             self.emu.data.goal = str(options["goal"])
             self.goal = str(options["goal"])
             self.stage = stage_for_goal(self.goal)
+            self._store_base_curriculum()
         self._memory = memory
         self._step_count = 0
         self._episode_loop = False

@@ -138,13 +138,18 @@ class MilestoneCallback(BaseCallback):
                 self._ep_milestones[i].add(cur)
 
             done = bool(dones[i]) if i < len(dones) else False
-            if info.get("goal_success"):
+            if info.get("goal_success") or info.get("cleared_stage"):
                 self._ep_goal_hit[i] = True
 
             if done:
                 self._loops.append(1 if self._ep_loop[i] else 0)
+                # auto_advance clears terminated on the goal step, so rely on
+                # _ep_goal_hit (set when goal_success was True earlier).
                 success = bool(
-                    self._ep_goal_hit[i] or info.get("terminated", False)
+                    self._ep_goal_hit[i]
+                    or info.get("goal_success")
+                    or info.get("cleared_stage")
+                    or info.get("terminated", False)
                 )
                 self._successes.append(1 if success else 0)
                 self._badges.append(int(info.get("badges", 0) or 0))
