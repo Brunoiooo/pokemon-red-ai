@@ -29,18 +29,21 @@ Place `rom.gb` and ensure `saves/start/checkpoint.state` exists.
 ## Train (PPO)
 
 ```bash
-python cli.py train --workers 8 --stage stage_0
+python cli.py train --workers 8
 # or
-python train_ppo.py --workers 8 --stage stage_0 --timesteps 2000000
+python train_ppo.py --workers 8 --timesteps 2000000
 ```
+
+Auto-curriculum is **on by default**: when ~70% of recent episodes succeed at the current goal, training advances `stage_0` (leave house) → `stage_1` (Route 1) → `stage_2` (Badge 1). No manual stage switching needed for a single long run.
+
+Disable with `--no-auto-curriculum` if you want a fixed goal.
 
 Useful flags:
 
 | Flag | Meaning |
 |------|---------|
-| `--stage stage_0` | Leave the house (`goal=left_house`) |
-| `--stage stage_1` | Reach Route 1 |
-| `--stage stage_2` | Push toward Badge 1 |
+| `--stage stage_0` | Starting stage (auto-advances by default) |
+| `--no-auto-curriculum` | Keep a fixed stage/goal |
 | `--goal badge1` | Override episode success condition |
 | `--workers 8` | Parallel `SubprocVecEnv` envs |
 | `--gui` | Show window (forces `--workers 1`) |
@@ -54,8 +57,10 @@ tensorboard --logdir logs
 
 Watch especially:
 
-- `pokemon/loop_episode_rate` (target ≪ 0.10)
+- `pokemon/goal_success_rate` — success on the *current* curriculum goal
+- `pokemon/curriculum_stage_idx` — 0→1→2 as auto-curriculum advances
 - `pokemon/left_house_rate`, `pokemon/route1_rate`, `pokemon/badge1_rate`
+- `pokemon/loop_episode_rate` (target ≪ 0.10)
 - `rollout/ep_rew_mean`
 
 ## Evaluate (PPO)
@@ -68,9 +73,11 @@ python cli.py eval --model models/ppo_<timestamp>/best/best_model.zip --episodes
 
 Configured in [`curriculum_config.py`](curriculum_config.py):
 
-1. **stage_0** — start save, succeed by leaving Red's house  
-2. **stage_1** — optional `saves/stage_1`, succeed on Route 1  
-3. **stage_2** — optional `saves/stage_2`, succeed on Badge 1  
+1. **stage_0** — leave Red's house (`left_house`)  
+2. **stage_1** — reach Route 1 (optional `saves/stage_1`, else starts from `start` with longer horizon)  
+3. **stage_2** — Badge 1 (optional `saves/stage_2`)
+
+Auto-curriculum advances when ~70% of the last ≥40 episodes succeed at the current goal. Look for `[curriculum] Advanced ...` in the console / `pokemon/curriculum_stage_idx` in TensorBoard.
 
 Create mid-game saves by playing (`python cli.py record` or manual PyBoy) and copying `checkpoint.state` into `saves/stage_N/`. Missing stage saves fall back to `start`.
 

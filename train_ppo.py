@@ -77,6 +77,7 @@ def run(args):
     print(f"Log dir:    {log_dir}")
     print(f"Total steps:{args.timesteps:,}")
     print(f"GUI:        {'ON' if args.gui else 'OFF'}")
+    print(f"Auto curr.: {'ON' if args.auto_curriculum else 'OFF'}")
     print("=" * 70)
 
     def _make(rank: int):
@@ -163,7 +164,13 @@ def run(args):
         deterministic=True,
         render=False,
     )
-    milestone_cb = MilestoneCallback(window=100)
+    milestone_cb = MilestoneCallback(
+        window=100,
+        auto_curriculum=args.auto_curriculum,
+        start_stage=stage,
+        curriculum_mix=args.curriculum_mix,
+        eval_env=eval_env,
+    )
 
     try:
         model.learn(
@@ -197,9 +204,11 @@ def build_argparser(parent=None):
     p.add_argument("--frame-skip", type=int, default=24)
     p.add_argument("--max-steps", type=int, default=None)
     p.add_argument("--stage", default="stage_0",
-                   help="Curriculum stage: stage_0 | stage_1 | stage_2")
+                   help="Starting curriculum stage: stage_0 | stage_1 | stage_2")
     p.add_argument("--goal", default=None,
-                   help="Override goal: left_house | route1 | oaks_lab | badge1 | all_badges")
+                   help="Override goal (disables matching stage goal; auto-curriculum still advances stages)")
+    p.add_argument("--auto-curriculum", action=argparse.BooleanOptionalAction, default=True,
+                   help="Auto-advance stage_0→1→2 when goal success rate is high (default: on)")
     p.add_argument("--curriculum-mix", type=float, default=0.3,
                    help="Probability of resetting to an earlier curriculum save")
     p.add_argument("--seed", type=int, default=0)

@@ -140,6 +140,35 @@ class PokemonRedEnv(gym.Env):
             "vector": vector,
         }
 
+    def set_curriculum(
+        self,
+        goal: str | None = None,
+        max_steps: int | None = None,
+        save_state: str | None = None,
+        curriculum_saves: list[str] | None = None,
+        curriculum_mix: float | None = None,
+    ) -> dict[str, Any]:
+        """Hot-update goal / episode length / saves (for auto-curriculum)."""
+        if goal is not None:
+            self.goal = str(goal)
+            if self._emu is not None:
+                self.emu.data.goal = self.goal
+        if max_steps is not None:
+            self.max_steps = int(max_steps)
+        if save_state is not None:
+            self.save_state = str(save_state)
+        if curriculum_saves is not None:
+            self.curriculum_saves = list(curriculum_saves)
+        if curriculum_mix is not None:
+            self.curriculum_mix = float(curriculum_mix)
+        return {
+            "goal": self.goal,
+            "max_steps": self.max_steps,
+            "save_state": self.save_state,
+            "curriculum_saves": list(self.curriculum_saves),
+            "curriculum_mix": self.curriculum_mix,
+        }
+
     def _pick_save(self, options: dict | None) -> str:
         if options and options.get("save"):
             return str(options["save"])

@@ -35,7 +35,7 @@ parser = argparse.ArgumentParser(
     formatter_class=argparse.RawDescriptionHelpFormatter,
     epilog=(
         "Examples:\n"
-        "  python cli.py train --workers 8 --stage stage_0\n"
+        "  python cli.py train --workers 8\n"
         "  python cli.py eval --gui\n"
         "  python cli.py eval --model models/ppo_<timestamp>/best/best_model.zip --gui\n"
         "  python cli.py train-dqn --workers 5\n"
@@ -66,6 +66,8 @@ p_train.add_argument("--frame-skip", type=int, default=24)
 p_train.add_argument("--max-steps", type=int, default=None)
 p_train.add_argument("--stage", default="stage_0")
 p_train.add_argument("--goal", default=None)
+p_train.add_argument("--auto-curriculum", action=argparse.BooleanOptionalAction, default=True,
+                     help="Auto-advance stages when success rate is high (default: on)")
 p_train.add_argument("--curriculum-mix", type=float, default=0.3)
 p_train.add_argument("--seed", type=int, default=0)
 p_train.add_argument("--resume", default=None)
