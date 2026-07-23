@@ -113,10 +113,11 @@ class MilestoneCallback(BaseCallback):
         goal = get_goal_for_stage(nxt)
         max_steps = get_stage_max_steps(nxt)
         msg = (
-            f"[curriculum] Advanced {old} → {nxt} "
+            f"[curriculum] Advanced {old} -> {nxt} "
             f"(goal={goal}, max_steps={max_steps}, "
-            f"success_rate={rate:.2f} ≥ {self.success_threshold:.2f})"
+            f"success_rate={rate:.2f} >= {self.success_threshold:.2f})"
         )
+        # ASCII only: Windows cp1250 + PowerShell redirect crashes on arrows.
         print(f"\n{msg}\n")
         self.logger.record("pokemon/curriculum_stage_idx", self._stage_idx())
         self.logger.record("pokemon/goal_success_rate", 0.0)

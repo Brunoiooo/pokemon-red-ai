@@ -67,7 +67,7 @@ def run(args):
     render_mode = "human" if args.gui else None
 
     print("=" * 70)
-    print("  Pokemon Red AI — PPO Training (Stable-Baselines3)")
+    print("  Pokemon Red AI - PPO Training (Stable-Baselines3)")
     print("=" * 70)
     print(f"Device:     {device}")
     print(f"Workers:    {args.workers}")
@@ -189,7 +189,7 @@ def run(args):
             progress_bar=not args.no_progress,
         )
     except KeyboardInterrupt:
-        print("\nInterrupted — saving latest model...")
+        print("\nInterrupted - saving latest model...")
     finally:
         out = model_dir / "ppo_latest.zip"
         model.save(str(out))

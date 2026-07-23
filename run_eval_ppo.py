@@ -98,8 +98,8 @@ def run(args):
                 stages_cleared.append(cleared)
                 stage = info.get("stage") or stage
                 print(
-                    f"  ✓ {cleared} cleared (goal={get_goal_for_stage(cleared)}) "
-                    f"→ advancing to {stage} "
+                    f"  [ok] {cleared} cleared (goal={get_goal_for_stage(cleared)}) "
+                    f"-> advancing to {stage} "
                     f"(goal={info.get('goal')})"
                 )
 
