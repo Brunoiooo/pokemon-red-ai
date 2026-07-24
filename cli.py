@@ -12,6 +12,7 @@ Commands:
   pretrain    Behavioral-cloning pre-training from a human demo (legacy DQN)
   record      Record human gameplay for BC pre-training
   save-stage  Play manually and save a mid-game state for a curriculum stage
+  debug-play  Human play with live reward / dialog / battle debug prints
   plot        Plot training metrics from CSV logs
   analyze     Analyze a training metrics JSON
   benchmark   Run inference / emulation / pipeline benchmarks
@@ -183,6 +184,49 @@ p_save_stage.add_argument(
     help="List curriculum stages and which already have saves",
 )
 
+p_debug = sub.add_parser(
+    "debug-play",
+    parents=[_global],
+    help="Human play with live reward / dialog / battle debug prints",
+)
+p_debug.add_argument(
+    "--from",
+    dest="from_checkpoint",
+    default="start",
+    help="Save dir to load first (default: start)",
+)
+p_debug.add_argument(
+    "--save-as",
+    default="manual_debug",
+    help="Folder under saves/ for S key (default: manual_debug)",
+)
+p_debug.add_argument(
+    "--goal",
+    default=None,
+    help="Active curriculum goal (affects milestone scaling / terminated)",
+)
+p_debug.add_argument(
+    "--stage",
+    default=None,
+    help="Optional stage name — sets --goal from curriculum if --goal omitted",
+)
+p_debug.add_argument(
+    "--frame-skip",
+    type=int,
+    default=24,
+    help="Hold duration per action, same as PPO (default: 24)",
+)
+p_debug.add_argument(
+    "--real-truncation",
+    action="store_true",
+    help="Keep agent stuck/loop fuses (default: disabled for human play)",
+)
+p_debug.add_argument(
+    "--all-steps",
+    action="store_true",
+    help="Print every step including idle None actions",
+)
+
 p_plot = sub.add_parser("plot", parents=[_global], help="Plot training CSV metrics")
 p_plot.add_argument("train_csv", nargs="?", default=None, metavar="TRAIN_CSV")
 
@@ -223,6 +267,10 @@ def main():
 
     elif args.command == "save-stage":
         import create_stage_save as _m
+        _m.run(args)
+
+    elif args.command == "debug-play":
+        import debug_play as _m
         _m.run(args)
 
     elif args.command == "plot":

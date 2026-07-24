@@ -67,6 +67,9 @@ def run(args):
     print(f"Start stage: {stage}  goal={goal}  max_steps={max_steps}")
     model = PPO.load(str(model_path), device="cpu" if args.cpu else "auto")
 
+    verbose = bool(getattr(args, "verbose", False))
+    ACTION_NAMES = ("NONE", "A", "B", "UP", "DOWN", "LEFT", "RIGHT", "START", "SELECT")
+
     for ep in range(args.episodes):
         stage = resolve_stage_name(args.stage)
         if auto:
@@ -86,12 +89,52 @@ def run(args):
         steps = 0
         stages_cleared: list[str] = []
         done = False
+        last_map = info.get("map_id")
+        last_milestone = info.get("milestone")
+        maps_seen: list[int] = [int(last_map)] if last_map is not None else []
+        loop_hits = 0
+        if verbose:
+            print(
+                f"\n=== Episode {ep + 1}/{args.episodes} start "
+                f"stage={info.get('stage', stage)} goal={info.get('goal')} "
+                f"map={info.get('map_id')} milestone={info.get('milestone')} ==="
+            )
 
         while not done:
             action, _ = model.predict(obs, deterministic=not args.stochastic)
-            obs, reward, terminated, truncated, info = env.step(int(action))
+            action_i = int(action)
+            obs, reward, terminated, truncated, info = env.step(action_i)
             total += float(reward)
             steps += 1
+            if info.get("loop_flag"):
+                loop_hits += 1
+
+            map_id = info.get("map_id")
+            milestone = info.get("milestone")
+            if map_id is not None and map_id != last_map:
+                maps_seen.append(int(map_id))
+                if verbose:
+                    print(
+                        f"  [map] step={steps} {last_map} -> {map_id} "
+                        f"rew={reward:+.3f} total={total:.2f} "
+                        f"stage={info.get('stage')} goal={info.get('goal')}"
+                    )
+                last_map = map_id
+            if milestone and milestone != last_milestone:
+                if verbose:
+                    print(
+                        f"  [milestone] step={steps} {last_milestone} -> {milestone} "
+                        f"total={total:.2f}"
+                    )
+                last_milestone = milestone
+            if verbose and (steps % 50 == 0 or abs(float(reward)) >= 0.5):
+                aname = ACTION_NAMES[action_i] if 0 <= action_i < len(ACTION_NAMES) else str(action_i)
+                print(
+                    f"  [step] {steps:4d} act={aname:6s} rew={reward:+.4f} "
+                    f"total={total:7.2f} map={map_id} "
+                    f"loop={int(bool(info.get('loop_flag')))} "
+                    f"ms={info.get('milestone')}"
+                )
 
             if info.get("goal_success"):
                 cleared = info.get("cleared_stage") or stage
@@ -112,7 +155,8 @@ def run(args):
             f"map={info.get('map_id')} badges={info.get('badges')} "
             f"milestone={info.get('milestone')} "
             f"stage={info.get('stage', stage)} cleared={stages_cleared or '-'} "
-            f"loop={info.get('loop_flag')} "
+            f"loop={info.get('loop_flag')} loop_hits={loop_hits} "
+            f"maps={maps_seen} "
             f"term={info.get('terminated')} trunc={info.get('truncated')}"
         )
 

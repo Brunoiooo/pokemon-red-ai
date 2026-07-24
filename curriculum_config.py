@@ -111,16 +111,32 @@ CURRICULUM: dict[str, dict] = {
         GOAL_LEFT_HOUSE, max_steps=2048, description="Leave Red's house"
     ),
     "stage_oaks_lab": _stage(
-        GOAL_OAKS_LAB, max_steps=4096, description="Reach Oak's Lab"
+        GOAL_OAKS_LAB,
+        max_steps=4096,
+        description="Reach Oak's Lab",
+        checkpoint="stage_oaks_lab",
+        earlier=["start"],
     ),
     "stage_route1": _stage(
-        GOAL_ROUTE_1, max_steps=4096, description="Reach Route 1 / tall grass"
+        GOAL_ROUTE_1,
+        max_steps=4096,
+        description="Reach Route 1 / tall grass",
+        checkpoint="stage_route1",
+        earlier=["start", "stage_oaks_lab"],
     ),
     "stage_oaks_parcel": _stage(
-        GOAL_OAKS_PARCEL, max_steps=8192, description="Obtain Oak's Parcel"
+        GOAL_OAKS_PARCEL,
+        max_steps=8192,
+        description="Obtain Oak's Parcel",
+        checkpoint="stage_oaks_parcel",
+        earlier=["start", "stage_route1"],
     ),
     "stage_town_map": _stage(
-        GOAL_TOWN_MAP, max_steps=8192, description="Obtain the Town Map"
+        GOAL_TOWN_MAP,
+        max_steps=8192,
+        description="Obtain the Town Map",
+        checkpoint="stage_town_map",
+        earlier=["start", "stage_oaks_parcel"],
     ),
     "stage_fought_brock": _stage(
         GOAL_FOUGHT_BROCK, max_steps=12288, description="Fight Brock (Pewter Gym)"

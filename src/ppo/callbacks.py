@@ -81,6 +81,7 @@ class MilestoneCallback(BaseCallback):
             curriculum_saves=saves,
             curriculum_mix=self.curriculum_mix,
             stage=stage,
+            clear_visits=True,
         )
 
     def _try_advance(self) -> None:

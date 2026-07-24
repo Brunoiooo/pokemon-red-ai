@@ -79,10 +79,14 @@ class Data:
     badge_reward: float = 10.0          # macro
     event_reward: float = 2.0           # macro
     left_house_reward: float = 5.0      # macro early milestone
-    route1_reward: float = 5.0          # macro early milestone
+    route1_reward: float = 8.0          # macro early milestone (scaled further when active goal)
     oaks_lab_reward: float = 3.0        # meso/macro story
+    # Goal conditioning: full credit only for the active curriculum goal so the
+    # policy cannot farm house/lab returns while the stage target is route1+.
+    active_goal_scale: float = 3.0
+    off_goal_milestone_scale: float = 0.1
     new_screen_reward: float = 0.1      # meso (new map)
-    new_position_reward: float = 0.01   # micro
+    new_position_reward: float = 0.008  # micro (slightly lower to curb tile farming)
     new_dialog_reward: float = 0.1      # meso — enter a new dialog
     dialog_advance_reward: float = 0.02 # meso — dialog_id changed while reading
     dialog_exit_reward: float = 0.05    # meso — finished / left a dialog
@@ -93,12 +97,17 @@ class Data:
     truncated_reward: float = -0.05
     new_item_reward: float = 0.5
 
-    # Anti-loop / anti-spam penalties (PokeRL-style).
-    visit_penalty_soft: float = -0.01   # visit count > 3
-    visit_penalty_hard: float = -0.05   # visit count > 5
-    action_pattern_penalty: float = -0.02
-    spatial_loop_penalty: float = -0.03
-    menu_spam_penalty: float = -0.02
+    # Anti-loop / anti-spam penalties (PokeRL-style). Stronger than before so
+    # farming a ~17 return without the stage goal is no longer attractive.
+    visit_penalty_soft: float = -0.05   # visit count > 3
+    visit_penalty_hard: float = -0.15   # visit count > 5
+    action_pattern_penalty: float = -0.08
+    spatial_loop_penalty: float = -0.10
+    menu_spam_penalty: float = -0.05
+    # Re-open a dialog that was already exited on this map: 1st = penalty, 2nd = truncate.
+    dialog_reopen_penalty: float = -0.5
+    # Consecutive anti-loop hits → truncate episode (escape local optima).
+    max_loop_streak: int = 48
 
     # Episode goal for terminated() — early milestones for PPO curriculum.
     goal: str = GOAL_BADGE_1
@@ -126,11 +135,16 @@ class Data:
     recent_actions: deque = field(default_factory=lambda: deque(maxlen=20))
     recent_positions: deque = field(default_factory=lambda: deque(maxlen=16))
     loop_flag: bool = False
+    loop_streak: int = 0
     _milestones_hit: set[str] = field(default_factory=set)
     _start_map_id: int | None = None
     # Distinct dialog screen hashes seen for the current dialog_id. Blink frames
     # revisit old hashes; only a *new* hash counts as text progress.
     _dialog_screens_seen: set[str] = field(default_factory=set)
+    # Dialogs cleanly exited this episode → reopen tracking (penalty then truncate).
+    _completed_dialogs: set[tuple[int, int]] = field(default_factory=set)
+    _dialog_reopen_counts: dict[tuple[int, int], int] = field(default_factory=dict)
+    _dialog_reopen_truncate: bool = False
 
     @property
     def visited_pokedex_own(self):
@@ -204,8 +218,12 @@ class Data:
         self.recent_actions.clear()
         self.recent_positions.clear()
         self.loop_flag = False
+        self.loop_streak = 0
         self._milestones_hit = set()
         self._dialog_screens_seen = set()
+        self._completed_dialogs = set()
+        self._dialog_reopen_counts = {}
+        self._dialog_reopen_truncate = False
         self._start_map_id = self.map_id(self.pyboy.memory)
 
     def _dialog_progressed(self, memory: bytes | None, action: int | None = None) -> bool:
@@ -489,8 +507,42 @@ class Data:
             step += s
 
         step += self.reward_anti_loop(action=action, memory=memory)
+        step += self.reward_dialog_reopen(memory)
 
         return milestone, step
+
+    def reward_dialog_reopen(self, memory: bytes) -> float:
+        """After exiting a dialog, reopening the same (dialog_id, map_id) is a loop.
+
+        1st reopen → penalty; 2nd reopen → truncate (see ``truncated``).
+        Staying inside one conversation does not count — only exit then re-enter.
+        """
+        was_dialog = self.is_dialog(memory)
+        now_dialog = self.is_dialog(self.pyboy.memory)
+
+        if was_dialog and not now_dialog:
+            self._completed_dialogs.add(self.get_dialog(memory))
+            return 0.0
+
+        if not was_dialog and now_dialog:
+            key = self.get_dialog()
+            if key not in self._completed_dialogs:
+                return 0.0
+            n = self._dialog_reopen_counts.get(key, 0) + 1
+            self._dialog_reopen_counts[key] = n
+            self.loop_flag = True
+            if n >= 2:
+                self._dialog_reopen_truncate = True
+                return 0.0
+            return self.dialog_reopen_penalty
+
+        return 0.0
+
+    def _scaled_milestone(self, name: str, base: float) -> float:
+        """Full credit for the active goal; muted credit for off-goal story beats."""
+        if name == self.goal:
+            return base * self.active_goal_scale
+        return base * self.off_goal_milestone_scale
 
     def reward_story_milestones(self) -> float:
         """One-shot bonuses for story / map progress (order-independent)."""
@@ -519,13 +571,13 @@ class Data:
         for name, hit, value in checks:
             if name not in self._milestones_hit and hit:
                 self._milestones_hit.add(name)
-                reward += value
+                reward += self._scaled_milestone(name, value)
 
         badges = self.badges(self.pyboy.memory)
         for i, name in enumerate(BADGE_GOALS):
             if name not in self._milestones_hit and i < len(badges) and badges[i]:
                 self._milestones_hit.add(name)
-                reward += self.badge_reward
+                reward += self._scaled_milestone(name, self.badge_reward)
 
         return reward
 
@@ -592,6 +644,9 @@ class Data:
 
         if triggered:
             self.loop_flag = True
+            self.loop_streak += 1
+        else:
+            self.loop_streak = 0
 
         return penalty
 
@@ -910,6 +965,8 @@ class Data:
             True
             if stuck_tile
             or stuck_dialog
+            or self._dialog_reopen_truncate
+            or self.loop_streak >= self.max_loop_streak
             or self.max_useless_ticks <= self.in_battle_ticks
             or self.max_useless_ticks <= self.in_menu_ticks
             else False

@@ -137,6 +137,9 @@ def run(args):
         resume_path = resolve_model_path(resume_arg, prefer_latest=True)
         print(f"Resuming from {resume_path}")
         model = PPO.load(str(resume_path), env=train_env, device=device)
+        # Override frozen checkpoint hyperparams (e.g. raise entropy after collapse).
+        model.ent_coef = float(args.ent_coef)
+        print(f"ent_coef override: {model.ent_coef}")
     else:
         model = PPO(
             policy="MultiInputPolicy",
@@ -210,7 +213,7 @@ def build_argparser(parent=None):
     p.add_argument("--batch-size", type=int, default=512)
     p.add_argument("--n-epochs", type=int, default=4)
     p.add_argument("--gamma", type=float, default=0.99)
-    p.add_argument("--ent-coef", type=float, default=0.01)
+    p.add_argument("--ent-coef", type=float, default=0.05)
     p.add_argument("--frame-skip", type=int, default=24)
     p.add_argument("--max-steps", type=int, default=None)
     p.add_argument("--stage", default="stage_left_house",

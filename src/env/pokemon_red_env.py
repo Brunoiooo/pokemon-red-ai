@@ -237,10 +237,16 @@ class PokemonRedEnv(gym.Env):
             data.visited_positions.clear()
             data.position_visit_counts.clear()
             data.recent_positions.clear()
+            data.recent_actions.clear()
+            data.loop_flag = False
+            data.loop_streak = 0
             data.in_menu_ticks = 0
             data.in_battle_ticks = 0
             data.in_dialog_ticks = 0
             data._dialog_screens_seen = set()
+            data._completed_dialogs = set()
+            data._dialog_reopen_counts = {}
+            data._dialog_reopen_truncate = False
         return {
             "goal": self.goal,
             "stage": self.stage,
