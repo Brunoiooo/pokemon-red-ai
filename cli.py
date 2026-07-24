@@ -63,8 +63,11 @@ p_train.add_argument("--n-steps", type=int, default=2048)
 p_train.add_argument("--batch-size", type=int, default=512)
 p_train.add_argument("--n-epochs", type=int, default=4)
 p_train.add_argument("--gamma", type=float, default=0.99)
-p_train.add_argument("--ent-coef", type=float, default=0.01)
-p_train.add_argument("--frame-skip", type=int, default=24)
+p_train.add_argument(
+    "--ent-coef", type=float, default=0.05,
+    help="PPO entropy bonus (default 0.05; higher fights action-sequence collapse)",
+)
+p_train.add_argument("--frame-skip", type=int, default=16)
 p_train.add_argument("--max-steps", type=int, default=None)
 p_train.add_argument("--stage", default="stage_left_house",
                      help="Starting curriculum stage (see curriculum_config.STAGE_ORDER)")
@@ -114,7 +117,7 @@ p_eval.add_argument("--episodes", "-e", type=int, default=3)
 p_eval.add_argument("--checkpoint", "-c", default="start")
 p_eval.add_argument("--max-steps", "-s", type=int, default=None,
                     help="Override max steps (default: per-stage limit)")
-p_eval.add_argument("--frame-skip", type=int, default=24)
+p_eval.add_argument("--frame-skip", type=int, default=16)
 p_eval.add_argument("--stage", default="stage_left_house",
                     help="Starting curriculum stage (see curriculum_config.STAGE_ORDER)")
 p_eval.add_argument(
@@ -213,8 +216,8 @@ p_debug.add_argument(
 p_debug.add_argument(
     "--frame-skip",
     type=int,
-    default=24,
-    help="Hold duration per action, same as PPO (default: 24)",
+    default=16,
+    help="Hold duration per action, same as PPO (default: 16)",
 )
 p_debug.add_argument(
     "--real-truncation",

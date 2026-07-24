@@ -92,7 +92,7 @@ Create mid-game saves by copying `checkpoint.state` into `saves/<stage_name>/` (
 ## Environment details
 
 - **Obs**: `screen_tiles` (1×18×20), `visit_mask` (1×11×11), flat `vector` features from RAM  
-- **Actions**: 9 discrete buttons (A/B/Start/Select/D-pad/None) with fixed `--frame-skip` (default 24)  
+- **Actions**: 9 discrete buttons (A/B/Start/Select/D-pad/None) with fixed `--frame-skip` (default 16)  
 - **Rewards**: hierarchical micro/meso/macro + PokeRL-style anti-loop / menu-spam penalties  
 - **Done**: curriculum goal (`left_house` / `route1` / `oaks_lab` / `badge1` / `all_badges`) or stuck / `max_steps`
 

@@ -81,6 +81,7 @@ def run(args):
     if patience != 1:
         emulator.data.max_useless_ticks *= patience
         emulator.data.max_useless_dialog_ticks *= patience
+        emulator.data.max_useless_battle_ticks *= patience
 
     print_sep()
     print("  Pokemon Red AI — Demo Recorder")

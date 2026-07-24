@@ -125,6 +125,7 @@ def run(args: argparse.Namespace) -> None:
     # Human play: disable stuck truncation so standing still does not end the run.
     emulator.data.max_useless_ticks = 10**9
     emulator.data.max_useless_dialog_ticks = 10**9
+    emulator.data.max_useless_battle_ticks = 10**9
 
     print_sep()
     print("  Pokemon Red AI — Create stage save")

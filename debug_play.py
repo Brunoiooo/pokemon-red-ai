@@ -17,7 +17,7 @@ Controls (global keyboard hook — works without focusing the terminal):
 Examples:
   python cli.py debug-play --from start
   python cli.py debug-play --from stage_oaks_lab --goal oaks_lab
-  python cli.py debug-play --from start --frame-skip 24 --real-truncation
+  python cli.py debug-play --from start --frame-skip 16 --real-truncation
 """
 from __future__ import annotations
 
@@ -27,7 +27,6 @@ sys.path.insert(0, "src")
 
 import argparse
 import queue
-import time
 from multiprocessing import RLock
 from pathlib import Path
 
@@ -63,6 +62,8 @@ def print_sep(char: str = "=", width: int = 72) -> None:
 def _mode_flags(emu: Emulator) -> str:
     mem = emu.pyboy.memory
     flags = []
+    if emu.data.is_cutscene_locked(mem):
+        flags.append("cutscene")
     if emu.data.is_world(mem):
         flags.append("world")
     if emu.data.is_dialog(mem):
@@ -93,7 +94,7 @@ def fuse_line(emu: Emulator) -> str:
     return (
         f"fuses: tile={tile}/{data.max_useless_ticks} "
         f"dialog={int(data.in_dialog_ticks)}/{data.max_useless_dialog_ticks} "
-        f"battle={int(data.in_battle_ticks)}/{data.max_useless_ticks} "
+        f"battle={int(data.in_battle_ticks)}/{data.max_useless_battle_ticks} "
         f"menu={int(data.in_menu_ticks)}/{data.max_useless_ticks} "
         f"loop={data.loop_streak}/{data.max_loop_streak}"
     )
@@ -141,6 +142,7 @@ def run(args: argparse.Namespace) -> None:
         # Human play: don't end the run while standing still / reading text.
         emulator.data.max_useless_ticks = 10**9
         emulator.data.max_useless_dialog_ticks = 10**9
+        emulator.data.max_useless_battle_ticks = 10**9
         emulator.data.max_loop_streak = 10**9
 
     print_sep()
@@ -149,7 +151,8 @@ def run(args: argparse.Namespace) -> None:
     print(f"  Start from   : saves/{from_ckpt}/")
     print(f"  Save as      : saves/{save_as}/checkpoint.state")
     print(f"  Goal         : {goal}")
-    print(f"  Frame skip   : {frame_skip}  (PPO default is 24)")
+    print(f"  Frame skip   : {frame_skip}  (PPO default is 16)")
+    print(f"  Speed        : 1x (human)")
     print(
         f"  Truncation   : "
         f"{'REAL (agent fuses)' if args.real_truncation else 'disabled (human)'}"
@@ -161,6 +164,9 @@ def run(args: argparse.Namespace) -> None:
 
     memory, _ = emulator.reset(dir=from_ckpt)
     emulator.data.goal = goal
+    # Real-time pace: PyBoy only rate-limits once per tick() call, so batched
+    # tick(duration) would still run near-instant. render_each paces each frame.
+    emulator.pyboy.set_emulation_speed(1)
     emulator.pyboy.tick(1, render=True, sound=False)
     print(f"  Loaded. {status_line(emulator)}")
     print(f"  {fuse_line(emulator)}")
@@ -208,11 +214,12 @@ def run(args: argparse.Namespace) -> None:
                 print(f"  Reloaded from saves/{from_ckpt}/  ({status_line(emulator)})")
                 continue
 
-        # Match PPO: fixed hold duration via step_discrete.
+        # Match PPO hold length, but pace frame-by-frame at 1x (human speed).
         memory, _, reward, terminated, truncated = emulator.step_discrete(
             memory=memory,
             action_idx=action,
             duration=frame_skip,
+            render_each=True,
         )
         step_i += 1
         total_reward += float(reward)
@@ -242,16 +249,21 @@ def run(args: argparse.Namespace) -> None:
                 marks.append(f"dialog {prev_dialog}->{did}")
             if emulator.data.loop_flag:
                 marks.append("LOOP")
+            if getattr(emulator.data, "_last_regressed", None):
+                lost = ",".join(emulator.data._last_regressed)
+                marks.append(f"REGRESS({lost})")
             if terminated:
                 marks.append("TERM(goal)")
             if truncated:
                 marks.append("TRUNC")
             mark_s = f"  [{' | '.join(marks)}]" if marks else ""
+            live_n = len(emulator.data.live_story_goals())
+            peak_n = int(getattr(emulator.data, "_peak_live_goals", 0) or 0)
             print(
                 f"#{step_i:<5} {btn:<6} r={reward:+.4f} "
                 f"(m={milestone:+.4f} s={step_r:+.4f})  "
                 f"{status_line(emulator)}  "
-                f"loop={emulator.data.loop_streak}{mark_s}"
+                f"goals={live_n}/{peak_n} loop={emulator.data.loop_streak}{mark_s}"
             )
             if mode_changed or dialog_changed or truncated or terminated:
                 print(f"       {fuse_line(emulator)}  Σr={total_reward:.4f}")
@@ -266,8 +278,6 @@ def run(args: argparse.Namespace) -> None:
                 f"\n  Truncated (stuck fuse / loop). {fuse_line(emulator)}"
                 f"\n  Press R to reload or Q to quit."
             )
-
-        time.sleep(0.005)
 
     emulator.pyboy.stop(False)
     print_sep()
@@ -305,8 +315,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--frame-skip",
         type=int,
-        default=24,
-        help="Hold duration per action, same as PPO (default: 24)",
+        default=16,
+        help="Hold duration per action, same as PPO (default: 16)",
     )
     p.add_argument(
         "--real-truncation",

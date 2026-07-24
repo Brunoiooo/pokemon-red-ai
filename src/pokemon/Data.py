@@ -13,6 +13,7 @@ MAP_PALLET_TOWN = 0
 MAP_ROUTE_1 = 12
 MAP_REDS_HOUSE_2F = 37
 MAP_REDS_HOUSE_1F = 38
+MAP_RIVALS_HOUSE = 39
 MAP_OAKS_LAB = 40
 HOUSE_MAPS = frozenset({MAP_REDS_HOUSE_1F, MAP_REDS_HOUSE_2F})
 
@@ -54,6 +55,13 @@ GOAL_FOSSIL = "fossil"
 GOAL_MEWTWO = "mewtwo"
 GOAL_ALL_BADGES = "all_badges"
 
+# Maps on the critical path for early location goals (excludes rivals' house).
+GOAL_ALLOWED_MAPS: dict[str, frozenset[int]] = {
+    GOAL_LEFT_HOUSE: HOUSE_MAPS | {MAP_PALLET_TOWN},
+    GOAL_OAKS_LAB: frozenset({MAP_PALLET_TOWN, MAP_OAKS_LAB}),
+    GOAL_ROUTE_1: frozenset({MAP_PALLET_TOWN, MAP_OAKS_LAB, MAP_ROUTE_1}),
+}
+
 BADGE_GOALS = (
     GOAL_BADGE_1,
     GOAL_BADGE_2,
@@ -63,6 +71,44 @@ BADGE_GOALS = (
     GOAL_BADGE_6,
     GOAL_BADGE_7,
     GOAL_BADGE_8,
+)
+
+# Location goals: true only while on the map / outside the house. Leaving undoes
+# live progress unless the goal was curriculum-cleared (auto_advance).
+REGRESSABLE_GOALS = frozenset({GOAL_LEFT_HOUSE, GOAL_ROUTE_1, GOAL_OAKS_LAB})
+
+# Ordered early→late checklist for live progress counting / regression metrics.
+STORY_GOAL_ORDER = (
+    GOAL_LEFT_HOUSE,
+    GOAL_OAKS_LAB,
+    GOAL_ROUTE_1,
+    GOAL_OAKS_PARCEL,
+    GOAL_TOWN_MAP,
+    GOAL_FOUGHT_BROCK,
+    GOAL_BADGE_1,
+    GOAL_FOUGHT_MISTY,
+    GOAL_BADGE_2,
+    GOAL_SS_ANNE,
+    GOAL_FOUGHT_SURGE,
+    GOAL_BADGE_3,
+    GOAL_FOUGHT_ERIKA,
+    GOAL_BADGE_4,
+    GOAL_FOUGHT_KOGA,
+    GOAL_BADGE_5,
+    GOAL_FOUGHT_SABRINA,
+    GOAL_BADGE_6,
+    GOAL_FOUGHT_BLAINE,
+    GOAL_BADGE_7,
+    GOAL_FOUGHT_GIOVANNI,
+    GOAL_BADGE_8,
+    GOAL_LAPRAS,
+    GOAL_SNORLAX,
+    GOAL_ARTICUNO,
+    GOAL_ZAPDOS,
+    GOAL_MOLTRES,
+    GOAL_FOSSIL,
+    GOAL_MEWTWO,
+    GOAL_ALL_BADGES,
 )
 
 
@@ -87,9 +133,14 @@ class Data:
     off_goal_milestone_scale: float = 0.1
     new_screen_reward: float = 0.1      # meso (new map)
     new_position_reward: float = 0.008  # micro (slightly lower to curb tile farming)
-    new_dialog_reward: float = 0.1      # meso — enter a new dialog
-    dialog_advance_reward: float = 0.02 # meso — dialog_id changed while reading
-    dialog_exit_reward: float = 0.05    # meso — finished / left a dialog
+    new_dialog_reward: float = 0.05     # meso — first enter of a (dialog_id, map)
+    # Mid-dialog text farming was an exploit (post-rival Oak speech): tiny
+    # +0.01 per screen kept the agent camping without leaving for Route 1.
+    dialog_advance_reward: float = 0.0
+    dialog_exit_reward: float = 0.2     # meso — leaving dialog is real progress
+    # Meso — overworld → battle (rival / wild). Large enough to beat typical
+    # loop noise on the entry step (~0.12) so the transition is clearly positive.
+    battle_enter_reward: float = 0.5
     new_pokedex_seen_reward: float = 0.5
     new_pokedex_own_reward: float = 1.0
     status_reward: float = 0.02
@@ -104,10 +155,20 @@ class Data:
     action_pattern_penalty: float = -0.08
     spatial_loop_penalty: float = -0.10
     menu_spam_penalty: float = -0.05
+    # START/SELECT/d-pad while a textbox is open — does not advance story text.
+    dialog_wrong_button_penalty: float = -0.08
+    # Scale for in-dialog waste when text is not progressing (was ~base_reward).
+    dialog_waste_scale: float = -0.04
+    # Lingering on a map that cannot complete the active location goal
+    # (e.g. rivals' house while targeting Oak's Lab).
+    off_goal_camp_penalty: float = -0.12
     # Re-open a dialog that was already exited on this map: 1st = penalty, 2nd = truncate.
     dialog_reopen_penalty: float = -0.5
     # Consecutive anti-loop hits → truncate episode (escape local optima).
     max_loop_streak: int = 48
+    # Claw back location-goal payouts when the agent leaves without clearing
+    # them via curriculum auto_advance (1.0 = full refund of what was paid).
+    goal_regression_scale: float = 1.0
 
     # Episode goal for terminated() — early milestones for PPO curriculum.
     goal: str = GOAL_BADGE_1
@@ -116,10 +177,15 @@ class Data:
     in_battle_ticks: float = 0.0
     in_dialog_ticks: float = 0.0
     max_useless_ticks: int = 512
-    # Hard stuck fuse while a single dialog_id is on screen. Does NOT reset on
-    # tile blink / A presses — only on dialog_id change or leaving dialog.
-    # 512*4 @ frame_skip 24 ≈ 85 steps; enough for a box, not infinite camp.
-    max_useless_dialog_ticks: int = 512 * 4
+    # Hard stuck fuse for one dialog_id. Resets only on dialog_id change or
+    # leaving dialog — NOT on tilemap blink / partial text frames (those were
+    # resetting the fuse forever while farming advance rewards).
+    # 512*8 @ frame_skip 16 = 256 steps: enough to A-mash a long script, not camp.
+    max_useless_dialog_ticks: int = 512 * 8
+    # Battle fuse: same budget as dialog. Turn counter alone is too coarse —
+    # intro text, move select, and attack messages all sit on one turn.
+    # 512 was 32 steps @ fs 16; *4 gives room mid-fight.
+    max_useless_battle_ticks: int = 512 * 4
     __player_pokemon_size: int = 0x2C
     __pokemon_count: int = 6
     buffer_reward: float = 0.0
@@ -137,6 +203,14 @@ class Data:
     loop_flag: bool = False
     loop_streak: int = 0
     _milestones_hit: set[str] = field(default_factory=set)
+    # Payout credited when a milestone first hit — used to claw back on regress.
+    _milestone_payouts: dict[str, float] = field(default_factory=dict)
+    # Goals cleared by curriculum auto_advance this episode (no clawback on leave).
+    _cleared_goals: set[str] = field(default_factory=set)
+    # Live story goals satisfied last step (for detecting count drops).
+    _prev_live_goals: set[str] = field(default_factory=set)
+    _last_regressed: list[str] = field(default_factory=list)
+    _peak_live_goals: int = 0
     _start_map_id: int | None = None
     # Distinct dialog screen hashes seen for the current dialog_id. Blink frames
     # revisit old hashes; only a *new* hash counts as text progress.
@@ -220,28 +294,27 @@ class Data:
         self.loop_flag = False
         self.loop_streak = 0
         self._milestones_hit = set()
+        self._milestone_payouts = {}
+        self._cleared_goals = set()
+        self._prev_live_goals = set()
+        self._last_regressed = []
+        self._peak_live_goals = 0
         self._dialog_screens_seen = set()
         self._completed_dialogs = set()
         self._dialog_reopen_counts = {}
         self._dialog_reopen_truncate = False
         self._start_map_id = self.map_id(self.pyboy.memory)
 
-    def _dialog_progressed(self, memory: bytes | None, action: int | None = None) -> bool:
-        """True when dialog text advanced to a new unique screen.
+    def _dialog_id_changed(self, memory: bytes | None) -> bool:
+        """True when dialog_id flipped while still in a textbox."""
+        if memory is None or not self.is_dialog(self.pyboy.memory):
+            return False
+        return self.dialog_id(memory) != self.dialog_id(self.pyboy.memory)
 
-        Cursor blink oscillates between a few tilemaps — those hashes are
-        remembered so they do not reset the stuck fuse or pay advance rewards.
-        """
+    def _dialog_screen_is_new(self) -> bool:
+        """Track unique tilemaps for the current dialog_id (blink-safe)."""
         if not self.is_dialog(self.pyboy.memory):
             return False
-
-        id_changed = (
-            memory is not None
-            and self.dialog_id(memory) != self.dialog_id(self.pyboy.memory)
-        )
-        if id_changed:
-            self._dialog_screens_seen = set()
-
         screen_hash = self.screen_tiles_hash(self.pyboy.memory)
         if screen_hash not in self._dialog_screens_seen:
             self._dialog_screens_seen.add(screen_hash)
@@ -252,9 +325,15 @@ class Data:
         self.visited_pokedex_own = self.pokedex_own(self.pyboy.memory)
         self.visited_pokedex_seen = self.pokedex_seen(self.pyboy.memory)
 
-        self.recent_actions.append(int(action))
+        # Cutscenes drive the player; do not pollute action-loop history.
+        if not self.is_cutscene_locked(self.pyboy.memory):
+            self.recent_actions.append(int(action))
 
-        if self.is_world(self.pyboy.memory):
+        if self.is_cutscene_locked(self.pyboy.memory):
+            # Forced walk / joypad ignore (e.g. following Oak): player has no
+            # agency — do not accumulate tile stuck fuse or visit counts.
+            pass
+        elif self.is_world(self.pyboy.memory):
             pos = self.get_position()
             stayed = memory is not None and self.get_position(memory) == pos
             interacting = int(action) in INTERACT_ACTIONS
@@ -276,8 +355,8 @@ class Data:
             not self.is_battle(self.pyboy.memory)
             and not self.is_dialog(self.pyboy.memory)
         ):
-            # Script lock / menu with no movement (blocked, NPCs still walk):
-            # same stuck fuse as world. Skip during dialog — text uses its own fuse.
+            # Menu with no movement (blocked, NPCs still walk): same stuck fuse
+            # as world. Skip during dialog — text uses its own fuse.
             pos = self.get_position()
             self.visited_positions[pos] = (
                 self.visited_positions.get(pos, 0) + duration
@@ -295,14 +374,21 @@ class Data:
                 self.in_battle_ticks = 0
             else:
                 self.in_battle_ticks += duration
+        else:
+            # Do not carry a near-limit fuse into the next encounter.
+            self.in_battle_ticks = 0
 
         if self.is_dialog(self.pyboy.memory):
             dialog = self.get_dialog()
             self.visited_dialogs[dialog] = self.visited_dialogs.get(dialog, 0) + duration
-            if self._dialog_progressed(memory, action):
+            # Fuse resets only on dialog_id change (or leaving dialog below).
+            # New text frames alone used to reset forever → infinite camp.
+            if self._dialog_id_changed(memory):
+                self._dialog_screens_seen = set()
                 self.in_dialog_ticks = 0
             else:
                 self.in_dialog_ticks += duration
+            self._dialog_screen_is_new()
         else:
             self.in_dialog_ticks = 0
             self._dialog_screens_seen = set()
@@ -475,6 +561,7 @@ class Data:
 
         milestone += self.reward_core(memory)
         milestone += self.reward_story_milestones()
+        milestone += self.reward_goal_regression()
 
         if self.is_battle(self.pyboy.memory):
             milestone += self.reward_battle(memory)
@@ -488,7 +575,12 @@ class Data:
             milestone += self.buffer_reward * (1.0 if 0 < self.buffer_reward else 0.50)
             self.buffer_reward = 0.0
 
-        if self.is_world(self.pyboy.memory):
+        if self.is_cutscene_locked(self.pyboy.memory):
+            # No step reward/penalty — actions cannot affect the game. Story
+            # milestones above still apply when flags/maps change mid-cutscene.
+            if self.is_dialog(memory):
+                milestone += self.dialog_exit_reward
+        elif self.is_world(self.pyboy.memory):
             step += self.reward_position()
             # Completing a dialog is progress; without this, reading text is pure cost.
             if self.is_dialog(memory):
@@ -506,7 +598,9 @@ class Data:
             milestone += m
             step += s
 
-        step += self.reward_anti_loop(action=action, memory=memory)
+        if not self.is_cutscene_locked(self.pyboy.memory):
+            step += self.reward_anti_loop(action=action, memory=memory)
+        # Always track dialog enter/exit — cutscenes often follow textboxes.
         step += self.reward_dialog_reopen(memory)
 
         return milestone, step
@@ -544,6 +638,45 @@ class Data:
             return base * self.active_goal_scale
         return base * self.off_goal_milestone_scale
 
+    def mark_goal_cleared(self, goal: str) -> None:
+        """Curriculum auto_advance: leaving this location is not a regression."""
+        if goal:
+            self._cleared_goals.add(str(goal))
+
+    def live_story_goals(self) -> list[str]:
+        """Story goals that are true in the *current* game state (can shrink)."""
+        return [g for g in STORY_GOAL_ORDER if self.is_goal_satisfied(g)]
+
+    def reward_goal_regression(self) -> float:
+        """Claw back location milestones that are no longer true.
+
+        Cleared-via-curriculum goals are exempt so the correct path
+        (enter lab → advance → leave toward Route 1) is not punished.
+        Unpaid dabbling (off-goal lab visit while training Route 1) is refunded.
+        """
+        self._last_regressed = []
+        reward = 0.0
+        for name in list(self._milestones_hit):
+            if name not in REGRESSABLE_GOALS:
+                continue
+            if name in self._cleared_goals:
+                continue
+            if self.is_goal_satisfied(name):
+                continue
+            payout = float(self._milestone_payouts.pop(name, 0.0))
+            self._milestones_hit.discard(name)
+            reward -= payout * self.goal_regression_scale
+            self._last_regressed.append(name)
+
+        live = set(self.live_story_goals())
+        lost_live = self._prev_live_goals - live
+        for name in lost_live:
+            if name not in self._last_regressed:
+                self._last_regressed.append(name)
+        self._peak_live_goals = max(self._peak_live_goals, len(live))
+        self._prev_live_goals = live
+        return reward
+
     def reward_story_milestones(self) -> float:
         """One-shot bonuses for story / map progress (order-independent)."""
         reward = 0.0
@@ -570,14 +703,18 @@ class Data:
         ]
         for name, hit, value in checks:
             if name not in self._milestones_hit and hit:
+                payout = self._scaled_milestone(name, value)
                 self._milestones_hit.add(name)
-                reward += self._scaled_milestone(name, value)
+                self._milestone_payouts[name] = payout
+                reward += payout
 
         badges = self.badges(self.pyboy.memory)
         for i, name in enumerate(BADGE_GOALS):
             if name not in self._milestones_hit and i < len(badges) and badges[i]:
+                payout = self._scaled_milestone(name, self.badge_reward)
                 self._milestones_hit.add(name)
-                reward += self._scaled_milestone(name, self.badge_reward)
+                self._milestone_payouts[name] = payout
+                reward += payout
 
         return reward
 
@@ -620,9 +757,13 @@ class Data:
                 penalty += self.action_pattern_penalty
                 triggered = True
 
-        # Idle in dialog (noop) is never useful — nudge toward A/B.
-        if in_dialog and action == ACTION_NONE:
-            penalty += self.menu_spam_penalty
+        # Idle / wrong buttons in dialog — only A/B advances story text.
+        if in_dialog and action not in INTERACT_ACTIONS:
+            penalty += (
+                self.menu_spam_penalty
+                if action == ACTION_NONE
+                else self.dialog_wrong_button_penalty
+            )
             triggered = True
 
         # 3) Spatial loop: same tile revisited often in recent history.
@@ -642,6 +783,20 @@ class Data:
             penalty += self.menu_spam_penalty
             triggered = True
 
+        # 4) Off-goal map camping — rivals' house etc. while targeting lab/route.
+        allowed = GOAL_ALLOWED_MAPS.get(self.goal)
+        if (
+            allowed is not None
+            and self.is_world(self.pyboy.memory)
+            and not self.is_cutscene_locked(self.pyboy.memory)
+            and self.map_id(self.pyboy.memory) not in allowed
+        ):
+            visits = self.position_visit_counts.get(self.get_position(), 0)
+            # Punish dwell / A-B mash off the critical path; brief walk-through OK.
+            if visits > 2 or (interacting and not in_dialog):
+                penalty += self.off_goal_camp_penalty
+                triggered = True
+
         if triggered:
             self.loop_flag = True
             self.loop_streak += 1
@@ -651,37 +806,44 @@ class Data:
         return penalty
 
     def reward_battle_useless_count(self, memory: bytes) -> tuple[float, float]:
-        if (
+        entered = not self.is_battle(memory) and self.is_battle(self.pyboy.memory)
+        turn_changed = (
             self.number_of_turns_in_current_battle(memory)
             != self.number_of_turns_in_current_battle(self.pyboy.memory)
-            or not self.is_battle(memory)
-            and self.is_battle(self.pyboy.memory)
-        ):
+        )
+        if entered:
+            # world→battle gets an explicit bonus; other entries keep new_screen.
+            if self.is_world(memory):
+                return self.battle_enter_reward, 0.0
             return self.new_screen_reward, 0.0
-        return 0.0, self.in_battle_ticks / self.max_useless_ticks * self.base_reward
+        if turn_changed:
+            return self.new_screen_reward, 0.0
+        return (
+            0.0,
+            self.in_battle_ticks / self.max_useless_battle_ticks * self.base_reward,
+        )
 
     def reward_dialog(self, memory: bytes, action: int) -> tuple[float, float]:
         dialog_changed = self.dialog_id(memory) != self.dialog_id(self.pyboy.memory)
-        # Peek whether this screen is new WITHOUT mutating seen-set here;
-        # count() owns the set updates after reward.
-        screen_hash = self.screen_tiles_hash(self.pyboy.memory)
-        new_screen = screen_hash not in self._dialog_screens_seen
         current_dialog = self.get_dialog()
         is_new_dialog = current_dialog not in self.visited_dialogs
+        # Pay for opening a new conversation and (optionally) dialog_id flips.
+        # Do NOT pay for tilemap text frames — that was the post-rival exploit.
         if is_new_dialog:
             dialog_reward = self.new_dialog_reward
         elif dialog_changed:
             dialog_reward = self.dialog_advance_reward
-        elif new_screen and int(action) in INTERACT_ACTIONS:
-            # New text frame via A/B — not cursor blink (blink hashes already seen).
-            dialog_reward = self.dialog_advance_reward * 0.5
         else:
             dialog_reward = 0.0
-        progressed = dialog_changed or (new_screen and int(action) in INTERACT_ACTIONS)
+        # Waste grows while the same dialog_id sits on screen without flipping.
         waste = (
             0.0
-            if progressed
-            else self.in_dialog_ticks / self.max_useless_dialog_ticks * self.base_reward
+            if dialog_changed
+            else (
+                self.in_dialog_ticks
+                / self.max_useless_dialog_ticks
+                * self.dialog_waste_scale
+            )
         )
         return dialog_reward, waste
 
@@ -947,17 +1109,18 @@ class Data:
         return self.goal_reached()
 
     def truncated(self, memory: bytes):
-        # Stuck fuse uses in_dialog_ticks (resets on progress), not cumulative
-        # visited_dialogs — long scripts reuse one dialog_id for many boxes.
+        # Stuck fuse uses in_dialog_ticks (resets on dialog_id change / leave),
+        # not tilemap text frames — those no longer clear the fuse.
         # Also require is_dialog so lingering dialog_id in RAM cannot truncate
         # after the conversation already ended.
         in_dialog = self.is_dialog(self.pyboy.memory)
         stuck_dialog = (
             in_dialog and self.max_useless_dialog_ticks <= self.in_dialog_ticks
         )
-        # Tile fuse pauses during dialog so long Oak/NPC text is not cut off.
+        # Tile fuse pauses during dialog and cutscenes (forced walks / joy ignore).
         stuck_tile = (
             not in_dialog
+            and not self.is_cutscene_locked(self.pyboy.memory)
             and self.max_useless_ticks
             <= self.visited_positions.get(self.get_position(), 0)
         )
@@ -967,7 +1130,7 @@ class Data:
             or stuck_dialog
             or self._dialog_reopen_truncate
             or self.loop_streak >= self.max_loop_streak
-            or self.max_useless_ticks <= self.in_battle_ticks
+            or self.max_useless_battle_ticks <= self.in_battle_ticks
             or self.max_useless_ticks <= self.in_menu_ticks
             else False
         )
@@ -1070,7 +1233,11 @@ class Data:
         data = []
 
         data += self.data_normalizer(
-            [self.in_battle_ticks, self.in_menu_ticks],
+            [self.in_battle_ticks],
+            max=self.max_useless_battle_ticks,
+        )
+        data += self.data_normalizer(
+            [self.in_menu_ticks],
             max=self.max_useless_ticks,
         )
         data += self.data_normalizer(
@@ -1138,7 +1305,34 @@ class Data:
         )
 
     def is_blocked(self, memory: PyBoyMemoryView | bytes):
+        # wFontLoaded (CFC4): textbox/menu font occupies walk-anim VRAM.
         return True if memory[0xCFC4] else False
+
+    def is_script_locked(self, memory: PyBoyMemoryView | bytes) -> bool:
+        """True when the engine owns player input (cutscene / forced walk).
+
+        Independent of on-screen activity — following Oak still looks like the
+        overworld. See pret/pokered JoypadOverworld + wStatusFlags5.
+        """
+        status5 = int(memory[0xD730])
+        # bit7 BIT_SCRIPTED_MOVEMENT_STATE, bit5 BIT_DISABLE_JOYPAD
+        if status5 & 0xA0:
+            return True
+        # wJoyIgnore — bitmask of ignored buttons (often D-pad during scripts)
+        if memory[0xCD6B]:
+            return True
+        # wSimulatedJoypadStatesIndex — remaining forced button presses
+        if memory[0xCD38]:
+            return True
+        return False
+
+    def is_cutscene_locked(self, memory: PyBoyMemoryView | bytes) -> bool:
+        """Script lock with no textbox/battle — player cannot usefully act."""
+        return (
+            self.is_script_locked(memory)
+            and not self.is_blocked(memory)
+            and not self.is_battle(memory)
+        )
 
     def dialog_id(self, memory: PyBoyMemoryView | bytes):
         return memory[0xCF13]
@@ -1150,11 +1344,14 @@ class Data:
         return memory[0xD057]
 
     def is_world(self, memory: PyBoyMemoryView | bytes):
+        # Cutscene lock looks like overworld on screen but is not agent-controlled.
+        # Mode flags become all-zero — distinct obs signal without changing VECTOR_DIM.
         return (
             True
             if not self.is_blocked(memory)
             and not self.is_battle(memory)
             and not self.is_menu(memory)
+            and not self.is_script_locked(memory)
             else False
         )
 

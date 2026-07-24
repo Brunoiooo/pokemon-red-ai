@@ -51,15 +51,22 @@ class MilestoneCallback(BaseCallback):
         self._loops: deque[int] = deque(maxlen=window)
         self._successes: deque[int] = deque(maxlen=window)
         self._badges: deque[int] = deque(maxlen=window)
+        self._goals_live: deque[int] = deque(maxlen=window)
+        self._goals_peak: deque[int] = deque(maxlen=window)
+        self._regressions: deque[int] = deque(maxlen=window)
         self._ep_loop = None
         self._ep_milestones = None
         self._ep_goal_hit = None
+        self._ep_regressed = None
+        self._ep_goals_peak = None
 
     def _on_training_start(self) -> None:
         n = self.training_env.num_envs
         self._ep_loop = [False] * n
         self._ep_milestones = [set() for _ in range(n)]
         self._ep_goal_hit = [False] * n
+        self._ep_regressed = [False] * n
+        self._ep_goals_peak = [0] * n
         self.logger.record("pokemon/curriculum_stage_idx", self._stage_idx())
 
     def _stage_idx(self) -> int:
@@ -142,6 +149,12 @@ class MilestoneCallback(BaseCallback):
             done = bool(dones[i]) if i < len(dones) else False
             if info.get("goal_success") or info.get("cleared_stage"):
                 self._ep_goal_hit[i] = True
+            if info.get("goals_regressed"):
+                self._ep_regressed[i] = True
+            peak = int(info.get("goals_peak_count", 0) or 0)
+            if peak > self._ep_goals_peak[i]:
+                self._ep_goals_peak[i] = peak
+            live = int(info.get("goals_live_count", 0) or 0)
 
             if done:
                 self._loops.append(1 if self._ep_loop[i] else 0)
@@ -155,6 +168,9 @@ class MilestoneCallback(BaseCallback):
                 )
                 self._successes.append(1 if success else 0)
                 self._badges.append(int(info.get("badges", 0) or 0))
+                self._goals_live.append(live)
+                self._goals_peak.append(self._ep_goals_peak[i])
+                self._regressions.append(1 if self._ep_regressed[i] else 0)
 
                 if "episode" in info:
                     self._returns.append(float(info["episode"]["r"]))
@@ -164,6 +180,8 @@ class MilestoneCallback(BaseCallback):
                 self._ep_loop[i] = False
                 self._ep_milestones[i] = set()
                 self._ep_goal_hit[i] = False
+                self._ep_regressed[i] = False
+                self._ep_goals_peak[i] = 0
 
         if len(self._loops) >= 10 and self.n_calls % self.check_every == 0:
             loop_rate = float(np.mean(self._loops))
@@ -175,6 +193,18 @@ class MilestoneCallback(BaseCallback):
             if self._badges:
                 self.logger.record(
                     "pokemon/badges_mean", float(np.mean(self._badges))
+                )
+            if self._goals_live:
+                self.logger.record(
+                    "pokemon/goals_live_mean", float(np.mean(self._goals_live))
+                )
+            if self._goals_peak:
+                self.logger.record(
+                    "pokemon/goals_peak_mean", float(np.mean(self._goals_peak))
+                )
+            if self._regressions:
+                self.logger.record(
+                    "pokemon/goal_regression_rate", float(np.mean(self._regressions))
                 )
             if self._returns:
                 self.logger.record(

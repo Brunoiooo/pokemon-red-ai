@@ -75,13 +75,15 @@ class PokemonRedEnv(gym.Env):
         self,
         save_state: str = "start",
         max_steps: int = 5000,
-        frame_skip: int = 24,
+        frame_skip: int = 16,
         goal: str = GOAL_BADGE_1,
         render_mode: str | None = None,
         curriculum_mix: float = 0.0,
         curriculum_saves: list[str] | None = None,
         auto_advance: bool = True,
         stage: str | None = None,
+        worker_rank: int = 0,
+        n_workers: int = 1,
     ):
         super().__init__()
         self.save_state = save_state
@@ -94,6 +96,8 @@ class PokemonRedEnv(gym.Env):
         self.curriculum_saves = list(curriculum_saves or [save_state])
         # When True, goal success advances curriculum in-place (train == eval).
         self.auto_advance = bool(auto_advance)
+        self.worker_rank = int(worker_rank)
+        self.n_workers = max(1, int(n_workers))
 
         self._lock = RLock()
         self._emu: Emulator | None = None
@@ -130,6 +134,14 @@ class PokemonRedEnv(gym.Env):
     def emu(self) -> Emulator:
         if self._emu is None:
             self._emu = Emulator(files_lock=self._lock)
+            if self.render_mode == "human":
+                from utils.gui_layout import window_slot
+
+                slot = window_slot(self.worker_rank, self.n_workers)
+                self._emu.sdl_scale = slot.scale
+                self._emu.window_x = slot.x
+                self._emu.window_y = slot.y
+                self._emu.window_title = f"Pokemon Red AI - worker {self.worker_rank}"
             self._emu.use_sdl = self.render_mode == "human"
         return self._emu
 
@@ -264,12 +276,16 @@ class PokemonRedEnv(gym.Env):
         the trainer-assigned curriculum until MilestoneCallback advances it.
         """
         cleared = self.stage
+        cleared_goal = self.goal
         nxt = next_stage(
             self.stage,
             is_satisfied=self.emu.data.is_goal_satisfied,
         )
         if nxt is None:
             return False, cleared
+        # Mark before leaving the map so location clawback does not undo a
+        # legitimately cleared curriculum beat (lab → Route 1).
+        self.emu.data.mark_goal_cleared(cleared_goal)
         self.set_curriculum(
             stage=nxt,
             goal=get_goal_for_stage(nxt),
@@ -362,6 +378,7 @@ class PokemonRedEnv(gym.Env):
         data: Data = self.emu.data
         mem = self.emu.pyboy.memory
         badges = data.badges(mem)
+        live_goals = data.live_story_goals()
         return {
             "badges": int(sum(badges)),
             "badge_bits": badges,
@@ -369,6 +386,11 @@ class PokemonRedEnv(gym.Env):
             "loop_flag": bool(self._episode_loop or data.loop_flag),
             "milestone": data.current_milestone(),
             "milestones_hit": sorted(data._milestones_hit),
+            "goals_live": live_goals,
+            "goals_live_count": len(live_goals),
+            "goals_peak_count": int(data._peak_live_goals),
+            "goals_regressed": list(data._last_regressed),
+            "goals_cleared": sorted(data._cleared_goals),
             "menu_ticks": float(data.in_menu_ticks),
             "steps": self._step_count,
             "terminated": terminated,
@@ -398,7 +420,7 @@ class PokemonRedEnv(gym.Env):
 def make_pokemon_env(
     save_state: str = "start",
     max_steps: int = 5000,
-    frame_skip: int = 24,
+    frame_skip: int = 16,
     goal: str = GOAL_BADGE_1,
     rank: int = 0,
     seed: int = 0,
@@ -406,6 +428,8 @@ def make_pokemon_env(
     curriculum_saves: list[str] | None = None,
     auto_advance: bool = True,
     stage: str | None = None,
+    render_mode: str | None = None,
+    n_workers: int = 1,
 ):
     """Factory for SubprocVecEnv workers."""
 
@@ -419,6 +443,9 @@ def make_pokemon_env(
             curriculum_saves=curriculum_saves,
             auto_advance=auto_advance,
             stage=stage,
+            render_mode=render_mode,
+            worker_rank=rank,
+            n_workers=n_workers,
         )
         env.reset(seed=seed + rank)
         return env

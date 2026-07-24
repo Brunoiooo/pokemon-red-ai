@@ -48,6 +48,11 @@ class Emulator:
     ALL_BUTTONS = ["a", "b", "start", "select", "left", "right", "up", "down"]
 
     __use_sdl: bool = False
+    # SDL layout (set by PokemonRedEnv before first pyboy access).
+    sdl_scale: int = 3
+    window_x: int | None = None
+    window_y: int | None = None
+    window_title: str | None = None
 
     @property
     def use_sdl(self) -> bool:
@@ -72,13 +77,32 @@ class Emulator:
 
     __pyboy: None | PyBoy = None
 
+    def _apply_sdl_layout(self) -> None:
+        if self.__pyboy is None or not self.use_sdl:
+            return
+        from utils.gui_layout import apply_pyboy_window
+
+        apply_pyboy_window(
+            self.__pyboy,
+            x=self.window_x,
+            y=self.window_y,
+            title=self.window_title,
+        )
+
     @property
     def pyboy(self):
         if self.__pyboy is None:
             window_str = "SDL2" if self.use_sdl else "null"
-            self.__pyboy = PyBoy(f"rom.gb", sound_emulated=False, window=window_str, cgb=False)
+            kwargs: dict[str, Any] = dict(
+                sound_emulated=False, window=window_str, cgb=False
+            )
+            if self.use_sdl:
+                kwargs["scale"] = max(1, int(self.sdl_scale))
+            self.__pyboy = PyBoy(f"rom.gb", **kwargs)
             if not self.use_sdl:
                 self.__pyboy.set_emulation_speed(0)
+            else:
+                self._apply_sdl_layout()
             if self.__data is not None:
                 self.__data.pyboy = self.__pyboy
 
@@ -145,8 +169,9 @@ class Emulator:
         self.last_milestone = milestone
         self.last_step = step
 
-        if self.is_milestone(memory=memory):
-            self.data.clean()
+        # Do NOT call data.clean() on event/badge flips. That wiped visit
+        # counts, loop streak, and curriculum _cleared_goals mid-episode,
+        # which let the policy farm door-warp flag noise then reset anti-loop.
 
         return (
             bytes(self.pyboy.memory[0:MEMORY_SNAPSHOT_END]),
@@ -160,15 +185,14 @@ class Emulator:
         self,
         memory: bytes,
         action_idx: int,
-        duration: int = 24,
+        duration: int = 16,
         render_each: bool = False,
     ):
         """PPO-friendly step: discrete button + fixed hold duration (no meta-actions)."""
         action_idx = int(action_idx) % N_ACTIONS
         duration = max(1, int(duration))
 
-        for button in self.buttons[action_idx]:
-            self.pyboy.button_press(button)
+        self._press_action(action_idx)
 
         if render_each:
             for _ in range(duration):
@@ -203,8 +227,7 @@ class Emulator:
         self.last_milestone = milestone
         self.last_step = step
 
-        if self.is_milestone(memory=memory):
-            self.data.clean()
+        # Intentionally no data.clean() here — see step() above.
 
         return (
             bytes(self.pyboy.memory[0:MEMORY_SNAPSHOT_END]),
@@ -276,7 +299,11 @@ class Emulator:
             # )
             queue_logs.put_nowait(f"key: {key}, reward: {reward:.5f}")
             queue_logs.put_nowait(
-                f"is_dialog: {self.data.is_dialog(self.pyboy.memory)}, is_world: {self.data.is_world(self.pyboy.memory)}, is_menu: {self.data.is_menu(self.pyboy.memory)}, is_battle: {self.data.is_battle(self.pyboy.memory)}"
+                f"is_dialog: {self.data.is_dialog(self.pyboy.memory)}, "
+                f"is_world: {self.data.is_world(self.pyboy.memory)}, "
+                f"is_menu: {self.data.is_menu(self.pyboy.memory)}, "
+                f"is_battle: {self.data.is_battle(self.pyboy.memory)}, "
+                f"cutscene: {self.data.is_cutscene_locked(self.pyboy.memory)}"
             )
             queue_logs.put_nowait(f"visited_maps: {self.data.visited_maps}")
             queue_logs.put_nowait(
@@ -306,12 +333,19 @@ class Emulator:
 
         self.pyboy.stop(False)
 
+    def _press_action(self, action_idx: int) -> None:
+        # During forced walks the engine ignores (or may override) input — skip
+        # presses so we don't disturb scripted sequences. Dialog/menu still need A/B.
+        if self.data.is_cutscene_locked(self.pyboy.memory):
+            return
+        for button in self.buttons[action_idx]:
+            self.pyboy.button_press(button)
+
     def ticks(self, meta_action: int, render_each: bool = False):
         action_idx = meta_action // len(DURATION_BINS)
         duration = DURATION_BINS[meta_action % len(DURATION_BINS)]
 
-        for button in self.buttons[action_idx]:
-            self.pyboy.button_press(button)
+        self._press_action(action_idx)
 
         if render_each:
             for _ in range(duration):

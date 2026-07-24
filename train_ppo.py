@@ -65,6 +65,14 @@ def run(args):
         )
 
     render_mode = "human" if args.gui else None
+    if args.gui:
+        from utils.gui_layout import window_slot
+
+        slot0 = window_slot(0, args.workers)
+        print(
+            f"GUI layout: {slot0.cols}x{slot0.rows} grid, "
+            f"scale x{slot0.scale} ({args.workers} window(s))"
+        )
 
     print("=" * 70)
     print("  Pokemon Red AI - PPO Training (Stable-Baselines3)")
@@ -94,6 +102,8 @@ def run(args):
                 curriculum_saves=curriculum_saves,
                 render_mode=render_mode,
                 auto_advance=args.auto_curriculum,
+                worker_rank=rank,
+                n_workers=args.workers,
             )
             env.reset(seed=args.seed + rank)
             return env
@@ -214,7 +224,7 @@ def build_argparser(parent=None):
     p.add_argument("--n-epochs", type=int, default=4)
     p.add_argument("--gamma", type=float, default=0.99)
     p.add_argument("--ent-coef", type=float, default=0.05)
-    p.add_argument("--frame-skip", type=int, default=24)
+    p.add_argument("--frame-skip", type=int, default=16)
     p.add_argument("--max-steps", type=int, default=None)
     p.add_argument("--stage", default="stage_left_house",
                    help="Starting curriculum stage (see curriculum_config.STAGE_ORDER)")

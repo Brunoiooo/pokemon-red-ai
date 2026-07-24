@@ -55,6 +55,8 @@ def run(args):
         curriculum_mix=0.0,
         curriculum_saves=saves,
         auto_advance=auto,
+        worker_rank=0,
+        n_workers=1,
     )
     # Monitor forbids step() after terminated; in-place advance keeps the
     # episode alive, so Monitor is fine. Still skip when auto for clarity.
@@ -176,7 +178,7 @@ def main():
         "--max-steps", type=int, default=None,
         help="Override max steps (default: per-stage curriculum limit)",
     )
-    p.add_argument("--frame-skip", type=int, default=24)
+    p.add_argument("--frame-skip", type=int, default=16)
     p.add_argument("--stage", default="stage_left_house", help="Starting curriculum stage")
     p.add_argument(
         "--goal", default="left_house",
