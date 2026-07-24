@@ -141,6 +141,10 @@ class Data:
     # Meso — overworld → battle (rival / wild). Large enough to beat typical
     # loop noise on the entry step (~0.12) so the transition is clearly positive.
     battle_enter_reward: float = 0.5
+    # Successful RUN (wBattleResult==2): compare enemy vs max party level so a
+    # lvl-1 sacrificial slot cannot fake a "smart flee" while stronger mons sit back.
+    flee_smart_reward: float = 0.4
+    flee_coward_penalty: float = -1.0
     new_pokedex_seen_reward: float = 0.5
     new_pokedex_own_reward: float = 1.0
     status_reward: float = 0.02
@@ -219,6 +223,9 @@ class Data:
     _completed_dialogs: set[tuple[int, int]] = field(default_factory=set)
     _dialog_reopen_counts: dict[tuple[int, int], int] = field(default_factory=dict)
     _dialog_reopen_truncate: bool = False
+    # Set each step by reward_battle_flee (debug_play / diagnostics).
+    last_flee_reward: float = 0.0
+    last_flee_info: dict | None = None
 
     @property
     def visited_pokedex_own(self):
@@ -303,6 +310,8 @@ class Data:
         self._completed_dialogs = set()
         self._dialog_reopen_counts = {}
         self._dialog_reopen_truncate = False
+        self.last_flee_reward = 0.0
+        self.last_flee_info = None
         self._start_map_id = self.map_id(self.pyboy.memory)
 
     def _dialog_id_changed(self, memory: bytes | None) -> bool:
@@ -558,10 +567,14 @@ class Data:
     def reward(self, memory: bytes, action: int) -> tuple[float, float]:
         milestone = 0.0
         step = 0.0
+        # Per-step signal; env accumulates into _episode_loop for episode stats.
+        self.loop_flag = False
 
         milestone += self.reward_core(memory)
         milestone += self.reward_story_milestones()
         milestone += self.reward_goal_regression()
+        # Battle→overworld (or dialog) transition — flee payout uses prev memory.
+        milestone += self.reward_battle_flee(memory)
 
         if self.is_battle(self.pyboy.memory):
             milestone += self.reward_battle(memory)
@@ -2085,6 +2098,61 @@ class Data:
         reward += self.reward_pokemon_current_hp(memory)
         reward += self.reward_pokemon_status(memory)
 
+        return reward
+
+    def battle_result(self, memory: PyBoyMemoryView | bytes) -> int:
+        """wBattleResult @ 0xCF0B: 0=win, 1=lose, 2=draw (player fled)."""
+        return memory[0xCF0B]
+
+    def party_count(self, memory: PyBoyMemoryView | bytes) -> int:
+        return memory[0xD163]
+
+    def all_party_levels(self, memory: PyBoyMemoryView | bytes) -> list[int]:
+        """Levels of every occupied party slot (not just the active battler)."""
+        count = min(int(self.party_count(memory)), self.__pokemon_count)
+        return [
+            memory[0xD18C + self.__player_pokemon_size * i] for i in range(count)
+        ]
+
+    def max_party_level(self, memory: PyBoyMemoryView | bytes) -> int:
+        levels = [lv for lv in self.all_party_levels(memory) if lv > 0]
+        return max(levels) if levels else 0
+
+    def reward_battle_flee(self, memory: bytes) -> float:
+        """Punish/reward a successful RUN based on enemy vs strongest party mon.
+
+        Uses max party level across all occupied slots so keeping one weak mon
+        cannot farm flee rewards while stronger Pokémon sit in the back.
+        """
+        self.last_flee_reward = 0.0
+        self.last_flee_info = None
+        left_battle = self.is_battle(memory) and not self.is_battle(self.pyboy.memory)
+        if not left_battle:
+            return 0.0
+        # TryRunningFromBattle sets wBattleResult=$02 on successful escape.
+        if self.battle_result(self.pyboy.memory) != 2:
+            return 0.0
+
+        enemy_lv = self.enemy_level(memory)
+        party_levels = self.all_party_levels(memory)
+        party_max = self.max_party_level(memory)
+        if enemy_lv <= 0 or party_max <= 0:
+            return 0.0
+
+        if enemy_lv > party_max:
+            reward = self.flee_smart_reward
+            kind = "smart"
+        else:
+            reward = self.flee_coward_penalty
+            kind = "coward"
+        self.last_flee_reward = reward
+        self.last_flee_info = {
+            "kind": kind,
+            "enemy_level": enemy_lv,
+            "party_levels": party_levels,
+            "party_max": party_max,
+            "reward": reward,
+        }
         return reward
 
     def reward_enemy_hp(self, memory: bytes):

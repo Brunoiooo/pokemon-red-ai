@@ -16,8 +16,15 @@ Controls (global keyboard hook — works without focusing the terminal):
 
 Examples:
   python cli.py debug-play --from start
-  python cli.py debug-play --from stage_oaks_lab --goal oaks_lab
+  python cli.py debug-play --from stage_oaks_lab
   python cli.py debug-play --from start --frame-skip 16 --real-truncation
+
+Parity with PPO training:
+  - same discrete actions (0–8) via Emulator.step_discrete
+  - same frame-skip hold (default 16)
+  - same Data.goal / reward / fuse path
+  - auto-curriculum advance on goal (disable with --no-auto-curriculum)
+  - ACTION_NONE only on unrecognized keys (idle does not step)
 """
 from __future__ import annotations
 
@@ -32,12 +39,19 @@ from pathlib import Path
 
 import keyboard
 
-from curriculum_config import CURRICULUM, get_goal_for_stage
+from curriculum_config import (
+    CURRICULUM,
+    get_goal_for_stage,
+    next_stage,
+    stage_for_goal,
+)
+from pokemon.Data import GOAL_LEFT_HOUSE
 from pokemon.Emulator import Emulator
 
 BUTTON_NAMES = ["A", "B", "Start", "Select", "Left", "Right", "Up", "Down", "None"]
 NONE_ACTION = 8
 
+# Same discrete indices as Emulator.buttons / PokemonRedEnv (N_ACTIONS=9).
 KEY_MAP: dict[str, tuple[str, int | None]] = {
     "up": ("Up", 6),
     "down": ("Down", 7),
@@ -53,6 +67,32 @@ KEY_MAP: dict[str, tuple[str, int | None]] = {
     "esc": ("ESC", None),
     "q": ("Q", None),
 }
+
+# Global hook: ignore modifiers / lock keys so they never become ACTION_NONE.
+_IGNORE_KEYS = frozenset(
+    {
+        "shift",
+        "left shift",
+        "right shift",
+        "ctrl",
+        "control",
+        "left ctrl",
+        "right ctrl",
+        "alt",
+        "left alt",
+        "right alt",
+        "alt gr",
+        "windows",
+        "left windows",
+        "right windows",
+        "caps lock",
+        "num lock",
+        "scroll lock",
+        "menu",
+        "pause",
+        "print screen",
+    }
+)
 
 
 def print_sep(char: str = "=", width: int = 72) -> None:
@@ -102,7 +142,8 @@ def fuse_line(emu: Emulator) -> str:
 
 def print_help() -> None:
     print_sep("-")
-    print("  Arrows / A / B / Enter / Space  — play")
+    print("  Arrows / A / B / Enter / Space  — play (same indices as PPO)")
+    print("  Other keys                     — ACTION_NONE (idx 8)")
     print("  S                              — save state")
     print("  R                              — reload --from")
     print("  H                              — this help + status")
@@ -110,26 +151,70 @@ def print_help() -> None:
     print_sep("-")
 
 
+def _resolve_stage_goal(args: argparse.Namespace) -> tuple[str, str]:
+    """Match train_ppo defaults: stage_left_house → left_house."""
+    if args.goal:
+        goal = str(args.goal)
+        stage = args.stage or stage_for_goal(goal)
+        return stage, goal
+    stage = args.stage
+    if stage is None and args.from_checkpoint in CURRICULUM:
+        stage = args.from_checkpoint
+    if stage is None:
+        stage = "stage_left_house"
+    return stage, get_goal_for_stage(stage) or GOAL_LEFT_HOUSE
+
+
+def _clear_visits(data) -> None:
+    """Same exploration reset as PokemonRedEnv.set_curriculum(clear_visits=True)."""
+    data.visited_positions.clear()
+    data.position_visit_counts.clear()
+    data.recent_positions.clear()
+    data.recent_actions.clear()
+    data.loop_flag = False
+    data.loop_streak = 0
+    data.in_menu_ticks = 0
+    data.in_battle_ticks = 0
+    data.in_dialog_ticks = 0
+    data._dialog_screens_seen = set()
+    data._completed_dialogs = set()
+    data._dialog_reopen_counts = {}
+    data._dialog_reopen_truncate = False
+
+
+def _advance_after_goal(emu: Emulator, stage: str, goal: str) -> tuple[bool, str, str]:
+    """In-place curriculum advance — mirrors PokemonRedEnv._advance_after_goal."""
+    nxt = next_stage(stage, is_satisfied=emu.data.is_goal_satisfied)
+    if nxt is None:
+        return False, stage, goal
+    emu.data.mark_goal_cleared(goal)
+    new_goal = get_goal_for_stage(nxt)
+    emu.data.goal = new_goal
+    _clear_visits(emu.data)
+    return True, nxt, new_goal
+
+
 def run(args: argparse.Namespace) -> None:
     from_ckpt = args.from_checkpoint
     save_as = args.save_as or "manual_debug"
     frame_skip = int(args.frame_skip)
-    goal = args.goal
-    if goal is None and args.stage:
-        goal = get_goal_for_stage(args.stage) or CURRICULUM.get(args.stage, {}).get(
-            "goal"
-        )
-    if goal is None:
-        goal = "oaks_lab"
+    stage, goal = _resolve_stage_goal(args)
+    auto_advance = bool(getattr(args, "auto_curriculum", True))
 
     key_queue: queue.Queue[tuple[str, int | None]] = queue.Queue()
 
     def on_key(event: keyboard.KeyboardEvent) -> None:
         if event.event_type != keyboard.KEY_DOWN:
             return
-        entry = KEY_MAP.get(event.name.lower())
+        name = (event.name or "").lower()
+        if not name or name in _IGNORE_KEYS:
+            return
+        entry = KEY_MAP.get(name)
         if entry is not None:
             key_queue.put_nowait(entry)
+        else:
+            # ACTION_NONE only for unrecognized keys — never on idle timeout.
+            key_queue.put_nowait(("?", NONE_ACTION))
 
     keyboard.hook(on_key, suppress=False)
 
@@ -150,14 +235,19 @@ def run(args: argparse.Namespace) -> None:
     print_sep()
     print(f"  Start from   : saves/{from_ckpt}/")
     print(f"  Save as      : saves/{save_as}/checkpoint.state")
-    print(f"  Goal         : {goal}")
+    print(f"  Stage / goal : {stage} / {goal}")
     print(f"  Frame skip   : {frame_skip}  (PPO default is 16)")
     print(f"  Speed        : 1x (human)")
+    print(
+        f"  Curriculum   : "
+        f"{'auto-advance (train parity)' if auto_advance else 'fixed goal'}"
+    )
     print(
         f"  Truncation   : "
         f"{'REAL (agent fuses)' if args.real_truncation else 'disabled (human)'}"
     )
     print(f"  Log every    : {'all steps' if args.all_steps else 'button presses only'}")
+    print("  None action  : unrecognized keys only (idle = render, no step)")
     print_sep()
     print_help()
     print()
@@ -177,42 +267,52 @@ def run(args: argparse.Namespace) -> None:
     step_i = 0
     total_reward = 0.0
     saves_count = 0
+    base_stage, base_goal = stage, goal
+    goal_done_announced = False
 
     while True:
         try:
             label, action = key_queue.get(timeout=0.016)
         except queue.Empty:
-            label, action = "-", NONE_ACTION
-        else:
-            if label in ("ESC", "Q"):
-                print("\nQuit.")
-                break
-            if label == "HELP":
-                print_help()
-                print(f"  {status_line(emulator)}")
-                print(f"  {fuse_line(emulator)}")
-                print(f"  total_reward={total_reward:.4f} steps={step_i}")
-                continue
-            if label == "SAVE":
-                out_dir = Path(f"saves/{save_as}")
-                out_dir.mkdir(parents=True, exist_ok=True)
-                path = out_dir / "checkpoint.state"
-                with files_lock:
-                    with open(path, "wb") as f:
-                        emulator.pyboy.save_state(f)
-                saves_count += 1
-                print(f"  ✓ Saved → {path}  ({status_line(emulator)})")
-                continue
-            if label == "RELOAD":
-                memory, _ = emulator.reset(dir=from_ckpt)
-                emulator.data.goal = goal
-                emulator.pyboy.tick(1, render=True, sound=False)
-                prev_mode = _mode_flags(emulator)
-                prev_dialog = emulator.data.dialog_id(emulator.pyboy.memory)
-                step_i = 0
-                total_reward = 0.0
-                print(f"  Reloaded from saves/{from_ckpt}/  ({status_line(emulator)})")
-                continue
+            # Idle: keep SDL alive at 1x. Do NOT step with ACTION_NONE —
+            # that would spam dialog/menu penalties unlike intentional PPO none.
+            emulator.pyboy.tick(1, render=True, sound=False)
+            continue
+
+        if label in ("ESC", "Q"):
+            print("\nQuit.")
+            break
+        if label == "HELP":
+            print_help()
+            print(f"  {status_line(emulator)}")
+            print(f"  {fuse_line(emulator)}")
+            print(f"  total_reward={total_reward:.4f} steps={step_i}")
+            continue
+        if label == "SAVE":
+            out_dir = Path(f"saves/{save_as}")
+            out_dir.mkdir(parents=True, exist_ok=True)
+            path = out_dir / "checkpoint.state"
+            with files_lock:
+                with open(path, "wb") as f:
+                    emulator.pyboy.save_state(f)
+            saves_count += 1
+            print(f"  ✓ Saved → {path}  ({status_line(emulator)})")
+            continue
+        if label == "RELOAD":
+            memory, _ = emulator.reset(dir=from_ckpt)
+            stage, goal = base_stage, base_goal
+            emulator.data.goal = goal
+            emulator.pyboy.tick(1, render=True, sound=False)
+            prev_mode = _mode_flags(emulator)
+            prev_dialog = emulator.data.dialog_id(emulator.pyboy.memory)
+            step_i = 0
+            total_reward = 0.0
+            goal_done_announced = False
+            print(
+                f"  Reloaded from saves/{from_ckpt}/  "
+                f"stage={stage} ({status_line(emulator)})"
+            )
+            continue
 
         # Match PPO hold length, but pace frame-by-frame at 1x (human speed).
         memory, _, reward, terminated, truncated = emulator.step_discrete(
@@ -224,6 +324,16 @@ def run(args: argparse.Namespace) -> None:
         step_i += 1
         total_reward += float(reward)
 
+        cleared_goal: str | None = None
+        advanced = False
+        # Train/eval parity: success advances in-place instead of ending forever.
+        if terminated and auto_advance and not truncated:
+            cleared_goal = goal
+            advanced, stage, goal = _advance_after_goal(emulator, stage, goal)
+            if advanced:
+                terminated = False
+                goal_done_announced = False
+
         mode = _mode_flags(emulator)
         did = emulator.data.dialog_id(emulator.pyboy.memory)
         mode_changed = mode != prev_mode
@@ -234,6 +344,7 @@ def run(args: argparse.Namespace) -> None:
             or dialog_changed
             or abs(float(reward)) >= 0.005
             or emulator.data.loop_flag
+            or advanced
             or terminated
             or truncated
         )
@@ -252,10 +363,20 @@ def run(args: argparse.Namespace) -> None:
             if getattr(emulator.data, "_last_regressed", None):
                 lost = ",".join(emulator.data._last_regressed)
                 marks.append(f"REGRESS({lost})")
-            if terminated:
+            if advanced and cleared_goal:
+                marks.append(f"CLEAR({cleared_goal})->{goal}")
+            elif terminated:
                 marks.append("TERM(goal)")
             if truncated:
                 marks.append("TRUNC")
+            flee_info = getattr(emulator.data, "last_flee_info", None)
+            if flee_info:
+                marks.append(
+                    f"FLEE_{flee_info['kind'].upper()}"
+                    f"(e{flee_info['enemy_level']}"
+                    f"/p{flee_info['party_max']}"
+                    f"={flee_info['reward']:+.2f})"
+                )
             mark_s = f"  [{' | '.join(marks)}]" if marks else ""
             live_n = len(emulator.data.live_story_goals())
             peak_n = int(getattr(emulator.data, "_peak_live_goals", 0) or 0)
@@ -265,14 +386,36 @@ def run(args: argparse.Namespace) -> None:
                 f"{status_line(emulator)}  "
                 f"goals={live_n}/{peak_n} loop={emulator.data.loop_streak}{mark_s}"
             )
-            if mode_changed or dialog_changed or truncated or terminated:
+            if flee_info:
+                print(
+                    f"       FLEE {flee_info['kind']}: enemy_lv={flee_info['enemy_level']} "
+                    f"party={flee_info['party_levels']} max={flee_info['party_max']} "
+                    f"→ {flee_info['reward']:+.2f}"
+                )
+            if (
+                mode_changed
+                or dialog_changed
+                or truncated
+                or terminated
+                or advanced
+                or flee_info
+            ):
                 print(f"       {fuse_line(emulator)}  Σr={total_reward:.4f}")
 
         prev_mode = mode
         prev_dialog = did
 
-        if terminated:
-            print(f"\n  Goal reached ({goal}). Press R to reload or Q to quit.")
+        if advanced and cleared_goal:
+            print(
+                f"\n  ✓ Cleared {cleared_goal} → stage={stage} goal={goal} "
+                f"(auto-curriculum, same as train)\n"
+            )
+        elif terminated and not goal_done_announced:
+            goal_done_announced = True
+            print(
+                f"\n  Goal reached ({goal}) — end of curriculum or fixed goal.\n"
+                f"  Press R to reload or Q to quit.\n"
+            )
         if truncated and args.real_truncation:
             print(
                 f"\n  Truncated (stuck fuse / loop). {fuse_line(emulator)}"
@@ -305,12 +448,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--goal",
         default=None,
-        help="Active curriculum goal (affects milestone scaling / terminated)",
+        help="Active curriculum goal (default: left_house, same as train)",
     )
     p.add_argument(
         "--stage",
         default=None,
-        help="Optional stage name — sets --goal from curriculum if --goal omitted",
+        help="Optional stage — sets --goal from curriculum if --goal omitted",
     )
     p.add_argument(
         "--frame-skip",
@@ -324,9 +467,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Keep agent stuck/loop fuses (default: disabled for human play)",
     )
     p.add_argument(
+        "--auto-curriculum",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="On goal success, advance stage like train (default: on)",
+    )
+    p.add_argument(
         "--all-steps",
         action="store_true",
-        help="Print every step including idle None actions",
+        help="Print every agent step (incl. unrecognized-key None)",
     )
     return p
 

@@ -206,12 +206,12 @@ p_debug.add_argument(
 p_debug.add_argument(
     "--goal",
     default=None,
-    help="Active curriculum goal (affects milestone scaling / terminated)",
+    help="Active curriculum goal (default: left_house, same as train)",
 )
 p_debug.add_argument(
     "--stage",
     default=None,
-    help="Optional stage name — sets --goal from curriculum if --goal omitted",
+    help="Optional stage — sets --goal from curriculum if --goal omitted",
 )
 p_debug.add_argument(
     "--frame-skip",
@@ -225,9 +225,15 @@ p_debug.add_argument(
     help="Keep agent stuck/loop fuses (default: disabled for human play)",
 )
 p_debug.add_argument(
+    "--auto-curriculum",
+    action=argparse.BooleanOptionalAction,
+    default=True,
+    help="On goal success, advance stage like train (default: on)",
+)
+p_debug.add_argument(
     "--all-steps",
     action="store_true",
-    help="Print every step including idle None actions",
+    help="Print every agent step (incl. unrecognized-key None)",
 )
 
 p_plot = sub.add_parser("plot", parents=[_global], help="Plot training CSV metrics")
