@@ -71,6 +71,8 @@ p_train.add_argument("--frame-skip", type=int, default=16)
 p_train.add_argument("--max-steps", type=int, default=None)
 p_train.add_argument("--stage", default="stage_left_house",
                      help="Starting curriculum stage (see curriculum_config.STAGE_ORDER)")
+p_train.add_argument("--list-stages", action="store_true",
+                     help="List all curriculum stages (id, goal, max_steps, save) and exit")
 p_train.add_argument("--goal", default=None)
 p_train.add_argument("--auto-curriculum", action=argparse.BooleanOptionalAction, default=True,
                      help="Auto-advance stages when success rate is high (default: on)")
@@ -252,6 +254,9 @@ def main():
 
     if args.command == "train":
         import train_ppo as _m
+        if args.list_stages:
+            _m.print_stage_list()
+            return
         _m.run(args)
 
     elif args.command == "train-dqn":
