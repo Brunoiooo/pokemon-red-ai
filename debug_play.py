@@ -369,13 +369,24 @@ def run(args: argparse.Namespace) -> None:
                 marks.append("TERM(goal)")
             if truncated:
                 marks.append("TRUNC")
-            flee_info = getattr(emulator.data, "last_flee_info", None)
-            if flee_info:
+            exit_info = getattr(emulator.data, "last_battle_exit_info", None) or getattr(
+                emulator.data, "last_flee_info", None
+            )
+            if exit_info:
+                kind = str(exit_info.get("kind", "?")).upper()
+                if kind in ("SMART", "COWARD"):
+                    tag = f"FLEE_{kind}"
+                elif kind == "WIN":
+                    tag = "BATTLE_WIN"
+                elif kind == "LOSE":
+                    tag = "BATTLE_LOSE"
+                else:
+                    tag = f"BATTLE_{kind}"
                 marks.append(
-                    f"FLEE_{flee_info['kind'].upper()}"
-                    f"(e{flee_info['enemy_level']}"
-                    f"/p{flee_info['party_max']}"
-                    f"={flee_info['reward']:+.2f})"
+                    f"{tag}"
+                    f"(e{exit_info.get('enemy_level')}"
+                    f"/p{exit_info.get('party_max')}"
+                    f"={exit_info.get('reward', 0):+.2f})"
                 )
             mark_s = f"  [{' | '.join(marks)}]" if marks else ""
             live_n = len(emulator.data.live_story_goals())
@@ -386,11 +397,18 @@ def run(args: argparse.Namespace) -> None:
                 f"{status_line(emulator)}  "
                 f"goals={live_n}/{peak_n} loop={emulator.data.loop_streak}{mark_s}"
             )
-            if flee_info:
+            if exit_info:
+                kind = str(exit_info.get("kind", "?"))
+                label = (
+                    f"FLEE {kind}"
+                    if kind in ("smart", "coward")
+                    else f"BATTLE {kind.upper()}"
+                )
                 print(
-                    f"       FLEE {flee_info['kind']}: enemy_lv={flee_info['enemy_level']} "
-                    f"party={flee_info['party_levels']} max={flee_info['party_max']} "
-                    f"→ {flee_info['reward']:+.2f}"
+                    f"       {label}: enemy_lv={exit_info.get('enemy_level')} "
+                    f"party={exit_info.get('party_levels')} max={exit_info.get('party_max')} "
+                    f"CF0B={exit_info.get('battle_result')} "
+                    f"→ {exit_info.get('reward', 0):+.2f}"
                 )
             if (
                 mode_changed
@@ -398,7 +416,7 @@ def run(args: argparse.Namespace) -> None:
                 or truncated
                 or terminated
                 or advanced
-                or flee_info
+                or exit_info
             ):
                 print(f"       {fuse_line(emulator)}  Σr={total_reward:.4f}")
 
