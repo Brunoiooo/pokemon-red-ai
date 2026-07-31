@@ -211,6 +211,29 @@ def run(args):
         eval_env.close()
 
 
+def print_stage_list() -> None:
+    """List every curriculum stage (--stage accepts any of these ids)."""
+    from curriculum_config import CURRICULUM, STAGE_ORDER, _save_exists
+
+    name_w = max(len(s) for s in STAGE_ORDER)
+    goal_w = max(len(CURRICULUM[s]["goal"]) for s in STAGE_ORDER)
+    saves = {
+        name: (cfg["checkpoint"] if _save_exists(cfg["checkpoint"]) else "MISSING")
+        for name, cfg in ((n, CURRICULUM[n]) for n in STAGE_ORDER)
+    }
+    save_w = max(len(s) for s in saves.values())
+    print(
+        f"{'#':>3}  {'stage':<{name_w}}  {'goal':<{goal_w}}  "
+        f"{'max_steps':>9}  {'save':<{save_w}}  description"
+    )
+    for i, name in enumerate(STAGE_ORDER, start=1):
+        cfg = CURRICULUM[name]
+        print(
+            f"{i:>3}  {name:<{name_w}}  {cfg['goal']:<{goal_w}}  "
+            f"{cfg['max_steps']:>9}  {saves[name]:<{save_w}}  {cfg['description']}"
+        )
+
+
 def build_argparser(parent=None):
     p = argparse.ArgumentParser(
         description="Pokemon Red PPO training",
@@ -228,6 +251,8 @@ def build_argparser(parent=None):
     p.add_argument("--max-steps", type=int, default=None)
     p.add_argument("--stage", default="stage_left_house",
                    help="Starting curriculum stage (see curriculum_config.STAGE_ORDER)")
+    p.add_argument("--list-stages", action="store_true",
+                   help="List all curriculum stages (id, goal, max_steps, save) and exit")
     p.add_argument("--goal", default=None,
                    help="Override goal (auto-curriculum still advances stages)")
     p.add_argument("--auto-curriculum", action=argparse.BooleanOptionalAction, default=True,
@@ -254,6 +279,9 @@ def build_argparser(parent=None):
 
 def main():
     args = build_argparser().parse_args()
+    if args.list_stages:
+        print_stage_list()
+        return
     run(args)
 
 
