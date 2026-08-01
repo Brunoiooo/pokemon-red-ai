@@ -41,6 +41,7 @@ from pokemon.Data import (
     GOAL_OAKS_LAB,
     GOAL_OAKS_PARCEL,
     GOAL_ROUTE_1,
+    GOAL_ROUTE_1_ENTRY,
     GOAL_SNORLAX,
     GOAL_SS_ANNE,
     GOAL_TOWN_MAP,
@@ -82,6 +83,7 @@ def _stage(
 # Recommended soft order. Flags/badges already true are skipped at advance time.
 STAGE_ORDER = [
     "stage_left_house",
+    "stage_route1_entry",
     "stage_oaks_lab",
     "stage_route1",
     "stage_oaks_parcel",
@@ -117,12 +119,19 @@ CURRICULUM: dict[str, dict] = {
     "stage_left_house": _stage(
         GOAL_LEFT_HOUSE, max_steps=2048, description="Leave Red's house"
     ),
+    "stage_route1_entry": _stage(
+        GOAL_ROUTE_1_ENTRY,
+        max_steps=2048,
+        description="Head for Route 1 — triggers Oak's intercept into the Lab",
+        checkpoint="stage_route1_entry",
+        earlier=["start"],
+    ),
     "stage_oaks_lab": _stage(
         GOAL_OAKS_LAB,
         max_steps=4096,
         description="Reach Oak's Lab",
         checkpoint="stage_oaks_lab",
-        earlier=["start"],
+        earlier=["start", "stage_route1_entry"],
     ),
     "stage_route1": _stage(
         GOAL_ROUTE_1,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
 sys.path.insert(0, "src")
 
@@ -66,6 +67,7 @@ def run(args):
 
     print(f"Loading {model_path}")
     print(f"Auto curriculum: {'ON' if auto else 'OFF'}")
+    print(f"Save checkpoints on goal success: {'ON' if args.save_checkpoints else 'OFF'}")
     print(f"Start stage: {stage}  goal={goal}  max_steps={max_steps}")
     model = PPO.load(str(model_path), device="cpu" if args.cpu else "auto")
 
@@ -147,6 +149,14 @@ def run(args):
                     f"-> advancing to {stage} "
                     f"(goal={info.get('goal')})"
                 )
+                if args.save_checkpoints:
+                    out_dir = Path(f"saves/{stage}")
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    out_path = out_dir / "checkpoint.state"
+                    with raw.emu.files_lock:
+                        with open(out_path, "wb") as f:
+                            raw.emu.pyboy.save_state(f)
+                    print(f"  [checkpoint] saved -> {out_path}")
 
             if truncated or terminated:
                 done = True
@@ -189,6 +199,13 @@ def main():
         action=argparse.BooleanOptionalAction,
         default=True,
         help="On goal success, advance stage in-place (default: on)",
+    )
+    p.add_argument(
+        "--save-checkpoints",
+        action="store_true",
+        default=False,
+        help="On goal success, overwrite saves/<new_stage>/checkpoint.state with "
+             "the reached state (opt-in; off by default)",
     )
     p.add_argument("--gui", action="store_true")
     p.add_argument("--cpu", action="store_true")

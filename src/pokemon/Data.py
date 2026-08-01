@@ -25,6 +25,10 @@ INTERACT_ACTIONS = frozenset({ACTION_A, ACTION_B})
 
 # Curriculum / episode goals (map, event flags, badges).
 GOAL_LEFT_HOUSE = "left_house"
+# Stepping onto Route 1 before getting a starter auto-triggers Oak's
+# "it's dangerous" cutscene, which forcibly warps the player into the Lab.
+# Distinct from GOAL_ROUTE_1 below (the later, post-starter return trip).
+GOAL_ROUTE_1_ENTRY = "route1_entry"
 GOAL_ROUTE_1 = "route1"
 GOAL_OAKS_LAB = "oaks_lab"
 GOAL_OAKS_PARCEL = "oaks_parcel"
@@ -58,7 +62,11 @@ GOAL_ALL_BADGES = "all_badges"
 # Maps on the critical path for early location goals (excludes rivals' house).
 GOAL_ALLOWED_MAPS: dict[str, frozenset[int]] = {
     GOAL_LEFT_HOUSE: HOUSE_MAPS | {MAP_PALLET_TOWN},
-    GOAL_OAKS_LAB: frozenset({MAP_PALLET_TOWN, MAP_OAKS_LAB}),
+    GOAL_ROUTE_1_ENTRY: frozenset({MAP_PALLET_TOWN, MAP_ROUTE_1, MAP_OAKS_LAB}),
+    # Includes MAP_ROUTE_1: goal auto-advances to oaks_lab the instant the
+    # entry trigger fires, but the forced walk-into-lab cutscene can still
+    # read map_id == MAP_ROUTE_1 for a few ticks afterward.
+    GOAL_OAKS_LAB: frozenset({MAP_PALLET_TOWN, MAP_OAKS_LAB, MAP_ROUTE_1}),
     GOAL_ROUTE_1: frozenset({MAP_PALLET_TOWN, MAP_OAKS_LAB, MAP_ROUTE_1}),
 }
 
@@ -75,11 +83,14 @@ BADGE_GOALS = (
 
 # Location goals: true only while on the map / outside the house. Leaving undoes
 # live progress unless the goal was curriculum-cleared (auto_advance).
-REGRESSABLE_GOALS = frozenset({GOAL_LEFT_HOUSE, GOAL_ROUTE_1, GOAL_OAKS_LAB})
+REGRESSABLE_GOALS = frozenset(
+    {GOAL_LEFT_HOUSE, GOAL_ROUTE_1_ENTRY, GOAL_ROUTE_1, GOAL_OAKS_LAB}
+)
 
 # Ordered early→late checklist for live progress counting / regression metrics.
 STORY_GOAL_ORDER = (
     GOAL_LEFT_HOUSE,
+    GOAL_ROUTE_1_ENTRY,
     GOAL_OAKS_LAB,
     GOAL_ROUTE_1,
     GOAL_OAKS_PARCEL,
@@ -125,6 +136,11 @@ class Data:
     badge_reward: float = 10.0          # macro
     event_reward: float = 2.0           # macro
     left_house_reward: float = 5.0      # macro early milestone
+    # Oak's "dangerous" intercept — reaching Route 1 before the starter.
+    # Distinct from route1_reward below (the later, post-starter return trip)
+    # so the entry stage gets full active-goal credit instead of borrowing
+    # route1_reward's muted off-goal share.
+    route1_entry_reward: float = 4.0    # macro early milestone
     route1_reward: float = 8.0          # macro early milestone (scaled further when active goal)
     oaks_lab_reward: float = 3.0        # meso/macro story
     # Goal conditioning: full credit only for the active curriculum goal so the
@@ -164,6 +180,10 @@ class Data:
     action_pattern_penalty: float = -0.08
     spatial_loop_penalty: float = -0.10
     menu_spam_penalty: float = -0.05
+    # Cursor oscillating between a couple of menu states (e.g. ITEM <-> CANCEL)
+    # changes state every step, so it evades menu_spam_penalty's "no-change"
+    # check above. Catch revisits of the same menu state instead.
+    menu_loop_penalty: float = -0.10
     # START/SELECT/d-pad while a textbox is open — does not advance story text.
     dialog_wrong_button_penalty: float = -0.08
     # Scale for in-dialog waste when text is not progressing (was ~base_reward).
@@ -209,6 +229,7 @@ class Data:
 
     recent_actions: deque = field(default_factory=lambda: deque(maxlen=20))
     recent_positions: deque = field(default_factory=lambda: deque(maxlen=16))
+    recent_menu_states: deque = field(default_factory=lambda: deque(maxlen=16))
     loop_flag: bool = False
     loop_streak: int = 0
     _milestones_hit: set[str] = field(default_factory=set)
@@ -304,6 +325,7 @@ class Data:
         self.visited_dialogs = {}
         self.recent_actions.clear()
         self.recent_positions.clear()
+        self.recent_menu_states.clear()
         self.loop_flag = False
         self.loop_streak = 0
         self._milestones_hit = set()
@@ -380,8 +402,16 @@ class Data:
 
         if self.is_menu(self.pyboy.memory):
             self.in_menu_ticks += duration
+            self.recent_menu_states.append(
+                (
+                    self.menu_position_x(self.pyboy.memory),
+                    self.menu_position_y(self.pyboy.memory),
+                    self.real_current_menu_selected_item(self.pyboy.memory),
+                )
+            )
         else:
             self.in_menu_ticks = max(0, self.in_menu_ticks - 0.25 * duration)
+            self.recent_menu_states.clear()
 
         if self.is_battle(self.pyboy.memory):
             if self.number_of_turns_in_current_battle(
@@ -708,7 +738,17 @@ class Data:
                 bool(self._start_map_id in HOUSE_MAPS and mid not in HOUSE_MAPS),
                 self.left_house_reward,
             ),
-            (GOAL_ROUTE_1, mid == MAP_ROUTE_1, self.route1_reward),
+            (GOAL_ROUTE_1_ENTRY, mid == MAP_ROUTE_1, self.route1_entry_reward),
+            (
+                GOAL_ROUTE_1,
+                # Guard against the entry-trigger tile also satisfying this
+                # check: without it, GOAL_ROUTE_1 fires (muted, off-goal) the
+                # instant Route 1 is touched during stage_route1_entry, then
+                # gets clawed back by reward_goal_regression() on the forced
+                # walk into the Lab — a spurious earn/regress cycle.
+                mid == MAP_ROUTE_1 and self.goal != GOAL_ROUTE_1_ENTRY,
+                self.route1_reward,
+            ),
             (GOAL_OAKS_LAB, mid == MAP_OAKS_LAB, self.oaks_lab_reward),
             (
                 GOAL_OAKS_PARCEL,
@@ -805,6 +845,20 @@ class Data:
         if self.is_menu(self.pyboy.memory) and self.is_menu_illegal_move(memory):
             penalty += self.menu_spam_penalty
             triggered = True
+
+        # Menu loop: cursor oscillating between a small set of states (e.g.
+        # ITEM <-> CANCEL) changes state every step, so it slips past the
+        # no-change check above. Catch revisits of the same menu state instead
+        # (mirrors the spatial_loop_penalty check for the overworld).
+        if self.is_menu(self.pyboy.memory) and len(self.recent_menu_states) >= 6:
+            cur_menu_state = (
+                self.menu_position_x(self.pyboy.memory),
+                self.menu_position_y(self.pyboy.memory),
+                self.real_current_menu_selected_item(self.pyboy.memory),
+            )
+            if sum(1 for s in self.recent_menu_states if s == cur_menu_state) >= 3:
+                penalty += self.menu_loop_penalty
+                triggered = True
 
         # 4) Off-goal map camping — rivals' house etc. while targeting lab/route.
         allowed = GOAL_ALLOWED_MAPS.get(self.goal)
@@ -1098,6 +1152,8 @@ class Data:
 
         if goal == GOAL_LEFT_HOUSE:
             return mid not in HOUSE_MAPS
+        if goal == GOAL_ROUTE_1_ENTRY:
+            return mid == MAP_ROUTE_1
         if goal == GOAL_ROUTE_1:
             return mid == MAP_ROUTE_1
         if goal == GOAL_OAKS_LAB:
@@ -1213,6 +1269,7 @@ class Data:
             GOAL_OAKS_PARCEL,
             GOAL_ROUTE_1,
             GOAL_OAKS_LAB,
+            GOAL_ROUTE_1_ENTRY,
             GOAL_LEFT_HOUSE,
         )
         for g in priority:

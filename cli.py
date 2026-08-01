@@ -133,6 +133,13 @@ p_eval.add_argument(
     help="On goal success, advance to next stage without reset (default: on)",
 )
 p_eval.add_argument("--stochastic", action="store_true")
+p_eval.add_argument(
+    "--save-checkpoints",
+    action="store_true",
+    default=False,
+    help="On goal success, overwrite saves/<new_stage>/checkpoint.state with "
+         "the reached state (opt-in; off by default)",
+)
 
 # ---------------------------------------------------------------------------
 # eval-dqn (legacy)
