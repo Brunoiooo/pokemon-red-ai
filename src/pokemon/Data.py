@@ -26,9 +26,12 @@ INTERACT_ACTIONS = frozenset({ACTION_A, ACTION_B})
 # Curriculum / episode goals (map, event flags, badges).
 GOAL_LEFT_HOUSE = "left_house"
 # Stepping onto Route 1 before getting a starter auto-triggers Oak's
-# "it's dangerous" cutscene, which forcibly warps the player into the Lab.
-# Distinct from GOAL_ROUTE_1 below (the later, post-starter return trip).
+# "it's dangerous" intercept — this fires as a dialog while map_id is still
+# MAP_PALLET_TOWN (the map never actually transitions to Route 1 for this
+# pre-starter trigger, confirmed live: map=0 dialog_id=1). Distinct from
+# GOAL_ROUTE_1 below (the later, post-starter return trip, a real map change).
 GOAL_ROUTE_1_ENTRY = "route1_entry"
+ROUTE1_ENTRY_DIALOG_ID = 1
 GOAL_ROUTE_1 = "route1"
 GOAL_OAKS_LAB = "oaks_lab"
 GOAL_OAKS_PARCEL = "oaks_parcel"
@@ -738,7 +741,19 @@ class Data:
                 bool(self._start_map_id in HOUSE_MAPS and mid not in HOUSE_MAPS),
                 self.left_house_reward,
             ),
-            (GOAL_ROUTE_1_ENTRY, mid == MAP_ROUTE_1, self.route1_entry_reward),
+            (
+                GOAL_ROUTE_1_ENTRY,
+                # Oak's intercept fires as a dialog while still on Pallet Town
+                # (see is_goal_satisfied) — map_id never actually becomes
+                # MAP_ROUTE_1 for this pre-starter trigger.
+                mid == MAP_ROUTE_1
+                or (
+                    mid == MAP_PALLET_TOWN
+                    and self.is_dialog(self.pyboy.memory)
+                    and self.dialog_id(self.pyboy.memory) == ROUTE1_ENTRY_DIALOG_ID
+                ),
+                self.route1_entry_reward,
+            ),
             (
                 GOAL_ROUTE_1,
                 # Guard against the entry-trigger tile also satisfying this
@@ -1153,7 +1168,11 @@ class Data:
         if goal == GOAL_LEFT_HOUSE:
             return mid not in HOUSE_MAPS
         if goal == GOAL_ROUTE_1_ENTRY:
-            return mid == MAP_ROUTE_1
+            return mid == MAP_ROUTE_1 or (
+                mid == MAP_PALLET_TOWN
+                and self.is_dialog(mem)
+                and self.dialog_id(mem) == ROUTE1_ENTRY_DIALOG_ID
+            )
         if goal == GOAL_ROUTE_1:
             return mid == MAP_ROUTE_1
         if goal == GOAL_OAKS_LAB:
