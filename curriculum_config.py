@@ -52,6 +52,13 @@ ADVANCE_SUCCESS_THRESHOLD = 0.70
 ADVANCE_MIN_EPISODES = 40
 ADVANCE_CHECK_EVERY = 2048
 
+# Auto-demote one stage back if the agent is fully stalled (near-zero success)
+# for this many consecutive advance checks. Guards against catastrophic
+# forgetting: the policy drifts on an earlier goal while training grinds on a
+# later stage, and there is otherwise no way back down.
+DEMOTE_STALL_CHECKS = 15
+DEMOTE_SUCCESS_CEILING = 0.05
+
 
 def _stage(
     goal: str,
@@ -284,6 +291,21 @@ def next_stage(
         if not cfg or not cfg.get("enabled", True):
             continue
         if is_satisfied is not None and is_satisfied(cfg["goal"]):
+            continue
+        return name
+    return None
+
+
+def prev_stage(stage: str) -> str | None:
+    """Nearest enabled stage before ``stage`` (for stall demotion)."""
+    stage = resolve_stage_name(stage)
+    try:
+        idx = STAGE_ORDER.index(stage)
+    except ValueError:
+        return None
+    for name in reversed(STAGE_ORDER[:idx]):
+        cfg = CURRICULUM.get(name)
+        if not cfg or not cfg.get("enabled", True):
             continue
         return name
     return None

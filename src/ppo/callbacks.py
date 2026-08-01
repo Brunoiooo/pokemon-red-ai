@@ -39,6 +39,8 @@ class MilestoneCallback(BaseCallback):
             ADVANCE_CHECK_EVERY,
             ADVANCE_MIN_EPISODES,
             ADVANCE_SUCCESS_THRESHOLD,
+            DEMOTE_STALL_CHECKS,
+            DEMOTE_SUCCESS_CEILING,
         )
 
         self.success_threshold = (
@@ -46,6 +48,9 @@ class MilestoneCallback(BaseCallback):
         )
         self.min_episodes = ADVANCE_MIN_EPISODES if min_episodes is None else min_episodes
         self.check_every = ADVANCE_CHECK_EVERY if check_every is None else check_every
+        self.demote_stall_checks = DEMOTE_STALL_CHECKS
+        self.demote_success_ceiling = DEMOTE_SUCCESS_CEILING
+        self._stall_checks = 0
 
         self._returns: deque[float] = deque(maxlen=window)
         self._loops: deque[int] = deque(maxlen=window)
@@ -100,8 +105,10 @@ class MilestoneCallback(BaseCallback):
         rate = float(np.mean(self._successes))
         self.logger.record("pokemon/goal_success_rate", rate)
         if rate < self.success_threshold:
+            self._try_demote(rate)
             return
 
+        self._stall_checks = 0
         from curriculum_config import get_goal_for_stage, get_stage_max_steps, next_stage
 
         nxt = next_stage(self.stage)
@@ -126,6 +133,49 @@ class MilestoneCallback(BaseCallback):
             f"success_rate={rate:.2f} >= {self.success_threshold:.2f})"
         )
         # ASCII only: Windows cp1250 + PowerShell redirect crashes on arrows.
+        print(f"\n{msg}\n")
+        self.logger.record("pokemon/curriculum_stage_idx", self._stage_idx())
+        self.logger.record("pokemon/goal_success_rate", 0.0)
+
+    def _try_demote(self, rate: float) -> None:
+        """Step back one stage after a long, near-total stall.
+
+        Forward advance has no counterpart: once the current stage grinds to
+        a halt (e.g. policy drift on an earlier sub-goal it no longer
+        rehearses), ``curriculum_stage_idx`` would otherwise sit on a stage
+        the agent can no longer actually clear, forever.
+        """
+        if rate > self.demote_success_ceiling:
+            self._stall_checks = 0
+            return
+
+        self._stall_checks += 1
+        if self._stall_checks < self.demote_stall_checks:
+            return
+
+        from curriculum_config import get_goal_for_stage, get_stage_max_steps, prev_stage
+
+        prv = prev_stage(self.stage)
+        self._stall_checks = 0
+        if prv is None:
+            return
+
+        old = self.stage
+        self.stage = prv
+        self._apply_stage_to_env(self.training_env, prv)
+        if self.eval_env is not None:
+            self._apply_stage_to_env(self.eval_env, prv)
+
+        self._successes.clear()
+        self._returns.clear()
+
+        goal = get_goal_for_stage(prv)
+        max_steps = get_stage_max_steps(prv)
+        msg = (
+            f"[curriculum] Stalled on {old} (success_rate<={self.demote_success_ceiling:.2f} "
+            f"for {self.demote_stall_checks} checks) -> demoting to {prv} "
+            f"(goal={goal}, max_steps={max_steps})"
+        )
         print(f"\n{msg}\n")
         self.logger.record("pokemon/curriculum_stage_idx", self._stage_idx())
         self.logger.record("pokemon/goal_success_rate", 0.0)
