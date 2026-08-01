@@ -183,7 +183,6 @@ class MilestoneCallback(BaseCallback):
     def _on_step(self) -> bool:
         infos = self.locals.get("infos", [])
         dones = self.locals.get("dones", [])
-        rewards = self.locals.get("rewards", [])
 
         for i, info in enumerate(infos):
             if not info:
@@ -224,8 +223,6 @@ class MilestoneCallback(BaseCallback):
 
                 if "episode" in info:
                     self._returns.append(float(info["episode"]["r"]))
-                elif rewards is not None and i < len(rewards):
-                    pass
 
                 self._ep_loop[i] = False
                 self._ep_milestones[i] = set()

@@ -66,7 +66,7 @@ class TrainModel:
                 ).state_dict(),
                 "queue_logs": self.train_worker.queue_logs,
                 "is_debug": self.train_worker.is_debug.value,
-                "is_evaluation_window": self.train_worker.is_evaluation_window,
+                "is_evaluation_window": self.train_worker.is_evaluation_window.value,
             },
         )
 
