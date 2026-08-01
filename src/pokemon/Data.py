@@ -138,9 +138,6 @@ class Data:
     # +0.01 per screen kept the agent camping without leaving for Route 1.
     dialog_advance_reward: float = 0.0
     dialog_exit_reward: float = 0.2     # meso — leaving dialog is real progress
-    # Meso — overworld → battle (rival / wild). Large enough to beat typical
-    # loop noise on the entry step (~0.12) so the transition is clearly positive.
-    battle_enter_reward: float = 0.5
     # Battle exit (wBattleResult @ 0xCF0B): 0=win, 1=lose, 2=fled.
     # Win is mezzo (same scale as event); macro progress stays on event/badge.
     battle_won_reward: float = 2.0
@@ -838,9 +835,10 @@ class Data:
             != self.number_of_turns_in_current_battle(self.pyboy.memory)
         )
         if entered:
-            # world→battle gets an explicit bonus; other entries keep new_screen.
+            # No reward for entering a battle — it was luring the agent into
+            # farming grass for the entry bonus and fleeing immediately after.
             if self.is_world(memory):
-                return self.battle_enter_reward, 0.0
+                return 0.0, 0.0
             return self.new_screen_reward, 0.0
         if turn_changed:
             return self.new_screen_reward, 0.0
