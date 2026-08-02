@@ -387,6 +387,18 @@ class Data:
             elif pos not in self.position_visit_counts:
                 self.position_visit_counts[pos] = 1
         elif (
+            self.is_battle(self.pyboy.memory)
+            and memory is not None
+            and self.is_world(memory)
+        ):
+            # Stepped onto a grass/trainer tile and the encounter fired on the
+            # same step — is_world() is already False here, so the branch
+            # above never runs. Register the tile once so reward_position()
+            # does not see it as brand new on every world<-battle return.
+            pos = self.get_position()
+            if pos not in self.position_visit_counts:
+                self.position_visit_counts[pos] = 1
+        elif (
             not self.is_battle(self.pyboy.memory)
             and not self.is_dialog(self.pyboy.memory)
         ):
