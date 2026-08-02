@@ -61,7 +61,9 @@ _ID_SEQ_KEYS = (
 )
 
 # Base feature vector + curriculum goal one-hot.
-_BASE_VECTOR_DIM = 793
+# player_pokemons_level now reports all 6 party slots (was 1) so the model can
+# see bench levels for the smart/coward flee comparison: +5.
+_BASE_VECTOR_DIM = 798
 VECTOR_DIM = _BASE_VECTOR_DIM + N_GOALS
 VISIT_MASK_SIZE = 2 * 5 + 1  # map_vision_radius default
 

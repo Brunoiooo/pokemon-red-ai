@@ -904,11 +904,10 @@ class Data:
             != self.number_of_turns_in_current_battle(self.pyboy.memory)
         )
         if entered:
-            # No reward for entering a battle — it was luring the agent into
-            # farming grass for the entry bonus and fleeing immediately after.
-            if self.is_world(memory):
-                return 0.0, 0.0
-            return self.new_screen_reward, 0.0
+            # No reward for entering a battle, from world or dialog (trainer
+            # intros) alike — it was luring the agent into farming grass or
+            # trainer sprites for the entry bonus and fleeing immediately after.
+            return 0.0, 0.0
         if turn_changed:
             return self.new_screen_reward, 0.0
         return (
@@ -1882,7 +1881,13 @@ class Data:
         ]
 
     def player_pokemons_level(self, memory: PyBoyMemoryView | bytes = None):
-        return [memory[0xD18C]]
+        # All 6 party slots (not just the active battler) — the smart/coward
+        # flee reward compares the enemy's level against max_party_level, so
+        # the model needs bench levels visible to predict its own flee payout.
+        return [
+            memory[0xD18C + self.__player_pokemon_size * x]
+            for x in range(self.__pokemon_count)
+        ]
 
     def player_pokemons_max_hps(self, memory: PyBoyMemoryView | bytes = None):
         return [
@@ -2202,10 +2207,14 @@ class Data:
     def reward_battle(self, memory: bytes):
         reward = 0.0
 
+        # Player HP/status are NOT scored here — reward_core's
+        # reward_player_pokemons_current_hps / reward_player_pokemons_statuses
+        # already cover the whole party unconditionally (every step), and the
+        # active battler's wBattleMon HP/status mirror the same party-struct
+        # values live during battle. Scoring them again here double-counted
+        # every point of damage taken, making fighting look worse than fleeing.
         reward += self.reward_enemy_hp(memory)
         reward += self.reward_enemy_status(memory)
-        reward += self.reward_pokemon_current_hp(memory)
-        reward += self.reward_pokemon_status(memory)
 
         return reward
 
@@ -2307,30 +2316,6 @@ class Data:
                 reward += -self.status_reward
 
         return max(0, reward)
-
-    def reward_pokemon_current_hp(self, memory: bytes):
-        return (
-            (
-                self.pokemon_current_hp(self.pyboy.memory)
-                - self.pokemon_current_hp(memory)
-            )
-            / self.pokemon_max_hp(self.pyboy.memory)
-            if self.pokemon_max_hp(self.pyboy.memory) != 0
-            else 0
-        )
-
-    def reward_pokemon_status(self, memory: bytes):
-        reward = 0
-
-        for bit_before, bit_after in zip(
-            self.pokemon_status(memory), self.pokemon_status(self.pyboy.memory)
-        ):
-            if bit_before == 0 and bit_after == 1:
-                reward += -self.status_reward
-            elif bit_before == 1 and bit_after == 0:
-                reward += self.status_reward
-
-        return reward
 
     def reward_pokedex(self, memory: bytes):
         return self.reward_pokedex_own(memory) + self.reward_pokedex_seen(memory)
