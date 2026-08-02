@@ -220,7 +220,6 @@ class Data:
     max_useless_battle_ticks: int = 512 * 4
     __player_pokemon_size: int = 0x2C
     __pokemon_count: int = 6
-    buffer_reward: float = 0.0
 
     __stored_pokemon_size: int = 0x21
 
@@ -291,8 +290,6 @@ class Data:
                 pickle.dump(self.__visited_pokedex_own, f)
             with open(f"{path}/__visited_pokedex_seen.pkl", "wb") as f:
                 pickle.dump(self.__visited_pokedex_seen, f)
-            with open(f"{path}/buffer_reward.pkl", "wb") as f:
-                pickle.dump(self.buffer_reward, f)
             with open(f"{path}/visited_positions.pkl", "wb") as f:
                 pickle.dump(self.visited_positions, f)
             with open(f"{path}/visited_maps.pkl", "wb") as f:
@@ -306,8 +303,6 @@ class Data:
                 self.__visited_pokedex_own = pickle.load(f)
             with open(f"{path}/__visited_pokedex_seen.pkl", "rb") as f:
                 self.__visited_pokedex_seen = pickle.load(f)
-            with open(f"{path}/buffer_reward.pkl", "rb") as f:
-                self.buffer_reward = pickle.load(f)
             with open(f"{path}/visited_positions.pkl", "rb") as f:
                 self.visited_positions = pickle.load(f)
             with open(f"{path}/visited_maps.pkl", "rb") as f:
@@ -321,7 +316,6 @@ class Data:
         self.in_menu_ticks = 0
         self.in_battle_ticks = 0
         self.in_dialog_ticks = 0
-        self.buffer_reward = 0.0
         self.visited_positions = {}
         self.position_visit_counts = {}
         self.visited_maps = set()
@@ -618,15 +612,6 @@ class Data:
 
         if self.is_battle(self.pyboy.memory):
             milestone += self.reward_battle(memory)
-
-        if self.is_battle(self.pyboy.memory) and self.number_of_turns_in_current_battle(
-            memory
-        ) == self.number_of_turns_in_current_battle(self.pyboy.memory):
-            self.buffer_reward += milestone
-            milestone = 0.0
-        elif self.is_battle(self.pyboy.memory):
-            milestone += self.buffer_reward * (1.0 if 0 < self.buffer_reward else 0.50)
-            self.buffer_reward = 0.0
 
         if self.is_cutscene_locked(self.pyboy.memory):
             # No step reward/penalty — actions cannot affect the game. Story
