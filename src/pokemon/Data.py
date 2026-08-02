@@ -892,7 +892,10 @@ class Data:
         if triggered:
             self.loop_flag = True
             self.loop_streak += 1
-        else:
+        elif not in_battle:
+            # Battle structurally skips checks 1/3 (is_world-gated), so
+            # resetting here let ducking into a grass encounter wipe an
+            # accumulating loop streak for free. Freeze instead of clearing.
             self.loop_streak = 0
 
         return penalty

@@ -24,7 +24,10 @@ Parity with PPO training:
   - same frame-skip hold (default 16)
   - same Data.goal / reward / fuse path
   - auto-curriculum advance on goal (disable with --no-auto-curriculum)
-  - ACTION_NONE only on unrecognized keys (idle does not step)
+  - idle (no key held) and unrecognized keys both step as ACTION_NONE, so
+    reward/fuse tracking never misses what happened while you weren't
+    pressing anything; only the console print stays gated to real presses
+    or otherwise-interesting steps
 """
 from __future__ import annotations
 
@@ -143,7 +146,7 @@ def fuse_line(emu: Emulator) -> str:
 def print_help() -> None:
     print_sep("-")
     print("  Arrows / A / B / Enter / Space  — play (same indices as PPO)")
-    print("  Other keys                     — ACTION_NONE (idx 8)")
+    print("  Other keys / idle              — ACTION_NONE (idx 8, still tracked)")
     print("  S                              — save state")
     print("  R                              — reload --from")
     print("  H                              — this help + status")
@@ -247,7 +250,7 @@ def run(args: argparse.Namespace) -> None:
         f"{'REAL (agent fuses)' if args.real_truncation else 'disabled (human)'}"
     )
     print(f"  Log every    : {'all steps' if args.all_steps else 'button presses only'}")
-    print("  None action  : unrecognized keys only (idle = render, no step)")
+    print("  None action  : unrecognized keys AND idle (both tracked, printed only if interesting)")
     print_sep()
     print_help()
     print()
@@ -274,10 +277,10 @@ def run(args: argparse.Namespace) -> None:
         try:
             label, action = key_queue.get(timeout=0.016)
         except queue.Empty:
-            # Idle: keep SDL alive at 1x. Do NOT step with ACTION_NONE —
-            # that would spam dialog/menu penalties unlike intentional PPO none.
-            emulator.pyboy.tick(1, render=True, sound=False)
-            continue
+            # Idle: still take a real None step so reward/state tracking never
+            # drifts from what the game actually did meanwhile. Printing stays
+            # gated on the "interesting" check below, so silent idle is silent.
+            label, action = "IDLE", NONE_ACTION
 
         if label in ("ESC", "Q"):
             print("\nQuit.")
@@ -493,7 +496,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--all-steps",
         action="store_true",
-        help="Print every agent step (incl. unrecognized-key None)",
+        help="Print every agent step (incl. idle/unrecognized-key None)",
     )
     return p
 
