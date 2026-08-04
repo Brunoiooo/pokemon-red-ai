@@ -88,9 +88,7 @@ p_train.add_argument(
 )
 p_train.add_argument("--checkpoint-freq", type=int, default=100_000)
 p_train.add_argument("--eval-freq", type=int, default=50_000)
-p_train.add_argument("--eval-episodes", type=int, default=5,
-                      help="Deterministic episodes per eval round; also the "
-                           "curriculum advance/demote sample size")
+p_train.add_argument("--eval-episodes", type=int, default=3)
 p_train.add_argument("--no-progress", action="store_true")
 
 # ---------------------------------------------------------------------------

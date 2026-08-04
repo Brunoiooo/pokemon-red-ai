@@ -32,7 +32,7 @@ def run(args):
         resolve_stage_name,
     )
     from env.pokemon_red_env import PokemonRedEnv
-    from ppo.callbacks import CurriculumEvalGate, MilestoneCallback
+    from ppo.callbacks import MilestoneCallback
     from ppo.checkpoints import atomic_model_save, resolve_model_path
     from ppo.features import PokemonFeaturesExtractor
 
@@ -178,16 +178,6 @@ def run(args):
         save_replay_buffer=False,
         save_vecnormalize=False,
     )
-    milestone_cb = MilestoneCallback(
-        window=100,
-        auto_curriculum=args.auto_curriculum,
-        start_stage=stage,
-        curriculum_mix=args.curriculum_mix,
-        eval_env=eval_env,
-    )
-    # Curriculum advance/demote is gated on these deterministic eval rounds
-    # (not on stochastic training episodes) — see CurriculumEvalGate.
-    curriculum_gate = CurriculumEvalGate(milestone_cb)
     eval_cb = EvalCallback(
         eval_env,
         best_model_save_path=str(model_dir / "best"),
@@ -196,7 +186,13 @@ def run(args):
         n_eval_episodes=args.eval_episodes,
         deterministic=True,
         render=False,
-        callback_after_eval=curriculum_gate,
+    )
+    milestone_cb = MilestoneCallback(
+        window=100,
+        auto_curriculum=args.auto_curriculum,
+        start_stage=stage,
+        curriculum_mix=args.curriculum_mix,
+        eval_env=eval_env,
     )
 
     try:
@@ -273,10 +269,7 @@ def build_argparser(parent=None):
     )
     p.add_argument("--checkpoint-freq", type=int, default=100_000)
     p.add_argument("--eval-freq", type=int, default=50_000)
-    p.add_argument("--eval-episodes", type=int, default=5,
-                   help="Deterministic episodes per eval round; also the "
-                        "curriculum advance/demote sample size (see "
-                        "CurriculumEvalGate)")
+    p.add_argument("--eval-episodes", type=int, default=3)
     p.add_argument("--no-progress", action="store_true")
     p.add_argument("--cpu", action="store_true")
     p.add_argument("--gui", action="store_true")

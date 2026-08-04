@@ -13,14 +13,6 @@ class MilestoneCallback(BaseCallback):
 
     When ``auto_curriculum`` is True, advances stage (goal / max_steps / saves)
     once the rolling success rate on the *current* goal exceeds the threshold.
-
-    Advance/demote decisions are gated on **deterministic evaluation**
-    episodes only (fed in via :meth:`record_eval_successes`, called from
-    :class:`CurriculumEvalGate` after each ``EvalCallback`` round) — never on
-    the stochastic training rollout, whose exploration noise would otherwise
-    let the curriculum race ahead of what the greedy policy can actually
-    clear. Training-episode successes are still tracked, but purely for the
-    informational ``pokemon/train_stochastic_success_rate`` metric.
     """
 
     def __init__(
@@ -62,11 +54,7 @@ class MilestoneCallback(BaseCallback):
 
         self._returns: deque[float] = deque(maxlen=window)
         self._loops: deque[int] = deque(maxlen=window)
-        # Gates curriculum advance/demote — filled only from deterministic
-        # eval rounds via record_eval_successes(), never from training.
         self._successes: deque[int] = deque(maxlen=window)
-        # Informational only: success rate on the stochastic training rollout.
-        self._train_successes: deque[int] = deque(maxlen=window)
         self._badges: deque[int] = deque(maxlen=window)
         self._goals_live: deque[int] = deque(maxlen=window)
         self._goals_peak: deque[int] = deque(maxlen=window)
@@ -107,27 +95,6 @@ class MilestoneCallback(BaseCallback):
             stage=stage,
             clear_visits=True,
         )
-
-    def record_eval_successes(
-        self, successes: list[bool] | list[int], mean_reward: float | None = None
-    ) -> None:
-        """Feed one deterministic EvalCallback round into the gating window.
-
-        Called by :class:`CurriculumEvalGate` right after each eval round.
-        This is the *only* path that can trigger :meth:`_try_advance` /
-        :meth:`_try_demote` — training-rollout successes never do.
-        """
-        if mean_reward is not None:
-            self.logger.record("pokemon/eval_return_mean", float(mean_reward))
-        if not successes:
-            return
-        for s in successes:
-            self._successes.append(1 if s else 0)
-        # Visibility into the advance gate itself: goal_success_rate alone
-        # doesn't say whether the window has enough episodes yet to count.
-        self.logger.record("pokemon/eval_window_episodes", float(len(self._successes)))
-        self.logger.record("pokemon/eval_min_episodes", float(self.min_episodes))
-        self._try_advance()
 
     def _try_advance(self) -> None:
         if not self.auto_curriculum:
@@ -248,7 +215,7 @@ class MilestoneCallback(BaseCallback):
                     or info.get("cleared_stage")
                     or info.get("terminated", False)
                 )
-                self._train_successes.append(1 if success else 0)
+                self._successes.append(1 if success else 0)
                 self._badges.append(int(info.get("badges", 0) or 0))
                 self._goals_live.append(live)
                 self._goals_peak.append(self._ep_goals_peak[i])
@@ -266,11 +233,6 @@ class MilestoneCallback(BaseCallback):
         if len(self._loops) >= 10 and self.n_calls % self.check_every == 0:
             loop_rate = float(np.mean(self._loops))
             self.logger.record("pokemon/loop_episode_rate", loop_rate)
-            if self._train_successes:
-                self.logger.record(
-                    "pokemon/train_stochastic_success_rate",
-                    float(np.mean(self._train_successes)),
-                )
             if self._successes:
                 self.logger.record(
                     "pokemon/goal_success_rate", float(np.mean(self._successes))
@@ -296,30 +258,6 @@ class MilestoneCallback(BaseCallback):
                     "pokemon/ep_return_mean", float(np.mean(self._returns))
                 )
             self.logger.record("pokemon/curriculum_stage_idx", self._stage_idx())
-            # Advance/demote gating happens only in record_eval_successes(),
-            # driven by deterministic EvalCallback rounds — not here.
+            self._try_advance()
 
-        return True
-
-
-class CurriculumEvalGate(BaseCallback):
-    """Bridges SB3's ``EvalCallback`` into curriculum advance/demote gating.
-
-    Pass an instance as ``EvalCallback(..., callback_after_eval=this)``. SB3
-    then sets ``self.parent`` to that ``EvalCallback`` and calls
-    :meth:`_on_step` once per completed eval round (never per training
-    step), from which the deterministic per-episode ``is_success`` buffer
-    (populated by ``PokemonRedEnv``'s ``info["is_success"]``) is handed to
-    ``milestone_cb.record_eval_successes``.
-    """
-
-    def __init__(self, milestone_cb: MilestoneCallback, verbose: int = 0):
-        super().__init__(verbose)
-        self.milestone_cb = milestone_cb
-
-    def _on_step(self) -> bool:
-        eval_cb = self.parent
-        successes = list(getattr(eval_cb, "_is_success_buffer", []))
-        mean_reward = getattr(eval_cb, "last_mean_reward", None)
-        self.milestone_cb.record_eval_successes(successes, mean_reward=mean_reward)
         return True

@@ -1,4 +1,4 @@
 from ppo.features import PokemonFeaturesExtractor
-from ppo.callbacks import CurriculumEvalGate, MilestoneCallback
+from ppo.callbacks import MilestoneCallback
 
-__all__ = ["PokemonFeaturesExtractor", "MilestoneCallback", "CurriculumEvalGate"]
+__all__ = ["PokemonFeaturesExtractor", "MilestoneCallback"]
