@@ -26,8 +26,9 @@ _global = argparse.ArgumentParser(add_help=False)
 _g = _global.add_argument_group("global flags")
 _g.add_argument("--cpu", action="store_true",
                 help="Force CPU even if CUDA is available")
-_g.add_argument("--verbose", "-v", action="store_true",
-                help="Verbose output")
+_g.add_argument("--verbose", "-v", action="count", default=0,
+                help="Verbose output; repeat (-vv) for eval to print every "
+                     "single button press instead of a sampled subset")
 _g.add_argument("--gui", action="store_true",
                 help="Show the game window on every worker (slower)")
 

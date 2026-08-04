@@ -71,7 +71,7 @@ def run(args):
     print(f"Start stage: {stage}  goal={goal}  max_steps={max_steps}")
     model = PPO.load(str(model_path), device="cpu" if args.cpu else "auto")
 
-    verbose = bool(getattr(args, "verbose", False))
+    verbose = int(getattr(args, "verbose", 0) or 0)
     ACTION_NAMES = ("NONE", "A", "B", "UP", "DOWN", "LEFT", "RIGHT", "START", "SELECT")
 
     for ep in range(args.episodes):
@@ -131,7 +131,12 @@ def run(args):
                         f"total={total:.2f}"
                     )
                 last_milestone = milestone
-            if verbose and (steps % 50 == 0 or abs(float(reward)) >= 0.5):
+            # Level 1: sampled (every 50 steps, or a notable reward).
+            # Level 2 (-vv): every single step, i.e. every button press.
+            show_step = verbose >= 2 or (
+                verbose >= 1 and (steps % 50 == 0 or abs(float(reward)) >= 0.5)
+            )
+            if show_step:
                 aname = ACTION_NAMES[action_i] if 0 <= action_i < len(ACTION_NAMES) else str(action_i)
                 print(
                     f"  [step] {steps:4d} act={aname:6s} rew={reward:+.4f} "
