@@ -237,11 +237,6 @@ class Emulator:
             bool(truncated),
         )
 
-    def is_milestone(self, memory: bytes):
-        return 0 < self.data.reward_event_flags(memory) or 0 < self.data.reward_badges(
-            memory
-        )
-
     def is_new_episode(self, memory: bytes):
         return ()
 

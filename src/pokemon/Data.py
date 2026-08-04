@@ -731,7 +731,17 @@ class Data:
         return reward
 
     def reward_story_milestones(self) -> float:
-        """One-shot bonuses for story / map progress (order-independent)."""
+        """One-shot bonuses for story / map progress (order-independent).
+
+        Later-game flags (fought_brock_yet, is_ss_anne_here, ...) used to
+        also pay out via a raw prev-vs-current memory bit diff
+        (reward_event_flags, now removed) with no "already paid" bookkeeping
+        — one of those bits (position_in_air) flips on the pause-menu
+        animation, so a policy could farm it indefinitely by spamming START.
+        They are folded into the ``checks``/``_milestones_hit``-gated pattern
+        below instead, reusing ``is_goal_satisfied`` as the single source of
+        truth for each condition.
+        """
         reward = 0.0
         mid = self.map_id(self.pyboy.memory)
 
@@ -775,6 +785,32 @@ class Data:
                 bool(self.have_town_map(self.pyboy.memory)),
                 self.event_reward,
             ),
+        ]
+        # Later-game story flags: each maps 1:1 onto a curriculum goal and
+        # is_goal_satisfied() already implements the exact trigger condition
+        # (trainer-fought bit, event flag, etc.) — reuse it instead of
+        # duplicating the memory reads here.
+        checks += [
+            (name, self.is_goal_satisfied(name), self.event_reward)
+            for name in (
+                GOAL_FOUGHT_BROCK,
+                GOAL_FOUGHT_MISTY,
+                GOAL_FOUGHT_SURGE,
+                GOAL_FOUGHT_ERIKA,
+                GOAL_FOUGHT_KOGA,
+                GOAL_FOUGHT_SABRINA,
+                GOAL_FOUGHT_BLAINE,
+                GOAL_FOUGHT_GIOVANNI,
+                GOAL_SS_ANNE,
+                GOAL_LAPRAS,
+                GOAL_SNORLAX,
+                GOAL_ARTICUNO,
+                GOAL_ZAPDOS,
+                GOAL_MOLTRES,
+                GOAL_FOSSIL,
+                GOAL_MEWTWO,
+                GOAL_ALL_BADGES,
+            )
         ]
         for name, hit, value in checks:
             if name not in self._milestones_hit and hit:
@@ -966,7 +1002,6 @@ class Data:
     def reward_core(self, memory: bytes):
         reward = 0.0
 
-        reward += self.reward_milestones(memory)
         reward += self.reward_pokedex(memory)
         reward += self.reward_player_pokemons_current_hps(memory)
         reward += self.reward_player_pokemons_statuses(memory)
@@ -2346,34 +2381,3 @@ class Data:
                 return self.new_pokedex_seen_reward
 
         return 0.0
-
-    def reward_badges(self, memory: bytes):
-        reward = 0
-
-        for bit_before, bit_after in zip(
-            self.badges(memory), self.badges(self.pyboy.memory)
-        ):
-            if bit_before == 0 and bit_after == 1:
-                reward += self.badge_reward
-
-        return reward
-
-    def reward_event_flags(self, memory: bytes):
-        reward = 0
-
-        for flag_x, flag_y in zip(
-            self.event_flags_data(memory), self.event_flags_data(self.pyboy.memory)
-        ):
-            if flag_x == 0 and flag_y == 1:
-                reward += self.event_reward
-
-        return reward
-
-    def reward_milestones(self, memory: bytes):
-        reward = 0.0
-
-        reward += self.reward_badges(memory)
-
-        reward += self.reward_event_flags(memory)
-
-        return reward
