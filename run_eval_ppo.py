@@ -19,6 +19,33 @@ def _raw_env(env):
     return cur
 
 
+def _sane(value, lo, hi):
+    return lo <= value <= hi
+
+
+def _mon_line(label, lv, hp, maxhp, atk, dfn, spd, spc):
+    """One battler's stats + a plausibility flag (Gen1 ranges: lv 1-100,
+
+    hp 0-714, other stats 1-999). A flagged line means an address/decoding
+    bug, not just a "weak Pokemon" — the difficulty-scale bugs (wrong
+    enemy_level address, little- vs big-endian stats) both showed up first
+    as absurd numbers here (e.g. hp=4352, level via a field that's always 0).
+    """
+    ok = (
+        _sane(lv, 1, 100)
+        and _sane(hp, 0, 714)
+        and _sane(maxhp, 1, 714)
+        and _sane(atk, 1, 999)
+        and _sane(dfn, 1, 999)
+        and _sane(spd, 1, 999)
+        and _sane(spc, 1, 999)
+    )
+    flag = "" if ok else " <-- SUSPECT"
+    return (
+        f"{label}(lv={lv} hp={hp}/{maxhp} atk={atk} def={dfn} spd={spd} spc={spc}){flag}"
+    )
+
+
 def run(args):
     from stable_baselines3 import PPO
     from stable_baselines3.common.monitor import Monitor
@@ -70,6 +97,7 @@ def run(args):
     print(f"Save checkpoints on goal success: {'ON' if args.save_checkpoints else 'OFF'}")
     print(f"Start stage: {stage}  goal={goal}  max_steps={max_steps}")
     model = PPO.load(str(model_path), device="cpu" if args.cpu else "auto")
+    data = raw.emu.data
 
     verbose = int(getattr(args, "verbose", 0) or 0)
     ACTION_NAMES = ("NONE", "A", "B", "UP", "DOWN", "LEFT", "RIGHT", "START", "SELECT")
@@ -143,6 +171,54 @@ def run(args):
                     f"total={total:7.2f} map={map_id} "
                     f"loop={int(bool(info.get('loop_flag')))} "
                     f"ms={info.get('milestone')}"
+                )
+
+            # -vv: per-hit damage-reward scale (which levels it's judged against),
+            # plus the raw stats behind it so a bad address/endianness decode
+            # (absurd HP, level stuck at 0, etc.) is visible immediately.
+            in_battle_now = data.is_battle(raw.emu.pyboy.memory)
+            if verbose >= 2 and in_battle_now:
+                hp_dbg = data.last_enemy_hp_debug
+                if hp_dbg and abs(hp_dbg.get("scaled", 0.0)) >= 0.005:
+                    print(
+                        f"    [hit] step={steps:4d} enemy_lv={hp_dbg['enemy_level']} "
+                        f"active_lv={hp_dbg['active_level']} "
+                        f"scale={hp_dbg['difficulty_scale']:.2f} "
+                        f"dmg_frac={hp_dbg['frac']:+.3f} reward={hp_dbg['scaled']:+.3f}"
+                    )
+                    mem = raw.emu.pyboy.memory
+                    enemy_line = _mon_line(
+                        "enemy",
+                        data.enemy_level(mem),
+                        data.enemy_hp(mem),
+                        data.enemy_max_hp(mem),
+                        data.enemy_attack(mem),
+                        data.enemy_defense(mem),
+                        data.enemy_speed(mem),
+                        data.enemy_special(mem),
+                    )
+                    active_line = _mon_line(
+                        "active",
+                        data.pokemon_level(mem),
+                        data.pokemon_current_hp(mem),
+                        data.pokemon_max_hp(mem),
+                        data.pokemon_attack(mem),
+                        data.pokemon_defense(mem),
+                        data.pokemon_speed(mem),
+                        data.pokemon_special(mem),
+                    )
+                    print(f"    [stats] {enemy_line} | {active_line}")
+
+            # -v/-vv: battle outcome (win/lose/flee) and the levels it was judged against.
+            exit_info = data.last_battle_exit_info
+            if verbose >= 1 and exit_info:
+                print(
+                    f"  [battle] step={steps:4d} {exit_info['kind']:5s} "
+                    f"enemy_lv={exit_info['enemy_level']} "
+                    f"active_lv={exit_info.get('active_level')} "
+                    f"party_max={exit_info['party_max']} "
+                    f"scale={exit_info.get('difficulty_scale')} "
+                    f"reward={exit_info['reward']:+.3f}"
                 )
 
             if info.get("goal_success"):

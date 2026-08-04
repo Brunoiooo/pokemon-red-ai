@@ -18,10 +18,11 @@ from pokemon.Emulator import MEMORY_SNAPSHOT_END  # noqa: E402
 
 # Addresses used by flee reward / party max level.
 ADDR_BATTLE_RESULT = 0xCF0B
-ADDR_ENEMY_LEVEL = 0xCFE8
+ADDR_ENEMY_LEVEL = 0xCFF3  # wEnemyMonLevel (wEnemyMon base 0xCFE5 + offset 0x0E)
 ADDR_PARTY_COUNT = 0xD163
 ADDR_PARTY_LEVEL_0 = 0xD18C
 ADDR_BATTLE_TYPE = 0xD057
+ADDR_ACTIVE_LEVEL = 0xD022  # wBattleMonLevel — the mon actually fighting
 PARTY_MON_SIZE = 0x2C
 
 
@@ -47,11 +48,18 @@ def build_prev(
     in_battle: bool,
     enemy_level: int,
     party_levels: list[int],
+    active_level: int | None = None,
 ) -> FakeMem:
+    """``active_level`` defaults to the party's max (old mocks were all
+    single-mon parties, where "active" and "strongest" coincide).
+    """
     mem = FakeMem(MEMORY_SNAPSHOT_END)
     mem[ADDR_BATTLE_TYPE] = 1 if in_battle else 0  # wild
     mem[ADDR_ENEMY_LEVEL] = enemy_level
     set_party(mem, party_levels)
+    mem[ADDR_ACTIVE_LEVEL] = (
+        active_level if active_level is not None else max(party_levels, default=0)
+    )
     return mem
 
 
@@ -66,7 +74,7 @@ def build_curr(*, fled: bool, battle_result: int = 2) -> FakeMem:
 def check_snapshot_coverage() -> None:
     needed = {
         "wBattleResult (0xCF0B)": ADDR_BATTLE_RESULT,
-        "enemy_level (0xCFE8)": ADDR_ENEMY_LEVEL,
+        "enemy_level (0xCFF3)": ADDR_ENEMY_LEVEL,
         "party_count (0xD163)": ADDR_PARTY_COUNT,
         "party_level0 (0xD18C)": ADDR_PARTY_LEVEL_0,
         "party_level5 (0xD18C+5*0x2C)": ADDR_PARTY_LEVEL_0 + PARTY_MON_SIZE * 5,
@@ -121,8 +129,10 @@ def run_mock_cases() -> None:
     print(f"EQUAL  enemy=8 party_max=8: flee={flee}")
     assert flee == -1.0
 
-    # Win exit (CF0B=0): now pays battle_won_reward (not flee)
-    prev = build_prev(in_battle=True, enemy_level=5, party_levels=[8])
+    # Win exit (CF0B=0): now pays battle_won_reward (not flee). Fair-level
+    # matchup (enemy_level == party_max) so the difficulty scale is 1.0 —
+    # see diag_battle_outcome.py for the weak-opponent discount case.
+    prev = build_prev(in_battle=True, enemy_level=8, party_levels=[8])
     curr = build_curr(fled=True, battle_result=0)
     data = make_data(curr)
     flee = data.reward_battle_flee(bytes(prev))

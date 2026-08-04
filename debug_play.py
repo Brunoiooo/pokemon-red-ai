@@ -382,17 +382,39 @@ def run(args: argparse.Namespace) -> None:
                 kind = str(exit_info.get("kind", "?")).upper()
                 if kind in ("SMART", "COWARD"):
                     tag = f"FLEE_{kind}"
+                    # Flee risk is judged on the whole team's strongest mon.
+                    cmp_lv = exit_info.get("party_max")
+                    cmp_tag = "p"
                 elif kind == "WIN":
                     tag = "BATTLE_WIN"
+                    # Win reward is judged on the mon that actually fought.
+                    cmp_lv = exit_info.get("active_level")
+                    cmp_tag = "a"
                 elif kind == "LOSE":
                     tag = "BATTLE_LOSE"
+                    cmp_lv = exit_info.get("active_level")
+                    cmp_tag = "a"
                 else:
                     tag = f"BATTLE_{kind}"
+                    cmp_lv = exit_info.get("active_level")
+                    cmp_tag = "a"
+                scale = exit_info.get("difficulty_scale")
+                scale_s = f"*{scale:.2f}" if scale is not None else ""
                 marks.append(
                     f"{tag}"
                     f"(e{exit_info.get('enemy_level')}"
-                    f"/p{exit_info.get('party_max')}"
+                    f"/{cmp_tag}{cmp_lv}"
+                    f"{scale_s}"
                     f"={exit_info.get('reward', 0):+.2f})"
+                )
+            hp_dbg = getattr(emulator.data, "last_enemy_hp_debug", None)
+            if hp_dbg and emulator.data.is_battle(emulator.pyboy.memory) and abs(
+                hp_dbg.get("scaled", 0.0)
+            ) >= 0.005:
+                marks.append(
+                    f"HIT(e{hp_dbg.get('enemy_level')}/a{hp_dbg.get('active_level')}"
+                    f"*{hp_dbg.get('difficulty_scale', 1.0):.2f}"
+                    f"={hp_dbg.get('scaled', 0.0):+.3f})"
                 )
             mark_s = f"  [{' | '.join(marks)}]" if marks else ""
             live_n = len(emulator.data.live_story_goals())
@@ -412,7 +434,9 @@ def run(args: argparse.Namespace) -> None:
                 )
                 print(
                     f"       {label}: enemy_lv={exit_info.get('enemy_level')} "
+                    f"active_lv={exit_info.get('active_level')} "
                     f"party={exit_info.get('party_levels')} max={exit_info.get('party_max')} "
+                    f"scale={exit_info.get('difficulty_scale')} "
                     f"CF0B={exit_info.get('battle_result')} "
                     f"→ {exit_info.get('reward', 0):+.2f}"
                 )

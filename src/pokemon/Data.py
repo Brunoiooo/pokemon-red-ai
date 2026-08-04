@@ -7,6 +7,9 @@ from dataclasses import dataclass, field
 from pyboy import PyBoy, PyBoyMemoryView
 import torch
 
+# Raw WRAM addresses below are documented at:
+# https://datacrystal.tcrf.net/wiki/Pokémon_Red_and_Blue/RAM_map
+
 
 # Pokemon Red early-game map IDs (used for curriculum milestones).
 MAP_PALLET_TOWN = 0
@@ -161,6 +164,13 @@ class Data:
     # Win is mezzo (same scale as event); macro progress stays on event/badge.
     battle_won_reward: float = 2.0
     battle_lost_penalty: float = -1.0
+    # battle_won_reward and per-hit enemy-HP reward are both scaled by
+    # enemy_lv / active_player_lv (capped at 1.0) so stomping a far weaker
+    # wild Pokemon is no longer free farming (e.g. lvl-10 one-shotting a
+    # lvl-2 Pidgey paid the same +2 win bonus and +1.0 HP-fraction hit as
+    # a genuinely hard fight). Floor keeps some incentive for unavoidable
+    # trivial early-game encounters instead of zeroing them out entirely.
+    battle_difficulty_floor: float = 0.15
     # Successful RUN: compare enemy vs max party level so a lvl-1 sacrificial
     # slot cannot fake a "smart flee" while stronger Pokémon sit in the back.
     flee_smart_reward: float = 0.4
@@ -258,6 +268,15 @@ class Data:
     last_flee_reward: float = 0.0
     last_flee_info: dict | None = None
     last_battle_exit_info: dict | None = None
+    # Set each step by reward_enemy_hp while in battle (debug_play / diagnostics).
+    last_enemy_hp_debug: dict | None = None
+    # Last known-good (nonzero) enemy/active level this battle, for
+    # _battle_difficulty_scale — wEnemyMonLevel/wBattleMonLevel can read back
+    # 0 on some frames mid-fight (e.g. during a mon-switch/animation window)
+    # even though HP is clearly changing; holding the last real reading is
+    # more robust than trusting whatever a single frame happens to show.
+    _battle_enemy_level_cache: int = 0
+    _battle_active_level_cache: int = 0
 
     @property
     def visited_pokedex_own(self):
@@ -341,6 +360,9 @@ class Data:
         self.last_flee_reward = 0.0
         self.last_flee_info = None
         self.last_battle_exit_info = None
+        self.last_enemy_hp_debug = None
+        self._battle_enemy_level_cache = 0
+        self._battle_active_level_cache = 0
         self._start_map_id = self.map_id(self.pyboy.memory)
 
     def _dialog_id_changed(self, memory: bytes | None) -> bool:
@@ -1703,10 +1725,16 @@ class Data:
         return memory[0xCFD6]
 
     def enemy_hp(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xCFE6] | memory[0xCFE7] << 8
+        # Gen1 stores 16-bit stats big-endian (high byte first).
+        return (memory[0xCFE6] << 8) | memory[0xCFE7]
 
     def enemy_level(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xCFE8]
+        # wEnemyMon base is 0xCFE5 (battle_struct layout); 0xCFE8 is
+        # BoxLevel (unused trade-display field, always 0 in battle) — the
+        # real live Level field is offset 0x0E from base = 0xCFF3. Verified
+        # live: 0xCFE8 read 0 for an entire multi-turn fight while 0xCFF3
+        # held a stable, sane level matching the opponent's actual strength.
+        return memory[0xCFF3]
 
     def enemy_status(self, memory: PyBoyMemoryView | bytes):
         return self.bits_extractor(memory[0xCFE9], end_bit=6)
@@ -1730,19 +1758,19 @@ class Data:
         return memory[0xCFF0] if self.is_battle(memory) else 0
 
     def enemy_max_hp(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xCFF4] | (memory[0xCFF5] << 8)
+        return (memory[0xCFF4] << 8) | memory[0xCFF5]
 
     def enemy_attack(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xCFF6] | (memory[0xCFF7] << 8)
+        return (memory[0xCFF6] << 8) | memory[0xCFF7]
 
     def enemy_defense(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xCFF8] | (memory[0xCFF9] << 8)
+        return (memory[0xCFF8] << 8) | memory[0xCFF9]
 
     def enemy_speed(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xCFFA] | (memory[0xCFFB] << 8)
+        return (memory[0xCFFA] << 8) | memory[0xCFFB]
 
     def enemy_special(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xCFFC] | (memory[0xCFFD] << 8)
+        return (memory[0xCFFC] << 8) | memory[0xCFFD]
 
     def enemy_pp_first_slot(self, memory: PyBoyMemoryView | bytes):
         return memory[0xCFFE]
@@ -1760,7 +1788,7 @@ class Data:
         return [memory[0xD002 + i] for i in range(5)]
 
     def pokemon_current_hp(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xD015] | (memory[0xD016] << 8)
+        return (memory[0xD015] << 8) | memory[0xD016]
 
     def pokemon_status(self, memory: PyBoyMemoryView | bytes):
         return self.bits_extractor(memory[0xD018], end_bit=6)
@@ -1787,19 +1815,19 @@ class Data:
         return memory[0xD022]
 
     def pokemon_max_hp(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xD023] | (memory[0xD024] << 8)
+        return (memory[0xD023] << 8) | memory[0xD024]
 
     def pokemon_attack(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xD025] | (memory[0xD026] << 8)
+        return (memory[0xD025] << 8) | memory[0xD026]
 
     def pokemon_defense(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xD027] | (memory[0xD028] << 8)
+        return (memory[0xD027] << 8) | memory[0xD028]
 
     def pokemon_speed(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xD029] | (memory[0xD02A] << 8)
+        return (memory[0xD029] << 8) | memory[0xD02A]
 
     def pokemon_special(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xD02B] | (memory[0xD02C] << 8)
+        return (memory[0xD02B] << 8) | memory[0xD02C]
 
     def pokemon_pp_first_slot(self, memory: PyBoyMemoryView | bytes):
         return memory[0xD02D]
@@ -1903,8 +1931,8 @@ class Data:
 
     def player_pokemons_current_hps(self, memory: PyBoyMemoryView | bytes = None):
         return [
-            memory[0xD16C + self.__player_pokemon_size * x]
-            | memory[0xD16D + self.__player_pokemon_size * x] << 8
+            (memory[0xD16C + self.__player_pokemon_size * x] << 8)
+            | memory[0xD16D + self.__player_pokemon_size * x]
             for x in range(self.__pokemon_count)
         ]
 
@@ -1919,9 +1947,9 @@ class Data:
 
     def player_pokemons_experiences(self, memory: PyBoyMemoryView | bytes = None):
         return [
-            memory[0xD179 + self.__player_pokemon_size * i]
-            | memory[0xD17A + self.__player_pokemon_size * i] << 8
-            | memory[0xD17B + self.__player_pokemon_size * i] << 16
+            (memory[0xD179 + self.__player_pokemon_size * i] << 16)
+            | (memory[0xD17A + self.__player_pokemon_size * i] << 8)
+            | memory[0xD17B + self.__player_pokemon_size * i]
             for i in range(self.__pokemon_count)
         ]
 
@@ -1936,36 +1964,36 @@ class Data:
 
     def player_pokemons_max_hps(self, memory: PyBoyMemoryView | bytes = None):
         return [
-            memory[0xD18D + self.__player_pokemon_size * i]
-            | memory[0xD18E + self.__player_pokemon_size * i] << 8
+            (memory[0xD18D + self.__player_pokemon_size * i] << 8)
+            | memory[0xD18E + self.__player_pokemon_size * i]
             for i in range(self.__pokemon_count)
         ]
 
     def player_pokemons_attacks(self, memory: PyBoyMemoryView | bytes = None):
         return [
-            memory[0xD18F + self.__player_pokemon_size * i]
-            | memory[0xD190 + self.__player_pokemon_size * i] << 8
+            (memory[0xD18F + self.__player_pokemon_size * i] << 8)
+            | memory[0xD190 + self.__player_pokemon_size * i]
             for i in range(self.__pokemon_count)
         ]
 
     def player_pokemons_defenses(self, memory: PyBoyMemoryView | bytes = None):
         return [
-            memory[0xD191 + self.__player_pokemon_size * i]
-            | memory[0xD192 + self.__player_pokemon_size * i] << 8
+            (memory[0xD191 + self.__player_pokemon_size * i] << 8)
+            | memory[0xD192 + self.__player_pokemon_size * i]
             for i in range(self.__pokemon_count)
         ]
 
     def player_pokemons_speeds(self, memory: PyBoyMemoryView | bytes = None):
         return [
-            memory[0xD193 + self.__player_pokemon_size * i]
-            | memory[0xD194 + self.__player_pokemon_size * i] << 8
+            (memory[0xD193 + self.__player_pokemon_size * i] << 8)
+            | memory[0xD194 + self.__player_pokemon_size * i]
             for i in range(self.__pokemon_count)
         ]
 
     def player_pokemons_specials(self, memory: PyBoyMemoryView | bytes = None):
         return [
-            memory[0xD195 + self.__player_pokemon_size * i]
-            | memory[0xD196 + self.__player_pokemon_size * i] << 8
+            (memory[0xD195 + self.__player_pokemon_size * i] << 8)
+            | memory[0xD196 + self.__player_pokemon_size * i]
             for i in range(self.__pokemon_count)
         ]
 
@@ -2252,6 +2280,12 @@ class Data:
     def reward_battle(self, memory: bytes):
         reward = 0.0
 
+        if not self.is_battle(memory):
+            # Freshly entered — a new enemy is being loaded, so any level
+            # cached from a previous fight this episode no longer applies.
+            self._battle_enemy_level_cache = 0
+            self._battle_active_level_cache = 0
+
         # Player HP/status are NOT scored here — reward_core's
         # reward_player_pokemons_current_hps / reward_player_pokemons_statuses
         # already cover the whole party unconditionally (every step), and the
@@ -2281,6 +2315,21 @@ class Data:
         levels = [lv for lv in self.all_party_levels(memory) if lv > 0]
         return max(levels) if levels else 0
 
+    def _battle_difficulty_scale(self, enemy_lv: int, player_lv: int) -> float:
+        """enemy_lv / player_lv, capped at 1.0 and floored so a wildly
+        overleveled fight doesn't pay the same reward as a fair one. A
+        same-or-tougher opponent (enemy_lv >= player_lv) pays full credit.
+
+        Unreadable/invalid levels (<=0) fall back to the floor, not 1.0 —
+        this is an anti-farming discount, so a bad read must never silently
+        grant full credit (that's exactly the failure mode that let the
+        exploit through undetected).
+        """
+        if player_lv <= 0 or enemy_lv <= 0:
+            return self.battle_difficulty_floor
+        ratio = enemy_lv / player_lv
+        return max(self.battle_difficulty_floor, min(1.0, ratio))
+
     def reward_battle_exit(self, memory: bytes) -> float:
         """Reward battle outcome on battle→overworld transition (wBattleResult).
 
@@ -2296,12 +2345,34 @@ class Data:
             return 0.0
 
         result = self.battle_result(self.pyboy.memory)
+        # Fall back to the last known-good in-battle reading — see
+        # reward_enemy_hp. The exit frame is exactly where a switch/faint
+        # transition is most likely to be mid-flight.
         enemy_lv = self.enemy_level(memory)
+        if enemy_lv > 0:
+            self._battle_enemy_level_cache = enemy_lv
+        else:
+            enemy_lv = self._battle_enemy_level_cache
+        active_lv = self.pokemon_level(memory)
+        if active_lv > 0:
+            self._battle_active_level_cache = active_lv
+        else:
+            active_lv = self._battle_active_level_cache
+
         party_levels = self.all_party_levels(memory)
         party_max = self.max_party_level(memory)
 
+        difficulty_scale = 1.0
         if result == 0:
-            reward = self.battle_won_reward
+            # The active battler's level, not party_max — a weaker party
+            # member fighting an appropriately-matched wild Pokemon (i.e.
+            # deliberately leveling it) is a fair fight and should pay full
+            # credit; only a curbstomp *for the mon that actually fought*
+            # (e.g. lvl-10 one-shotting a lvl-2) gets discounted. party_max
+            # is reserved for the flee smart/coward check above, where the
+            # question is whole-team risk, not this fight's difficulty.
+            difficulty_scale = self._battle_difficulty_scale(enemy_lv, active_lv)
+            reward = self.battle_won_reward * difficulty_scale
             kind = "win"
         elif result == 1:
             reward = self.battle_lost_penalty
@@ -2323,8 +2394,10 @@ class Data:
             "kind": kind,
             "battle_result": result,
             "enemy_level": enemy_lv,
+            "active_level": active_lv,
             "party_levels": party_levels,
             "party_max": party_max,
+            "difficulty_scale": difficulty_scale,
             "reward": reward,
         }
         self.last_battle_exit_info = info
@@ -2338,16 +2411,48 @@ class Data:
         return self.reward_battle_exit(memory)
 
     def reward_enemy_hp(self, memory: bytes):
-        """Fractional enemy HP lost this step (positive when dealing damage)."""
+        """Fractional enemy HP lost this step (positive when dealing damage).
+
+        Scaled by ``_battle_difficulty_scale`` — one-shotting a far weaker
+        wild Pokemon still costs its full HP bar, but no longer pays the
+        full fractional reward every time (see ``battle_won_reward``).
+        """
         if (
             self.enemy_max_hp(self.pyboy.memory) == 0
             or self.pokemon_max_hp(self.pyboy.memory) == 0
         ):
             return 0
 
-        return (
+        frac = (
             self.enemy_hp(memory) - self.enemy_hp(self.pyboy.memory)
         ) / self.enemy_max_hp(self.pyboy.memory)
+        # Read levels from the pre-step snapshot, not self.pyboy.memory — see
+        # reward_battle_exit. Even so, wEnemyMonLevel/wBattleMonLevel can
+        # read back 0 on some frames mid-fight (observed live: a real hit
+        # landing with enemy_lv=0). Fall back to the last known-good reading
+        # for this battle instead of trusting a single bad frame.
+        enemy_lv = self.enemy_level(memory)
+        if enemy_lv > 0:
+            self._battle_enemy_level_cache = enemy_lv
+        else:
+            enemy_lv = self._battle_enemy_level_cache
+
+        active_lv = self.pokemon_level(memory)
+        if active_lv > 0:
+            self._battle_active_level_cache = active_lv
+        else:
+            active_lv = self._battle_active_level_cache
+
+        scale = self._battle_difficulty_scale(enemy_lv, active_lv)
+        scaled = frac * scale
+        self.last_enemy_hp_debug = {
+            "enemy_level": enemy_lv,
+            "active_level": active_lv,
+            "difficulty_scale": scale,
+            "frac": frac,
+            "scaled": scaled,
+        }
+        return scaled
 
     def reward_enemy_status(self, memory: bytes):
         reward = 0

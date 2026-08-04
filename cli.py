@@ -87,7 +87,7 @@ p_train.add_argument(
     help="Resume from .zip; omit path to auto-pick newest ppo_latest/best",
 )
 p_train.add_argument("--checkpoint-freq", type=int, default=100_000)
-p_train.add_argument("--eval-freq", type=int, default=50_000)
+p_train.add_argument("--eval-freq", type=int, default=150_000)
 p_train.add_argument("--eval-episodes", type=int, default=3)
 p_train.add_argument("--no-progress", action="store_true")
 
