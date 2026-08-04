@@ -24,10 +24,10 @@ Parity with PPO training:
   - same frame-skip hold (default 16)
   - same Data.goal / reward / fuse path
   - auto-curriculum advance on goal (disable with --no-auto-curriculum)
-  - idle (no key held) and unrecognized keys both step as ACTION_NONE, so
-    reward/fuse tracking never misses what happened while you weren't
-    pressing anything; only the console print stays gated to real presses
-    or otherwise-interesting steps
+  - emulator is fully paused while idle (no key held) — it only advances
+    when you press something, so nothing can happen off-screen that reward
+    tracking would miss. Unrecognized keys still advance the game, just
+    with ACTION_NONE as the action.
 """
 from __future__ import annotations
 
@@ -146,7 +146,8 @@ def fuse_line(emu: Emulator) -> str:
 def print_help() -> None:
     print_sep("-")
     print("  Arrows / A / B / Enter / Space  — play (same indices as PPO)")
-    print("  Other keys / idle              — ACTION_NONE (idx 8, still tracked)")
+    print("  Other keys                     — ACTION_NONE (idx 8)")
+    print("  (idle)                         — emulator paused, no tick")
     print("  S                              — save state")
     print("  R                              — reload --from")
     print("  H                              — this help + status")
@@ -250,7 +251,7 @@ def run(args: argparse.Namespace) -> None:
         f"{'REAL (agent fuses)' if args.real_truncation else 'disabled (human)'}"
     )
     print(f"  Log every    : {'all steps' if args.all_steps else 'button presses only'}")
-    print("  None action  : unrecognized keys AND idle (both tracked, printed only if interesting)")
+    print("  Idle         : emulator paused (no tick) until a key is pressed")
     print_sep()
     print_help()
     print()
@@ -277,10 +278,12 @@ def run(args: argparse.Namespace) -> None:
         try:
             label, action = key_queue.get(timeout=0.016)
         except queue.Empty:
-            # Idle: still take a real None step so reward/state tracking never
-            # drifts from what the game actually did meanwhile. Printing stays
-            # gated on the "interesting" check below, so silent idle is silent.
-            label, action = "IDLE", NONE_ACTION
+            # Idle: emulator is fully paused (no tick at all). Nothing can
+            # change in-game while you're not pressing anything, so there is
+            # nothing to miss. tick(0) just pumps the SDL window's OS events
+            # (keeps it from looking unresponsive) without advancing a frame.
+            emulator.pyboy.tick(0, render=False, sound=False)
+            continue
 
         if label in ("ESC", "Q"):
             print("\nQuit.")
@@ -496,7 +499,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--all-steps",
         action="store_true",
-        help="Print every agent step (incl. idle/unrecognized-key None)",
+        help="Print every agent step (incl. unrecognized-key None)",
     )
     return p
 

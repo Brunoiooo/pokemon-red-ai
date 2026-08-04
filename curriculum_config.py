@@ -49,8 +49,12 @@ from pokemon.Data import (
 )
 
 # Auto-advance when this fraction of recent episodes hit the stage goal.
+# Gated on deterministic EvalCallback rounds only (see CurriculumEvalGate),
+# so episodes arrive in --eval-episodes-sized batches every --eval-freq
+# steps — much sparser than the old stochastic-training-episode window, so
+# min_episodes is lower than it would need to be for noisy exploration data.
 ADVANCE_SUCCESS_THRESHOLD = 0.70
-ADVANCE_MIN_EPISODES = 40
+ADVANCE_MIN_EPISODES = 20
 ADVANCE_CHECK_EVERY = 2048
 
 # Auto-demote one stage back if the agent is fully stalled (near-zero success)

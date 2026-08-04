@@ -106,6 +106,7 @@ class PokemonRedEnv(gym.Env):
         self._memory: bytes | None = None
         self._step_count = 0
         self._episode_loop = False
+        self._episode_goal_hit = False
         # Base curriculum owned by the trainer/callback. In-episode auto_advance
         # is ephemeral — reset() restores these so workers don't permanently
         # drift to later stages and stop counting the current goal.
@@ -325,6 +326,7 @@ class PokemonRedEnv(gym.Env):
         self._memory = memory
         self._step_count = 0
         self._episode_loop = False
+        self._episode_goal_hit = False
         obs = self._torch_inputs_to_obs(inputs)
         info = self._info(
             terminated=False,
@@ -360,6 +362,9 @@ class PokemonRedEnv(gym.Env):
                 terminated = False
                 # Obs must reflect the new goal one-hot immediately.
                 inputs = self.emu.data.inputs()
+
+        if goal_success or cleared_stage:
+            self._episode_goal_hit = True
 
         obs = self._torch_inputs_to_obs(inputs)
         info = self._info(
@@ -401,6 +406,13 @@ class PokemonRedEnv(gym.Env):
             "stage": self.stage,
             "goal_success": bool(goal_success),
             "cleared_stage": cleared_stage,
+            # Episode-level success (goal hit at any point, or a terminal state
+            # that implies the current goal was reached with no next stage to
+            # chain into). Consumed by SB3's EvalCallback success-rate buffer
+            # for deterministic curriculum-advance gating.
+            "is_success": bool(
+                self._episode_goal_hit or goal_success or cleared_stage or terminated
+            ),
         }
 
     def render(self):

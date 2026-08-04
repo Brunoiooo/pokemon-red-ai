@@ -212,8 +212,11 @@ class Data:
     # Hard stuck fuse for one dialog_id. Resets only on dialog_id change or
     # leaving dialog — NOT on tilemap blink / partial text frames (those were
     # resetting the fuse forever while farming advance rewards).
-    # 512*8 @ frame_skip 16 = 256 steps: enough to A-mash a long script, not camp.
-    max_useless_dialog_ticks: int = 512 * 8
+    # 512*4 @ frame_skip 16 = 128 steps: enough to A-mash a long script, not
+    # camp. Halved from 512*8 — a policy stuck idling in dialog (deterministic
+    # eval argmax landing on NONE) was burning a full 256-step episode before
+    # truncating; this bounds the damage without touching a legitimate read.
+    max_useless_dialog_ticks: int = 512 * 4
     # Battle fuse: same budget as dialog. Turn counter alone is too coarse —
     # intro text, move select, and attack messages all sit on one turn.
     # 512 was 32 steps @ fs 16; *4 gives room mid-fight.
@@ -832,13 +835,15 @@ class Data:
                 penalty += self.action_pattern_penalty
                 triggered = True
 
-        # Idle / wrong buttons in dialog — only A/B advances story text.
+        # Idle / wrong buttons in dialog — only A/B advances story text. NONE
+        # used to be discounted to menu_spam_penalty (-0.05 vs -0.08), which
+        # made "do nothing" the cheapest mistake in a textbox — verified via
+        # deterministic-eval action-probs sitting near 50/50 NONE-vs-A on a
+        # multi-page Oak's-lab dialog, with argmax landing on NONE and idling
+        # until the stuck-dialog fuse truncated the episode. NONE gets the
+        # same penalty as any other non-interact button now, closing that gap.
         if in_dialog and action not in INTERACT_ACTIONS:
-            penalty += (
-                self.menu_spam_penalty
-                if action == ACTION_NONE
-                else self.dialog_wrong_button_penalty
-            )
+            penalty += self.dialog_wrong_button_penalty
             triggered = True
 
         # 3) Spatial loop: same tile revisited often in recent history.
