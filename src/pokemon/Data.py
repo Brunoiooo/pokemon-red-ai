@@ -663,6 +663,9 @@ class Data:
 
         1st reopen → penalty; 2nd reopen → truncate (see ``truncated``).
         Staying inside one conversation does not count — only exit then re-enter.
+        Reopens that happen while the engine owns input (forced-walk cutscenes,
+        e.g. Oak's Route 1 intercept closing/reopening the same textbox) are not
+        the player's doing, so they are exempt from the farming check entirely.
         """
         was_dialog = self.is_dialog(memory)
         now_dialog = self.is_dialog(self.pyboy.memory)
@@ -672,6 +675,8 @@ class Data:
             return 0.0
 
         if not was_dialog and now_dialog:
+            if self.is_script_locked(self.pyboy.memory):
+                return 0.0
             key = self.get_dialog()
             if key not in self._completed_dialogs:
                 return 0.0
