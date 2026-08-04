@@ -47,6 +47,17 @@ class Emulator:
 
     ALL_BUTTONS = ["a", "b", "start", "select", "left", "right", "up", "down"]
 
+    # button_press()/button_release() only take effect on the next tick() —
+    # releasing at the end of a step and pressing again at the start of the
+    # next one (with zero ticks in between) never actually produces a
+    # released frame, so repeating the same button across consecutive steps
+    # looks like one continuous hold to the game. Gen-1 input handling (e.g.
+    # dialog advance) triggers on a fresh press edge, not on "still held", so
+    # a held A stops advancing text after the first press. Ticking a couple
+    # of frames with everything released between action holds restores that
+    # edge.
+    RELEASE_GAP_TICKS = 2
+
     __use_sdl: bool = False
     # SDL layout (set by PokemonRedEnv before first pyboy access).
     sdl_scale: int = 3
@@ -202,6 +213,7 @@ class Emulator:
 
         for button in self.ALL_BUTTONS:
             self.pyboy.button_release(button)
+        self._release_gap(render_each=render_each)
 
         milestone, step = self.data.reward(memory=memory, action=action_idx)
 
@@ -336,6 +348,21 @@ class Emulator:
         for button in self.buttons[action_idx]:
             self.pyboy.button_press(button)
 
+    def _release_gap(self, render_each: bool = False) -> None:
+        """Tick a couple of frames with every button released.
+
+        button_release() only takes effect on the *next* tick() — without
+        this, releasing at the end of one step and pressing the same button
+        again at the start of the next (zero ticks in between) never
+        produces an actually-released frame, so repeating an action across
+        steps reads as one continuous hold. See RELEASE_GAP_TICKS.
+        """
+        if render_each:
+            for _ in range(self.RELEASE_GAP_TICKS):
+                self.pyboy.tick(1, render=True, sound=False)
+        else:
+            self.pyboy.tick(self.RELEASE_GAP_TICKS, render=self.use_sdl, sound=False)
+
     def ticks(self, meta_action: int, render_each: bool = False):
         action_idx = meta_action // len(DURATION_BINS)
         duration = DURATION_BINS[meta_action % len(DURATION_BINS)]
@@ -354,6 +381,7 @@ class Emulator:
 
         for button in self.ALL_BUTTONS:
             self.pyboy.button_release(button)
+        self._release_gap(render_each=render_each)
 
     def evaluate_greedy(
         self,
