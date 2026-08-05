@@ -20,6 +20,127 @@ MAP_RIVALS_HOUSE = 39
 MAP_OAKS_LAB = 40
 HOUSE_MAPS = frozenset({MAP_REDS_HOUSE_1F, MAP_REDS_HOUSE_2F})
 
+# Map IDs for the rest of the curriculum (GOAL_ALLOWED_MAPS below). wCurMap
+# values match the pret/pokered disassembly's map id ordering:
+# https://github.com/pret/pokered/blob/master/constants/map_constants.asm
+# (cross-checked against the RAM map doc linked above).
+MAP_VIRIDIAN_CITY = 1
+MAP_PEWTER_CITY = 2
+MAP_CERULEAN_CITY = 3
+MAP_LAVENDER_TOWN = 4
+MAP_VERMILION_CITY = 5
+MAP_CELADON_CITY = 6
+MAP_FUCHSIA_CITY = 7
+MAP_CINNABAR_ISLAND = 8
+MAP_INDIGO_PLATEAU = 9
+MAP_SAFFRON_CITY = 10
+
+MAP_ROUTE_2 = 13
+MAP_ROUTE_3 = 14
+MAP_ROUTE_4 = 15
+MAP_ROUTE_5 = 16
+MAP_ROUTE_6 = 17
+MAP_ROUTE_7 = 18
+MAP_ROUTE_8 = 19
+MAP_ROUTE_9 = 20
+MAP_ROUTE_10 = 21
+MAP_ROUTE_11 = 22
+MAP_ROUTE_12 = 23
+MAP_ROUTE_13 = 24
+MAP_ROUTE_14 = 25
+MAP_ROUTE_15 = 26
+MAP_ROUTE_16 = 27
+MAP_ROUTE_17 = 28
+MAP_ROUTE_18 = 29
+MAP_ROUTE_19 = 30
+MAP_ROUTE_20 = 31
+MAP_ROUTE_21 = 32
+MAP_ROUTE_22 = 33
+MAP_ROUTE_23 = 34
+MAP_ROUTE_24 = 35
+MAP_ROUTE_25 = 36
+
+MAP_VIRIDIAN_POKECENTER = 41
+MAP_VIRIDIAN_MART = 42
+MAP_VIRIDIAN_GYM = 45
+MAP_VIRIDIAN_FOREST_NORTH_GATE = 47
+MAP_ROUTE_2_GATE = 49
+MAP_VIRIDIAN_FOREST_SOUTH_GATE = 50
+MAP_VIRIDIAN_FOREST = 51
+MAP_PEWTER_GYM = 54
+MAP_PEWTER_MART = 56
+MAP_PEWTER_POKECENTER = 58
+MAP_MT_MOON_1F = 59
+MAP_MT_MOON_B1F = 60
+MAP_MT_MOON_B2F = 61
+MAP_CERULEAN_POKECENTER = 64
+MAP_CERULEAN_GYM = 65
+MAP_CERULEAN_MART = 67
+MAP_MT_MOON_POKECENTER = 68
+MAP_ROUTE_5_GATE = 70
+MAP_UNDERGROUND_PATH_ROUTE_5 = 71
+MAP_ROUTE_6_GATE = 73
+MAP_UNDERGROUND_PATH_ROUTE_6 = 74
+MAP_ROUTE_7_GATE = 76
+MAP_UNDERGROUND_PATH_ROUTE_7 = 77
+MAP_ROUTE_8_GATE = 79
+MAP_UNDERGROUND_PATH_ROUTE_8 = 80
+MAP_ROCK_TUNNEL_POKECENTER = 81
+MAP_ROCK_TUNNEL_1F = 82
+MAP_POWER_PLANT = 83
+MAP_ROUTE_12_GATE_1F = 87
+MAP_BILLS_HOUSE = 88
+MAP_VERMILION_POKECENTER = 89
+MAP_VERMILION_MART = 91
+MAP_VERMILION_GYM = 92
+MAP_VERMILION_DOCK = 94
+MAP_VICTORY_ROAD_1F = 108
+MAP_HALL_OF_FAME = 118
+MAP_UNDERGROUND_PATH_NORTH_SOUTH = 119
+MAP_CHAMPIONS_ROOM = 120
+MAP_UNDERGROUND_PATH_WEST_EAST = 121
+MAP_CELADON_MART_1F = 122
+MAP_CELADON_POKECENTER = 133
+MAP_CELADON_GYM = 134
+MAP_GAME_CORNER = 135
+MAP_LAVENDER_POKECENTER = 141
+MAP_MR_FUJIS_HOUSE = 149
+MAP_LAVENDER_MART = 150
+MAP_FUCHSIA_MART = 152
+MAP_FUCHSIA_POKECENTER = 154
+MAP_FUCHSIA_GYM = 157
+MAP_POKEMON_MANSION_1F = 165
+MAP_CINNABAR_GYM = 166
+MAP_CINNABAR_LAB = 167
+MAP_CINNABAR_POKECENTER = 171
+MAP_CINNABAR_MART = 172
+MAP_INDIGO_PLATEAU_LOBBY = 174
+MAP_FIGHTING_DOJO = 177
+MAP_SAFFRON_GYM = 178
+MAP_SAFFRON_MART = 180
+MAP_SILPH_CO_1F = 181
+MAP_SAFFRON_POKECENTER = 182
+MAP_ROUTE_15_GATE_1F = 184
+MAP_ROUTE_16_GATE_1F = 186
+MAP_ROUTE_18_GATE_1F = 190
+MAP_SEAFOAM_ISLANDS_1F = 192
+MAP_ROUTE_22_GATE = 193
+MAP_VICTORY_ROAD_2F = 194
+MAP_VICTORY_ROAD_3F = 198
+MAP_LANCES_ROOM = 113
+
+# Multi-floor dungeons: grouped by area instead of one constant per floor.
+MAP_SS_ANNE = frozenset(range(95, 105))  # 1F..B1F_ROOMS ($5F-$68)
+MAP_POKEMON_TOWER = frozenset(range(142, 149))  # 1F-7F ($8E-$94)
+MAP_SEAFOAM_ISLANDS_CAVES = frozenset({159, 160, 161, 162})  # B1F-B4F ($9F-$A2)
+MAP_ROCKET_HIDEOUT = frozenset({199, 200, 201, 202, 203})  # B1F-B4F + elevator ($C7-$CB)
+MAP_CINNABAR_LAB_ROOMS = frozenset({167, 168, 169, 170})  # main + trade/metronome/fossil ($A7-$AA)
+MAP_SILPH_CO = frozenset(
+    {181, 207, 208, 209, 210, 211, 212, 213, 233, 234, 235, 236}
+)  # 1F, 2F-8F, 9F-11F, elevator
+MAP_CERULEAN_CAVE = frozenset({226, 227, 228})  # 2F, B1F, 1F ($E2-$E4)
+MAP_ELITE_FOUR = frozenset({245, 246, 247})  # Lorelei/Bruno/Agatha rooms ($F5-$F7)
+
 # Emulator button indices — A/B must be mashable to start and advance dialogs.
 ACTION_A = 0
 ACTION_B = 1
@@ -65,15 +186,234 @@ GOAL_FOSSIL = "fossil"
 GOAL_MEWTWO = "mewtwo"
 GOAL_ALL_BADGES = "all_badges"
 
-# Maps on the critical path for early location goals (excludes rivals' house).
+# Maps on the critical path for each curriculum goal (excludes distraction
+# detours like the rivals' house, Game Corner floor, Safari Zone, etc. unless
+# that detour IS the goal). Built up incrementally: each stage's set is the
+# previous stage's plus the new ground covered reaching it, because a stage
+# can start cold from "start" (no stage checkpoint saved yet — see
+# curriculum_config.py) and the agent then has to walk the whole way from
+# Pallet Town, not just the final leg.
+_MAPS_LEFT_HOUSE = HOUSE_MAPS | {MAP_PALLET_TOWN}
+_MAPS_ROUTE_1_ENTRY = frozenset({MAP_PALLET_TOWN, MAP_ROUTE_1, MAP_OAKS_LAB})
+# Includes MAP_ROUTE_1: goal auto-advances to oaks_lab the instant the entry
+# trigger fires, but the forced walk-into-lab cutscene can still read
+# map_id == MAP_ROUTE_1 for a few ticks afterward.
+_MAPS_OAKS_LAB = frozenset({MAP_PALLET_TOWN, MAP_OAKS_LAB, MAP_ROUTE_1})
+_MAPS_ROUTE_1 = frozenset({MAP_PALLET_TOWN, MAP_OAKS_LAB, MAP_ROUTE_1})
+
+_MAPS_OAKS_PARCEL = _MAPS_ROUTE_1 | {
+    MAP_VIRIDIAN_CITY,
+    MAP_VIRIDIAN_MART,
+    MAP_VIRIDIAN_POKECENTER,
+}
+_MAPS_TOWN_MAP = _MAPS_OAKS_PARCEL | {MAP_RIVALS_HOUSE}  # Daisy's gift, Pallet Town
+
+_MAPS_FOUGHT_BROCK = _MAPS_TOWN_MAP | {
+    MAP_ROUTE_2,
+    MAP_ROUTE_2_GATE,
+    MAP_VIRIDIAN_FOREST_NORTH_GATE,
+    MAP_VIRIDIAN_FOREST_SOUTH_GATE,
+    MAP_VIRIDIAN_FOREST,
+    MAP_PEWTER_CITY,
+    MAP_PEWTER_GYM,
+    MAP_PEWTER_MART,
+    MAP_PEWTER_POKECENTER,
+}
+_MAPS_BADGE_1 = _MAPS_FOUGHT_BROCK  # badge is handed over in the same gym room
+
+_MAPS_FOUGHT_MISTY = _MAPS_BADGE_1 | {
+    MAP_ROUTE_3,
+    MAP_MT_MOON_1F,
+    MAP_MT_MOON_B1F,
+    MAP_MT_MOON_B2F,
+    MAP_MT_MOON_POKECENTER,
+    MAP_ROUTE_4,
+    MAP_CERULEAN_CITY,
+    MAP_CERULEAN_GYM,
+    MAP_CERULEAN_POKECENTER,
+    MAP_CERULEAN_MART,
+}
+_MAPS_BADGE_2 = _MAPS_FOUGHT_MISTY
+
+_MAPS_SS_ANNE = (
+    _MAPS_BADGE_2
+    | {
+        MAP_ROUTE_24,
+        MAP_ROUTE_25,
+        MAP_BILLS_HOUSE,  # S.S. Ticket
+        MAP_ROUTE_5,
+        MAP_ROUTE_5_GATE,
+        MAP_UNDERGROUND_PATH_ROUTE_5,
+        MAP_ROUTE_6,
+        MAP_ROUTE_6_GATE,
+        MAP_UNDERGROUND_PATH_ROUTE_6,
+        MAP_VERMILION_CITY,
+        MAP_VERMILION_POKECENTER,
+        MAP_VERMILION_MART,
+        MAP_VERMILION_DOCK,
+    }
+    | MAP_SS_ANNE
+)
+_MAPS_FOUGHT_SURGE = _MAPS_SS_ANNE | {MAP_VERMILION_GYM}
+_MAPS_BADGE_3 = _MAPS_FOUGHT_SURGE
+
+_MAPS_FOUGHT_ERIKA = _MAPS_BADGE_3 | {
+    MAP_ROUTE_7,
+    MAP_ROUTE_7_GATE,
+    MAP_UNDERGROUND_PATH_ROUTE_7,
+    MAP_SAFFRON_CITY,  # just passed through — gym is locked until Silph Co.
+    MAP_SAFFRON_POKECENTER,
+    MAP_CELADON_CITY,
+    MAP_CELADON_GYM,
+    MAP_CELADON_POKECENTER,
+    MAP_CELADON_MART_1F,
+}
+_MAPS_BADGE_4 = _MAPS_FOUGHT_ERIKA
+
+# Fuchsia (Koga) is gated behind the sleeping Snorlax on Route 12/16, which
+# needs the Poke Flute from Mr. Fuji, which needs the Silph Scope from Team
+# Rocket's hideout under the Celadon Game Corner — a hard prerequisite for
+# physically reaching Koga, even though Silph Co./Sabrina are the *later*
+# curriculum stage (see stage_fought_koga vs stage_fought_sabrina in
+# curriculum_config.py).
+_MAPS_FOUGHT_KOGA = (
+    _MAPS_BADGE_4
+    | {
+        MAP_GAME_CORNER,
+        MAP_ROUTE_8,
+        MAP_ROUTE_8_GATE,
+        MAP_UNDERGROUND_PATH_ROUTE_8,
+        MAP_ROUTE_9,
+        MAP_ROUTE_10,
+        MAP_ROCK_TUNNEL_POKECENTER,
+        MAP_ROCK_TUNNEL_1F,
+        MAP_LAVENDER_TOWN,
+        MAP_LAVENDER_POKECENTER,
+        MAP_LAVENDER_MART,
+        MAP_MR_FUJIS_HOUSE,
+        MAP_ROUTE_12,
+        MAP_ROUTE_12_GATE_1F,
+        MAP_ROUTE_13,
+        MAP_ROUTE_14,
+        MAP_ROUTE_15,
+        MAP_ROUTE_15_GATE_1F,
+        MAP_ROUTE_16,
+        MAP_ROUTE_16_GATE_1F,
+        MAP_ROUTE_17,
+        MAP_ROUTE_18,
+        MAP_ROUTE_18_GATE_1F,
+        MAP_FUCHSIA_CITY,
+        MAP_FUCHSIA_GYM,
+        MAP_FUCHSIA_MART,
+        MAP_FUCHSIA_POKECENTER,
+    }
+    | MAP_POKEMON_TOWER
+    | MAP_ROCKET_HIDEOUT
+)
+_MAPS_BADGE_5 = _MAPS_FOUGHT_KOGA
+
+_MAPS_FOUGHT_SABRINA = (
+    _MAPS_BADGE_5
+    | {
+        MAP_FIGHTING_DOJO,
+        MAP_SAFFRON_GYM,
+        MAP_SAFFRON_MART,
+    }
+    | MAP_SILPH_CO
+)
+_MAPS_BADGE_6 = _MAPS_FOUGHT_SABRINA
+
+_MAPS_FOUGHT_BLAINE = (
+    _MAPS_BADGE_6
+    | {
+        MAP_ROUTE_19,
+        MAP_ROUTE_20,
+        MAP_SEAFOAM_ISLANDS_1F,
+        MAP_ROUTE_21,
+        MAP_CINNABAR_ISLAND,
+        MAP_CINNABAR_GYM,
+        MAP_CINNABAR_MART,
+        MAP_CINNABAR_POKECENTER,
+        MAP_POKEMON_MANSION_1F,
+    }
+    | MAP_SEAFOAM_ISLANDS_CAVES
+)
+_MAPS_BADGE_7 = _MAPS_FOUGHT_BLAINE
+
+_MAPS_FOUGHT_GIOVANNI = _MAPS_BADGE_7 | {MAP_VIRIDIAN_GYM}  # finally unlocked
+_MAPS_BADGE_8 = _MAPS_FOUGHT_GIOVANNI
+
+_MAPS_LAPRAS = _MAPS_BADGE_8  # Silph Co. 7F gift — already covered above
+_MAPS_SNORLAX = _MAPS_LAPRAS  # both sites (Route 12 / Route 16) already covered
+
+_MAPS_ARTICUNO = _MAPS_SNORLAX  # Seafoam Islands already covered (Blaine leg)
+
+_MAPS_ZAPDOS = _MAPS_ARTICUNO | {MAP_POWER_PLANT}  # reached by Surfing off Route 10
+
+_MAPS_MOLTRES = _MAPS_ZAPDOS | {
+    MAP_ROUTE_22,
+    MAP_ROUTE_22_GATE,
+    MAP_ROUTE_23,
+    MAP_VICTORY_ROAD_1F,
+    MAP_VICTORY_ROAD_2F,
+    MAP_VICTORY_ROAD_3F,
+}
+
+# Revived at Cinnabar Lab; the raw fossil pickup itself is Mt Moon B2F,
+# already covered by the Misty leg above.
+_MAPS_FOSSIL = _MAPS_MOLTRES | MAP_CINNABAR_LAB_ROOMS
+
+# Cerulean Cave only opens after Hall of Fame, so Mewtwo pulls in the
+# Elite Four / Champion path too.
+_MAPS_MEWTWO = (
+    _MAPS_FOSSIL
+    | {
+        MAP_INDIGO_PLATEAU,
+        MAP_INDIGO_PLATEAU_LOBBY,
+        MAP_HALL_OF_FAME,
+        MAP_UNDERGROUND_PATH_NORTH_SOUTH,
+        MAP_UNDERGROUND_PATH_WEST_EAST,
+        MAP_LANCES_ROOM,
+        MAP_CHAMPIONS_ROOM,
+    }
+    | MAP_ELITE_FOUR
+    | MAP_CERULEAN_CAVE
+)
+
+_MAPS_ALL_BADGES = _MAPS_MEWTWO  # by now every badge-path map is covered
+
 GOAL_ALLOWED_MAPS: dict[str, frozenset[int]] = {
-    GOAL_LEFT_HOUSE: HOUSE_MAPS | {MAP_PALLET_TOWN},
-    GOAL_ROUTE_1_ENTRY: frozenset({MAP_PALLET_TOWN, MAP_ROUTE_1, MAP_OAKS_LAB}),
-    # Includes MAP_ROUTE_1: goal auto-advances to oaks_lab the instant the
-    # entry trigger fires, but the forced walk-into-lab cutscene can still
-    # read map_id == MAP_ROUTE_1 for a few ticks afterward.
-    GOAL_OAKS_LAB: frozenset({MAP_PALLET_TOWN, MAP_OAKS_LAB, MAP_ROUTE_1}),
-    GOAL_ROUTE_1: frozenset({MAP_PALLET_TOWN, MAP_OAKS_LAB, MAP_ROUTE_1}),
+    GOAL_LEFT_HOUSE: _MAPS_LEFT_HOUSE,
+    GOAL_ROUTE_1_ENTRY: _MAPS_ROUTE_1_ENTRY,
+    GOAL_OAKS_LAB: _MAPS_OAKS_LAB,
+    GOAL_ROUTE_1: _MAPS_ROUTE_1,
+    GOAL_OAKS_PARCEL: _MAPS_OAKS_PARCEL,
+    GOAL_TOWN_MAP: _MAPS_TOWN_MAP,
+    GOAL_FOUGHT_BROCK: _MAPS_FOUGHT_BROCK,
+    GOAL_BADGE_1: _MAPS_BADGE_1,
+    GOAL_FOUGHT_MISTY: _MAPS_FOUGHT_MISTY,
+    GOAL_BADGE_2: _MAPS_BADGE_2,
+    GOAL_SS_ANNE: _MAPS_SS_ANNE,
+    GOAL_FOUGHT_SURGE: _MAPS_FOUGHT_SURGE,
+    GOAL_BADGE_3: _MAPS_BADGE_3,
+    GOAL_FOUGHT_ERIKA: _MAPS_FOUGHT_ERIKA,
+    GOAL_BADGE_4: _MAPS_BADGE_4,
+    GOAL_FOUGHT_KOGA: _MAPS_FOUGHT_KOGA,
+    GOAL_BADGE_5: _MAPS_BADGE_5,
+    GOAL_FOUGHT_SABRINA: _MAPS_FOUGHT_SABRINA,
+    GOAL_BADGE_6: _MAPS_BADGE_6,
+    GOAL_FOUGHT_BLAINE: _MAPS_FOUGHT_BLAINE,
+    GOAL_BADGE_7: _MAPS_BADGE_7,
+    GOAL_FOUGHT_GIOVANNI: _MAPS_FOUGHT_GIOVANNI,
+    GOAL_BADGE_8: _MAPS_BADGE_8,
+    GOAL_LAPRAS: _MAPS_LAPRAS,
+    GOAL_SNORLAX: _MAPS_SNORLAX,
+    GOAL_ARTICUNO: _MAPS_ARTICUNO,
+    GOAL_ZAPDOS: _MAPS_ZAPDOS,
+    GOAL_MOLTRES: _MAPS_MOLTRES,
+    GOAL_FOSSIL: _MAPS_FOSSIL,
+    GOAL_MEWTWO: _MAPS_MEWTWO,
+    GOAL_ALL_BADGES: _MAPS_ALL_BADGES,
 }
 
 BADGE_GOALS = (
@@ -250,12 +590,32 @@ class Data:
     _milestones_hit: set[str] = field(default_factory=set)
     # Payout credited when a milestone first hit — used to claw back on regress.
     _milestone_payouts: dict[str, float] = field(default_factory=dict)
+    # Regressable milestones that have already been paid-and-clawed-back once
+    # this episode — blocks re-payment on re-entry (see reward_goal_regression).
+    _milestones_spent: set[str] = field(default_factory=set)
     # Goals cleared by curriculum auto_advance this episode (no clawback on leave).
     _cleared_goals: set[str] = field(default_factory=set)
     # Live story goals satisfied last step (for detecting count drops).
     _prev_live_goals: set[str] = field(default_factory=set)
+    # Union of both kinds below — informational only, kept for debug_play.
     _last_regressed: list[str] = field(default_factory=list)
+    # Subset of _last_regressed that actually clawed back a payout (goal was
+    # NOT yet curriculum-cleared). This is the one that should drive
+    # goal_regression_rate — _last_regressed also fires on every ordinary
+    # "left a map I already cleared to reach the next stage" step, which is
+    # expected curriculum progress, not backsliding.
+    _last_hard_regressed: list[str] = field(default_factory=list)
     _peak_live_goals: int = 0
+    # Per-step debug trail for eval -vv: (name, payout) actually paid this
+    # step, and names that hit their condition but were blocked because
+    # they were already regressed-and-spent this episode.
+    last_milestone_payouts: list[tuple[str, float]] = field(default_factory=list)
+    last_milestone_blocked: list[str] = field(default_factory=list)
+    # Set once per reward() call; True on the exact step a full-party wipe
+    # exits the battle screen. Shared by reward_core (suppress the resulting
+    # free Pokemon-Center-style heal) and reward_battle_exit (classify the
+    # exit correctly instead of trusting wBattleResult).
+    _just_blacked_out: bool = False
     _start_map_id: int | None = None
     # Distinct dialog screen hashes seen for the current dialog_id. Blink frames
     # revisit old hashes; only a *new* hash counts as text progress.
@@ -349,9 +709,11 @@ class Data:
         self.loop_streak = 0
         self._milestones_hit = set()
         self._milestone_payouts = {}
+        self._milestones_spent = set()
         self._cleared_goals = set()
         self._prev_live_goals = set()
         self._last_regressed = []
+        self._last_hard_regressed = []
         self._peak_live_goals = 0
         self._dialog_screens_seen = set()
         self._completed_dialogs = set()
@@ -635,11 +997,23 @@ class Data:
     def screen_tiles(self, memory: PyBoyMemoryView | bytes):
         return [memory[i] for i in range(0xC3A0, 0xC508)]
 
+    def _detect_blackout(self, memory: bytes) -> bool:
+        """True on the exact step a full-party wipe exits the battle screen.
+
+        wIsInBattle (0xD057) is documented (pokered ram/wram.asm) as -1
+        (0xFF) specifically for a lost/blacked-out battle, unlike a normal
+        faint-with-a-mon-left-to-switch or a win/flee. Computed once here so
+        reward_core and reward_battle_exit agree on the exact same frame.
+        """
+        left_battle = self.is_battle(memory) and not self.is_battle(self.pyboy.memory)
+        return left_battle and self.type_of_battle(memory) == 0xFF
+
     def reward(self, memory: bytes, action: int) -> tuple[float, float]:
         milestone = 0.0
         step = 0.0
         # Per-step signal; env accumulates into _episode_loop for episode stats.
         self.loop_flag = False
+        self._just_blacked_out = self._detect_blackout(memory)
 
         milestone += self.reward_core(memory)
         milestone += self.reward_story_milestones()
@@ -733,8 +1107,15 @@ class Data:
         Cleared-via-curriculum goals are exempt so the correct path
         (enter lab → advance → leave toward Route 1) is not punished.
         Unpaid dabbling (off-goal lab visit while training Route 1) is refunded.
+
+        Clawed-back goals are marked ``_milestones_spent`` so re-entering
+        cannot earn the payout a second time (see reward_story_milestones) —
+        without that, leave-then-return nets a full free payout every trip
+        (pay on entry, refund equals the clawback, pay again on re-entry),
+        turning the map border into a farmable reward loop.
         """
         self._last_regressed = []
+        self._last_hard_regressed = []
         reward = 0.0
         for name in list(self._milestones_hit):
             if name not in REGRESSABLE_GOALS:
@@ -745,8 +1126,10 @@ class Data:
                 continue
             payout = float(self._milestone_payouts.pop(name, 0.0))
             self._milestones_hit.discard(name)
+            self._milestones_spent.add(name)
             reward -= payout * self.goal_regression_scale
             self._last_regressed.append(name)
+            self._last_hard_regressed.append(name)
 
         live = set(self.live_story_goals())
         lost_live = self._prev_live_goals - live
@@ -771,6 +1154,8 @@ class Data:
         """
         reward = 0.0
         mid = self.map_id(self.pyboy.memory)
+        self.last_milestone_payouts = []
+        self.last_milestone_blocked = []
 
         checks = [
             (
@@ -840,11 +1225,16 @@ class Data:
             )
         ]
         for name, hit, value in checks:
-            if name not in self._milestones_hit and hit:
-                payout = self._scaled_milestone(name, value)
-                self._milestones_hit.add(name)
-                self._milestone_payouts[name] = payout
-                reward += payout
+            if not hit or name in self._milestones_hit:
+                continue
+            if name in self._milestones_spent:
+                self.last_milestone_blocked.append(name)
+                continue
+            payout = self._scaled_milestone(name, value)
+            self._milestones_hit.add(name)
+            self._milestone_payouts[name] = payout
+            reward += payout
+            self.last_milestone_payouts.append((name, payout))
 
         badges = self.badges(self.pyboy.memory)
         for i, name in enumerate(BADGE_GOALS):
@@ -1030,15 +1420,20 @@ class Data:
         reward = 0.0
 
         reward += self.reward_pokedex(memory)
-        reward += self.reward_player_pokemons_current_hps(memory)
-        reward += self.reward_player_pokemons_statuses(memory)
+        # HP/status/PP all get a free full restore as part of the blackout
+        # sequence (warp to last Pokemon Center) — that's not something the
+        # agent did, so don't pay for it. Without this gate it can nearly
+        # cancel out battle_lost_penalty, making whiteout close to free.
+        if not self._just_blacked_out:
+            reward += self.reward_player_pokemons_current_hps(memory)
+            reward += self.reward_player_pokemons_statuses(memory)
+            reward += self.reward_player_pokemons_pps(memory)
         reward += self.reward_player_pokemons_experiences(memory)
         reward += self.reward_party_levels(memory)
         reward += self.reward_player_pokemons_max_hps(memory)
         reward += self.reward_player_pokemons_attacks(memory)
         reward += self.reward_player_pokemons_defenses(memory)
         reward += self.reward_player_pokemons_speeds(memory)
-        reward += self.reward_player_pokemons_pps(memory)
         reward += self.reward_map()
         reward += self.reward_player_items(memory)
         reward += self.reward_stored_items(memory)
@@ -2334,8 +2729,19 @@ class Data:
         """Reward battle outcome on battle→overworld transition (wBattleResult).
 
         - 0 win → ``battle_won_reward``
-        - 1 lose → ``battle_lost_penalty`` (covers blackout; no separate map heuristic)
+        - 1 lose → ``battle_lost_penalty`` (a mon fainted but the player had
+          another to send out — HandlePlayerBlackOut below is the full wipe)
         - 2 fled → smart/coward flee based on enemy vs max party level
+
+        wBattleResult (0xCF0B) is only ever written by the win/faint-switch/
+        run paths in pokered's battle engine. A full party wipe goes through
+        HandlePlayerBlackOut instead, which never touches wBattleResult — so
+        on that exit frame it still holds whatever value was last written by
+        an *earlier* battle (often 0/win), and would otherwise be read here
+        as a win for the very fight that just wiped the party out. Detect it
+        directly from wIsInBattle (0xD057), which pokered documents as being
+        set to -1 (0xFF) specifically for a lost/blacked-out battle, and let
+        it override wBattleResult.
         """
         self.last_flee_reward = 0.0
         self.last_flee_info = None
@@ -2344,6 +2750,7 @@ class Data:
         if not left_battle:
             return 0.0
 
+        blacked_out = self._just_blacked_out
         result = self.battle_result(self.pyboy.memory)
         # Fall back to the last known-good in-battle reading — see
         # reward_enemy_hp. The exit frame is exactly where a switch/faint
@@ -2363,7 +2770,10 @@ class Data:
         party_max = self.max_party_level(memory)
 
         difficulty_scale = 1.0
-        if result == 0:
+        if blacked_out:
+            reward = self.battle_lost_penalty
+            kind = "blackout"
+        elif result == 0:
             # The active battler's level, not party_max — a weaker party
             # member fighting an appropriately-matched wild Pokemon (i.e.
             # deliberately leveling it) is a fair fight and should pay full
@@ -2393,6 +2803,7 @@ class Data:
         info = {
             "kind": kind,
             "battle_result": result,
+            "blacked_out": blacked_out,
             "enemy_level": enemy_lv,
             "active_level": active_lv,
             "party_levels": party_levels,
