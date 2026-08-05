@@ -392,6 +392,7 @@ class PokemonRedEnv(gym.Env):
             "goals_live_count": len(live_goals),
             "goals_peak_count": int(data._peak_live_goals),
             "goals_regressed": list(data._last_regressed),
+            "goals_regressed_hard": list(data._last_hard_regressed),
             "goals_cleared": sorted(data._cleared_goals),
             "menu_ticks": float(data.in_menu_ticks),
             "steps": self._step_count,

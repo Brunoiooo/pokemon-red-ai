@@ -198,7 +198,13 @@ class MilestoneCallback(BaseCallback):
             done = bool(dones[i]) if i < len(dones) else False
             if info.get("goal_success") or info.get("cleared_stage"):
                 self._ep_goal_hit[i] = True
-            if info.get("goals_regressed"):
+            # "hard" = a payout was actually clawed back (goal not yet
+            # curriculum-cleared). Plain "goals_regressed" also fires on
+            # every ordinary "left a map already cleared en route to the
+            # next stage" step, which is expected progress, not backsliding
+            # — using it here made goal_regression_rate read close to 1.0
+            # for essentially any episode that advanced past one stage.
+            if info.get("goals_regressed_hard"):
                 self._ep_regressed[i] = True
             peak = int(info.get("goals_peak_count", 0) or 0)
             if peak > self._ep_goals_peak[i]:
