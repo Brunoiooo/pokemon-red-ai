@@ -495,6 +495,11 @@ class Data:
     off_goal_milestone_scale: float = 0.1
     new_screen_reward: float = 0.1      # meso (new map)
     new_position_reward: float = 0.008  # micro (slightly lower to curb tile farming)
+    # Revisit taper: full credit stays a one-shot, but the drop to 0 no longer
+    # happens in a single step. Linear ramp-down over this many visits, so a
+    # necessary backtrack (e.g. retracing to a room's only exit) isn't an
+    # instant cliff from full bonus to the bare step penalty.
+    new_position_decay_visits: int = 4
     new_dialog_reward: float = 0.05     # meso — first enter of a (dialog_id, map)
     # Mid-dialog text farming was an exploit (post-rival Oak speech): tiny
     # +0.01 per screen kept the agent camping without leaving for Route 1.
@@ -504,13 +509,15 @@ class Data:
     # Win is mezzo (same scale as event); macro progress stays on event/badge.
     battle_won_reward: float = 2.0
     battle_lost_penalty: float = -1.0
-    # battle_won_reward and per-hit enemy-HP reward are both scaled by
-    # enemy_lv / active_player_lv (capped at 1.0) so stomping a far weaker
-    # wild Pokemon is no longer free farming (e.g. lvl-10 one-shotting a
-    # lvl-2 Pidgey paid the same +2 win bonus and +1.0 HP-fraction hit as
-    # a genuinely hard fight). Floor keeps some incentive for unavoidable
-    # trivial early-game encounters instead of zeroing them out entirely.
-    battle_difficulty_floor: float = 0.15
+    # battle_won_reward and per-hit enemy-HP reward are both scaled by a
+    # smoothstep (3r^2-2r^3, r=enemy_lv/active_player_lv clamped to [0,1]) so
+    # stomping a far weaker wild Pokemon is no longer free farming (e.g.
+    # lvl-10 one-shotting a lvl-2 Pidgey paid the same +2 win bonus and +1.0
+    # HP-fraction hit as a genuinely hard fight). Smoothstep is 0 at r=0, 1 at
+    # r=1, with zero slope at both ends — no hard floor/kink, it decays all
+    # the way to 0 as the level gap grows, and is C1-continuous into the
+    # r>=1 cap=1.0 branch. See _battle_difficulty_scale.
+    battle_difficulty_invalid_fallback: float = 0.05
     # Successful RUN: compare enemy vs max party level so a lvl-1 sacrificial
     # slot cannot fake a "smart flee" while stronger Pokémon sit in the back.
     flee_smart_reward: float = 0.4
@@ -1401,9 +1408,9 @@ class Data:
         pos = self.get_position()
         ticks_here = self.visited_positions.get(pos, 0)
         visit_count = self.position_visit_counts.get(pos, 0)
-        is_new_position = visit_count == 0
         waste_factor = min(ticks_here, self.max_useless_ticks) / self.max_useless_ticks
-        exploration_reward = self.new_position_reward if is_new_position else 0.0
+        decay = max(0.0, 1.0 - visit_count / self.new_position_decay_visits)
+        exploration_reward = self.new_position_reward * decay
         step_penalty = self.base_reward * (1.0 + waste_factor * 9.0)
         return exploration_reward + step_penalty
 
@@ -2711,19 +2718,22 @@ class Data:
         return max(levels) if levels else 0
 
     def _battle_difficulty_scale(self, enemy_lv: int, player_lv: int) -> float:
-        """enemy_lv / player_lv, capped at 1.0 and floored so a wildly
-        overleveled fight doesn't pay the same reward as a fair one. A
-        same-or-tougher opponent (enemy_lv >= player_lv) pays full credit.
+        """Smoothstep(enemy_lv / player_lv) — a same-or-tougher opponent
+        (ratio >= 1) pays full credit; below that the reward eases down
+        smoothly to 0 as the level gap grows, instead of a hard linear ramp
+        with an artificial floor. 3r^2-2r^3 has zero slope at both r=0 and
+        r=1, so there is no kink anywhere, including the seam into the
+        ratio>=1 cap=1.0 branch.
 
-        Unreadable/invalid levels (<=0) fall back to the floor, not 1.0 —
-        this is an anti-farming discount, so a bad read must never silently
-        grant full credit (that's exactly the failure mode that let the
-        exploit through undetected).
+        Unreadable/invalid levels (<=0) fall back to a small constant, not
+        1.0 — this is an anti-farming discount, so a bad read must never
+        silently grant full credit (that's exactly the failure mode that let
+        the exploit through undetected).
         """
         if player_lv <= 0 or enemy_lv <= 0:
-            return self.battle_difficulty_floor
-        ratio = enemy_lv / player_lv
-        return max(self.battle_difficulty_floor, min(1.0, ratio))
+            return self.battle_difficulty_invalid_fallback
+        r = min(1.0, enemy_lv / player_lv)
+        return 3 * r**2 - 2 * r**3
 
     def reward_battle_exit(self, memory: bytes) -> float:
         """Reward battle outcome on battle→overworld transition (wBattleResult).

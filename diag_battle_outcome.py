@@ -30,6 +30,12 @@ def make_data(mem: FakeMem) -> Data:
     return Data(pyboy=pyboy, files_lock=RLock())
 
 
+def expect_difficulty_scale(enemy_lv: int, player_lv: int) -> float:
+    """Mirrors Data._battle_difficulty_scale's smoothstep(enemy_lv/player_lv)."""
+    r = min(1.0, enemy_lv / player_lv)
+    return 3 * r**2 - 2 * r**3
+
+
 def set_party(mem: FakeMem, levels: list[int]) -> None:
     mem[ADDR_PARTY_COUNT] = len(levels)
     for i, lv in enumerate(levels):
@@ -124,15 +130,15 @@ def run_mock_cases() -> None:
 
     # Win against a much weaker opponent, fought by the strong mon itself
     # (active == party_max == 10 vs enemy 2) → discounted by
-    # enemy_lv/active_lv (floored at battle_difficulty_floor). This is the
-    # reported exploit: a lvl-10 one-shotting a lvl-2 wild Pokemon.
+    # smoothstep(enemy_lv/active_lv). This is the reported exploit: a
+    # lvl-10 one-shotting a lvl-2 wild Pokemon.
     prev = build_prev(
         in_battle=True, enemy_level=2, party_levels=[10], active_level=10
     )
     curr = build_curr(battle_result=0)
     data = make_data(curr)
     exit_r = data.reward_battle_exit(bytes(prev))
-    expect_scale = max(data.battle_difficulty_floor, 2 / 10)
+    expect_scale = expect_difficulty_scale(2, 10)
     print(
         f"WIN    CF0B=0 (active lvl10 vs lvl2): exit={exit_r} "
         f"info={data.last_battle_exit_info}"
@@ -307,7 +313,7 @@ def run_enemy_level_cache_case() -> None:
         return mem
 
     data = make_data(mem_with(2, 100, 100, 10))
-    expect_scale = max(data.battle_difficulty_floor, 2 / 10)
+    expect_scale = expect_difficulty_scale(2, 10)
 
     # Step 1: good frame — enemy_lv=2 readable, real damage dealt (100->60).
     prev1 = mem_with(2, 100, 100, 10)

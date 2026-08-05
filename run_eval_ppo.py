@@ -23,6 +23,23 @@ def _sane(value, lo, hi):
     return lo <= value <= hi
 
 
+def _mode_flags(emu) -> str:
+    """Same mode string as debug_play.py's _mode_flags, for eval -v/-vv parity."""
+    mem = emu.pyboy.memory
+    flags = []
+    if emu.data.is_cutscene_locked(mem):
+        flags.append("cutscene")
+    if emu.data.is_world(mem):
+        flags.append("world")
+    if emu.data.is_dialog(mem):
+        flags.append("dialog")
+    if emu.data.is_menu(mem):
+        flags.append("menu")
+    if emu.data.is_battle(mem):
+        flags.append("battle")
+    return "+".join(flags) or "?"
+
+
 def _mon_line(label, lv, hp, maxhp, atk, dfn, spd, spc):
     """One battler's stats + a plausibility flag (Gen1 ranges: lv 1-100,
 
@@ -235,7 +252,7 @@ def run(args):
                 aname = ACTION_NAMES[action_i] if 0 <= action_i < len(ACTION_NAMES) else str(action_i)
                 print(
                     f"  [step] {steps:4d} act={aname:6s} rew={reward:+.4f} "
-                    f"total={total:7.2f} map={map_id} "
+                    f"total={total:7.2f} map={map_id} mode={_mode_flags(raw.emu):9s} "
                     f"loop={int(bool(info.get('loop_flag')))} "
                     f"in_goal_map={int(in_allowed_map)} "
                     f"ms={info.get('milestone')}"
