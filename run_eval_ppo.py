@@ -57,6 +57,7 @@ def run(args):
         resolve_stage_name,
     )
     from env.pokemon_red_env import PokemonRedEnv
+    from pokemon.Data import GOAL_ALLOWED_MAPS
 
     model_path = resolve_model_path(getattr(args, "model", None))
     auto = bool(getattr(args, "auto_curriculum", True))
@@ -125,6 +126,13 @@ def run(args):
         last_milestone = info.get("milestone")
         maps_seen: list[int] = [int(last_map)] if last_map is not None else []
         loop_hits = 0
+        blocked_printed: set[str] = set()
+        # -v: off-goal-map tracking (mirrors reward_off_goal_camp's
+        # GOAL_ALLOWED_MAPS check in Data.py) — surfaces whether the agent is
+        # camping outside the current goal's critical path, not just whether
+        # loop_flag fired (which also covers spatial/menu loops on-path).
+        off_path_steps = 0
+        last_in_allowed_map: bool | None = None
         if verbose:
             print(
                 f"\n=== Episode {ep + 1}/{args.episodes} start "
@@ -159,6 +167,65 @@ def run(args):
                         f"total={total:.2f}"
                     )
                 last_milestone = milestone
+
+            # -v: are we inside GOAL_ALLOWED_MAPS for the *current* goal? Only
+            # print on a status flip (like [map]/[milestone]) so a long camp
+            # doesn't spam a line per step; the [step] line below still shows
+            # the instantaneous flag on every sampled/printed step.
+            cur_goal = info.get("goal")
+            allowed_maps = GOAL_ALLOWED_MAPS.get(cur_goal)
+            in_allowed_map = allowed_maps is None or (
+                map_id is not None and int(map_id) in allowed_maps
+            )
+            if not in_allowed_map:
+                off_path_steps += 1
+            if verbose and in_allowed_map != last_in_allowed_map:
+                status = "on-path" if in_allowed_map else "OFF-PATH"
+                print(
+                    f"  [goal-map] step={steps:4d} map={map_id} goal={cur_goal} "
+                    f"-> {status} (off_path_steps={off_path_steps})"
+                )
+            last_in_allowed_map = in_allowed_map
+
+            # -v/-vv: goal-payout bookkeeping — proves the regress/re-pay farm
+            # loop is closed (paid once, then blocked on re-entry) and shows
+            # any regression clawback (see reward_goal_regression).
+            if verbose >= 1:
+                for name, payout in data.last_milestone_payouts:
+                    print(
+                        f"  [goal-pay] step={steps:4d} {name} +{payout:.3f} total={total:.2f}"
+                    )
+                for name in data.last_milestone_blocked:
+                    # Fires every step the condition stays true (e.g. standing
+                    # on the map) — print once per name per episode, not a
+                    # per-step flood.
+                    if name in blocked_printed:
+                        continue
+                    blocked_printed.add(name)
+                    print(
+                        f"  [goal-blocked] step={steps:4d} {name} "
+                        f"(already regressed-and-spent this episode, no re-pay)"
+                    )
+                # "hard" = a payout was actually clawed back (goal wasn't
+                # yet curriculum-cleared). Plain goals_regressed also lists
+                # goals that just fell out of the live-set because the map
+                # was already legitimately cleared and left behind — that's
+                # expected curriculum progress, not a real regression, so
+                # it's shown separately (and only at -vv) to avoid implying
+                # a clawback that didn't happen.
+                hard = info.get("goals_regressed_hard")
+                if hard:
+                    print(
+                        f"  [goal-regress] step={steps:4d} {hard} total={total:.2f}"
+                    )
+                if verbose >= 2:
+                    regressed = info.get("goals_regressed") or []
+                    soft = [n for n in regressed if n not in (hard or [])]
+                    if soft:
+                        print(
+                            f"    [goal-live-lost] step={steps:4d} {soft} "
+                            f"(already cleared, no clawback — just left the map)"
+                        )
             # Level 1: sampled (every 50 steps, or a notable reward).
             # Level 2 (-vv): every single step, i.e. every button press.
             show_step = verbose >= 2 or (
@@ -170,6 +237,7 @@ def run(args):
                     f"  [step] {steps:4d} act={aname:6s} rew={reward:+.4f} "
                     f"total={total:7.2f} map={map_id} "
                     f"loop={int(bool(info.get('loop_flag')))} "
+                    f"in_goal_map={int(in_allowed_map)} "
                     f"ms={info.get('milestone')}"
                 )
 
@@ -209,17 +277,32 @@ def run(args):
                     )
                     print(f"    [stats] {enemy_line} | {active_line}")
 
-            # -v/-vv: battle outcome (win/lose/flee) and the levels it was judged against.
+            # -v/-vv: battle outcome (win/lose/flee/blackout) and the levels it
+            # was judged against. "blackout" = full party wipe, detected from
+            # wIsInBattle=0xFF directly (see reward_battle_exit) instead of
+            # trusting wBattleResult, which HandlePlayerBlackOut never writes
+            # — before this fix a wipe could misread as a stale "win".
             exit_info = data.last_battle_exit_info
             if verbose >= 1 and exit_info:
                 print(
-                    f"  [battle] step={steps:4d} {exit_info['kind']:5s} "
+                    f"  [battle] step={steps:4d} {exit_info['kind']:8s} "
+                    f"blacked_out={int(bool(exit_info.get('blacked_out')))} "
                     f"enemy_lv={exit_info['enemy_level']} "
                     f"active_lv={exit_info.get('active_level')} "
                     f"party_max={exit_info['party_max']} "
                     f"scale={exit_info.get('difficulty_scale')} "
                     f"reward={exit_info['reward']:+.3f}"
                 )
+                if exit_info.get("blacked_out"):
+                    # Proves the free warp-heal (HP/status/PP -> full) isn't
+                    # being paid: reward above should be ~battle_lost_penalty,
+                    # not offset by a same-step [+hp-heal] near +1.0.
+                    mem = raw.emu.pyboy.memory
+                    print(
+                        f"    [post-blackout hp] "
+                        f"{data.pokemon_current_hp(mem)}/{data.pokemon_max_hp(mem)} "
+                        f"(free heal — excluded from reward_core this step)"
+                    )
 
             if info.get("goal_success"):
                 cleared = info.get("cleared_stage") or stage
@@ -249,6 +332,7 @@ def run(args):
             f"milestone={info.get('milestone')} "
             f"stage={info.get('stage', stage)} cleared={stages_cleared or '-'} "
             f"loop={info.get('loop_flag')} loop_hits={loop_hits} "
+            f"off_path_steps={off_path_steps} "
             f"maps={maps_seen} "
             f"term={info.get('terminated')} trunc={info.get('truncated')}"
         )
@@ -291,7 +375,11 @@ def main():
     p.add_argument("--gui", action="store_true")
     p.add_argument("--cpu", action="store_true")
     p.add_argument("--stochastic", action="store_true")
-    p.add_argument("--verbose", "-v", action="store_true")
+    p.add_argument(
+        "--verbose", "-v", action="count", default=0,
+        help="-v: sampled step log + goal/off-path/battle events. "
+             "-vv: every step, plus per-hit damage debug.",
+    )
     run(p.parse_args())
 
 
