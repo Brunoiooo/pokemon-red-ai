@@ -30,6 +30,11 @@ Two color metrics (toggle with 'r'), independent of the view mode:
     has no world position, so farming loops (grind a tile for repeat battle
     reward, spam a menu for event-flag reward, etc.) show up as a hot tile
     here even when the ticks view looks unremarkable.
+
+Per-tile numeric value labels (toggle with 'v'), independent of view mode
+and metric: prints the exact avg-ticks or avg-reward number on top of each
+cell, for reading precise values instead of eyeballing color. Auto-hidden
+above _MAX_VALUE_LABELS cells since that many text artists stalls redraws.
 """
 from __future__ import annotations
 
@@ -46,6 +51,9 @@ _DIRS = ("up", "down", "left", "right")
 # Cells need at least this many recorded steps before an arrow is drawn —
 # a single pass-through is noise, not a "most common direction".
 _MIN_DIRECTION_SAMPLES = 3
+# Above this many cells, per-tile value labels are skipped — matplotlib text
+# artists are expensive enough that a big combined view would stall redraws.
+_MAX_VALUE_LABELS = 800
 # A (map_a, map_b) pair needs at least this many crossing samples, with the
 # modal offset winning at least this fraction of them, before it's trusted as
 # a real connection for the combined view. A bare >=0.5 majority let a dead
@@ -436,6 +444,7 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
         matplotlib.use("TkAgg")
     except Exception:
         pass
+    import matplotlib.patheffects as pe
     import matplotlib.pyplot as plt
 
     map_names = _map_name_lookup()
@@ -461,6 +470,7 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
     ax.set_ylabel("y")
     quiv = {"artist": None}
     labels: list = []
+    value_texts: list = []
 
     state = {
         "map_id": None,
@@ -468,6 +478,7 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
         "mode": "single",
         "stage": _ALL_STAGES,
         "metric": "ticks",
+        "show_values": False,
     }
 
     def current_agg() -> RollingHeatmapAggregator:
@@ -494,6 +505,10 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
             return
         if event.key == "r":
             state["metric"] = "reward" if state["metric"] == "ticks" else "ticks"
+            redraw()
+            return
+        if event.key == "v":
+            state["show_values"] = not state["show_values"]
             redraw()
             return
         if state["mode"] != "single":
@@ -560,6 +575,9 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
         for t in labels:
             t.remove()
         labels.clear()
+        for t in value_texts:
+            t.remove()
+        value_texts.clear()
 
     def _apply_metric_style(grid) -> None:
         """Colormap/scale/colorbar-label for the active metric. Reward is
@@ -592,6 +610,33 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
             angles="xy", scale_units="xy", scale=1.3, width=0.006,
         )
 
+    def _draw_value_labels(grid, x0: int, y0: int) -> None:
+        """Overlay the per-tile numeric value (avg ticks or avg reward, per
+        the active metric) on top of each non-NaN cell. Skipped above
+        _MAX_VALUE_LABELS cells — text artists are too slow at that scale to
+        keep the live view responsive."""
+        ax.set_xlabel("x")
+        if not state["show_values"]:
+            return
+        ys, xs = np.where(~np.isnan(grid))
+        if xs.size == 0:
+            return
+        if xs.size > _MAX_VALUE_LABELS:
+            ax.set_xlabel(
+                f"x  (values hidden: {xs.size} cells > {_MAX_VALUE_LABELS} cap)"
+            )
+            return
+        fmt = "{:+.2f}" if state["metric"] == "reward" else "{:.0f}"
+        stroke = [pe.withStroke(linewidth=1.5, foreground="black")]
+        for iy, ix in zip(ys, xs):
+            value_texts.append(
+                ax.text(
+                    x0 + ix, y0 + iy, fmt.format(float(grid[iy, ix])),
+                    color="white", fontsize=6, ha="center", va="center",
+                    path_effects=stroke, zorder=5,
+                )
+            )
+
     def redraw_single() -> None:
         agg = current_agg()
         maps = agg.maps()
@@ -613,6 +658,7 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
 
         _clear_overlays()
         _draw_quiver(agg.direction_grid(state["map_id"]))
+        _draw_value_labels(grid, x0, y0)
 
         name = name_of(state["map_id"])
         n_runs = agg.run_count.get(state["map_id"], 0)
@@ -621,7 +667,8 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
             f"[{state['stage']}] {name} (id={state['map_id']})  [{idx}/{len(maps)}]  "
             f"metric={state['metric']}\n"
             f"{n_runs} runs - {agg.total_frames:,} frames in window\n"
-            f"<-/-> switch map, c: combined view, r: toggle ticks/reward"
+            f"<-/-> switch map, c: combined view, r: toggle ticks/reward, "
+            f"v: toggle value labels ({'on' if state['show_values'] else 'off'})"
         )
 
     def redraw_combined() -> None:
@@ -640,6 +687,7 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
 
         _clear_overlays()
         _draw_quiver(agg._direction_arrays(offsets))
+        _draw_value_labels(grid, x0, y0)
         for map_id in connected:
             gx0, gy0 = offsets[map_id]
             cells = agg.sum_ticks.get(map_id)
@@ -665,7 +713,8 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
             f"[{state['stage']}] Combined view: {len(connected)} maps stitched  "
             f"metric={state['metric']}\n"
             f"{agg.total_frames:,} frames in window{unconnected_s}\n"
-            f"c: single-map view, r: toggle ticks/reward "
+            f"c: single-map view, r: toggle ticks/reward, "
+            f"v: toggle value labels ({'on' if state['show_values'] else 'off'}) "
             f"(best-effort — connections are inferred, not authoritative)"
         )
 
