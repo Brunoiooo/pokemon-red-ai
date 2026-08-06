@@ -148,6 +148,10 @@ ACTION_NONE = 8
 INTERACT_ACTIONS = frozenset({ACTION_A, ACTION_B})
 
 # Curriculum / episode goals (map, event flags, badges).
+# Tutorial: withdraw an item from the player's own PC before ever leaving the
+# starting room, so the agent learns the mechanic exists instead of relying
+# on it being found by chance later (see reward_player_items/is_pc_withdrawal).
+GOAL_PC_TUTORIAL = "pc_tutorial"
 GOAL_LEFT_HOUSE = "left_house"
 # Stepping onto Route 1 before getting a starter auto-triggers Oak's
 # "it's dangerous" intercept — this fires as a dialog while map_id is still
@@ -383,6 +387,7 @@ _MAPS_MEWTWO = (
 _MAPS_ALL_BADGES = _MAPS_MEWTWO  # by now every badge-path map is covered
 
 GOAL_ALLOWED_MAPS: dict[str, frozenset[int]] = {
+    GOAL_PC_TUTORIAL: frozenset({MAP_REDS_HOUSE_1F}),
     GOAL_LEFT_HOUSE: _MAPS_LEFT_HOUSE,
     GOAL_ROUTE_1_ENTRY: _MAPS_ROUTE_1_ENTRY,
     GOAL_OAKS_LAB: _MAPS_OAKS_LAB,
@@ -435,6 +440,7 @@ REGRESSABLE_GOALS = frozenset(
 
 # Ordered early→late checklist for live progress counting / regression metrics.
 STORY_GOAL_ORDER = (
+    GOAL_PC_TUTORIAL,
     GOAL_LEFT_HOUSE,
     GOAL_ROUTE_1_ENTRY,
     GOAL_OAKS_LAB,
@@ -481,6 +487,8 @@ class Data:
     # Hierarchical rewards: macro >> meso >> micro (PokeRL / Whidden style).
     badge_reward: float = 10.0          # macro
     event_reward: float = 2.0           # macro
+    # Tutorial milestone — first PC item withdrawal, paid before left_house.
+    pc_tutorial_reward: float = 3.0     # macro early milestone
     left_house_reward: float = 5.0      # macro early milestone
     # Oak's "dangerous" intercept — reaching Route 1 before the starter.
     # Distinct from route1_reward below (the later, post-starter return trip)
@@ -613,6 +621,13 @@ class Data:
     map_transitions: dict[tuple[int, int], dict[tuple[int, int], int]] = field(
         default_factory=dict
     )
+    # Reward earned per (x, y, map_id) tile, for --heatmap's reward-density
+    # overlay (spotting farming/exploit hotspots, not just time-spent).
+    # Attributed to the last known *world* position even while a battle/
+    # dialog/menu is on screen, so e.g. a battle-won reward triggered by
+    # walking onto a grass tile lands on that tile, not nowhere.
+    reward_sums: dict[tuple[int, int, int], float] = field(default_factory=dict)
+    _last_heatmap_pos: tuple[int, int, int] | None = None
 
     recent_actions: deque = field(default_factory=lambda: deque(maxlen=20))
     recent_positions: deque = field(default_factory=lambda: deque(maxlen=16))
@@ -648,6 +663,9 @@ class Data:
     # free Pokemon-Center-style heal) and reward_battle_exit (classify the
     # exit correctly instead of trusting wBattleResult).
     _just_blacked_out: bool = False
+    # One-shot flag: set the first time the bag gains what the PC box lost
+    # (see reward_player_items). Backs GOAL_PC_TUTORIAL / is_goal_satisfied.
+    _pc_withdrawal_done: bool = False
     _start_map_id: int | None = None
     # Distinct dialog screen hashes seen for the current dialog_id. Blink frames
     # revisit old hashes; only a *new* hash counts as text progress.
@@ -734,6 +752,8 @@ class Data:
         self.position_visit_counts = {}
         self.direction_counts = {}
         self.map_transitions = {}
+        self.reward_sums = {}
+        self._last_heatmap_pos = None
         self.visited_maps = set()
         self.visited_dialogs = {}
         self.recent_actions.clear()
@@ -749,6 +769,7 @@ class Data:
         self._last_regressed = []
         self._last_hard_regressed = []
         self._peak_live_goals = 0
+        self._pc_withdrawal_done = False
         self._dialog_screens_seen = set()
         self._completed_dialogs = set()
         self._dialog_reopen_counts = {}
@@ -780,6 +801,19 @@ class Data:
     def count(self, reward: float, action: int, memory: bytes | None = None, duration: int = 16):
         self.visited_pokedex_own = self.pokedex_own(self.pyboy.memory)
         self.visited_pokedex_seen = self.pokedex_seen(self.pyboy.memory)
+
+        # --heatmap reward-density overlay: attribute this step's reward to
+        # the last known world tile, not just world-state steps — a battle
+        # won/lost reward (often the largest single payout) is earned while
+        # is_world() is False the whole fight, but should still land on the
+        # grass/trainer tile that started it, not vanish from the overlay.
+        if self.collect_heatmap:
+            if self.is_world(self.pyboy.memory):
+                self._last_heatmap_pos = self.get_position()
+            if self._last_heatmap_pos is not None:
+                self.reward_sums[self._last_heatmap_pos] = (
+                    self.reward_sums.get(self._last_heatmap_pos, 0.0) + reward
+                )
 
         # Cutscenes drive the player; do not pollute action-loop history.
         if not self.is_cutscene_locked(self.pyboy.memory):
@@ -1258,6 +1292,11 @@ class Data:
 
         checks = [
             (
+                GOAL_PC_TUTORIAL,
+                self._pc_withdrawal_done,
+                self.pc_tutorial_reward,
+            ),
+            (
                 GOAL_LEFT_HOUSE,
                 bool(self._start_map_id in HOUSE_MAPS and mid not in HOUSE_MAPS),
                 self.left_house_reward,
@@ -1540,10 +1579,21 @@ class Data:
         return reward
 
     def reward_player_items(self, memory: bytes):
-        return (
-            sum(self.items_quantities(self.pyboy.memory))
-            - sum(self.items_quantities(memory))
-        ) * self.new_item_reward
+        bag_delta = sum(self.items_quantities(self.pyboy.memory)) - sum(
+            self.items_quantities(memory)
+        )
+        stored_delta = sum(self.stored_items_quantities(self.pyboy.memory)) - sum(
+            self.stored_items_quantities(memory)
+        )
+        if bag_delta > 0 and stored_delta < 0:
+            # A genuine PC withdrawal — bag gained what the box lost.
+            self._pc_withdrawal_done = True
+        elif bag_delta < 0 and stored_delta <= 0:
+            # A bag decrease not matched by a PC increase is plain usage/selling,
+            # not a deposit — don't punish the agent for using its items.
+            return 0.0
+
+        return bag_delta * self.new_item_reward
 
     def reward_stored_items(self, memory: bytes):
         return (
@@ -1725,6 +1775,8 @@ class Data:
         mid = self.map_id(mem)
         badges = self.badges(mem)
 
+        if goal == GOAL_PC_TUTORIAL:
+            return self._pc_withdrawal_done
         if goal == GOAL_LEFT_HOUSE:
             return mid not in HOUSE_MAPS
         if goal == GOAL_ROUTE_1_ENTRY:
@@ -1805,10 +1857,24 @@ class Data:
             and self.max_useless_ticks
             <= self.visited_positions.get(self.get_position(), 0)
         )
+        # Tutorial map lock: GOAL_ALLOWED_MAPS's off_goal_camp_penalty
+        # (reward_anti_loop #4) is a soft, delayed nudge — it only fires
+        # after >2 revisits to the same off-map tile — and reward_map even
+        # pays a small novelty bonus for stepping into a brand-new map. That
+        # doesn't stop a fresh/undertrained policy from wandering out of the
+        # PC's room instead of finding it, so fail the episode outright the
+        # instant it leaves the one allowed map.
+        left_tutorial_room = (
+            self.goal == GOAL_PC_TUTORIAL
+            and not self.is_cutscene_locked(self.pyboy.memory)
+            and self.map_id(self.pyboy.memory)
+            not in GOAL_ALLOWED_MAPS[GOAL_PC_TUTORIAL]
+        )
         return (
             True
             if stuck_tile
             or stuck_dialog
+            or left_tutorial_room
             or self._dialog_reopen_truncate
             or self.loop_streak >= self.max_loop_streak
             or self.max_useless_battle_ticks <= self.in_battle_ticks
@@ -1850,6 +1916,7 @@ class Data:
             GOAL_OAKS_LAB,
             GOAL_ROUTE_1_ENTRY,
             GOAL_LEFT_HOUSE,
+            GOAL_PC_TUTORIAL,
         )
         for g in priority:
             if self.is_goal_satisfied(g):

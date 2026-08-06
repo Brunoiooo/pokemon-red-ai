@@ -183,6 +183,7 @@ def run(args):
                     info["heatmap_positions"],
                     info.get("heatmap_directions"),
                     info.get("heatmap_transitions"),
+                    info.get("heatmap_rewards"),
                     info.get("heatmap_steps") or 0,
                     info.get("stage", stage),
                 )
@@ -396,7 +397,7 @@ def main():
         help="Override max steps (default: per-stage curriculum limit)",
     )
     p.add_argument("--frame-skip", type=int, default=16)
-    p.add_argument("--stage", default="stage_left_house", help="Starting curriculum stage")
+    p.add_argument("--stage", default="stage_pc_tutorial", help="Starting curriculum stage")
     p.add_argument(
         "--goal", default="left_house",
         help="Fixed goal when --no-auto-curriculum",

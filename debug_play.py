@@ -156,7 +156,7 @@ def print_help() -> None:
 
 
 def _resolve_stage_goal(args: argparse.Namespace) -> tuple[str, str]:
-    """Match train_ppo defaults: stage_left_house → left_house."""
+    """Match train_ppo defaults: stage_pc_tutorial → pc_tutorial."""
     if args.goal:
         goal = str(args.goal)
         stage = args.stage or stage_for_goal(goal)
@@ -165,7 +165,7 @@ def _resolve_stage_goal(args: argparse.Namespace) -> tuple[str, str]:
     if stage is None and args.from_checkpoint in CURRICULUM:
         stage = args.from_checkpoint
     if stage is None:
-        stage = "stage_left_house"
+        stage = "stage_pc_tutorial"
     return stage, get_goal_for_stage(stage) or GOAL_LEFT_HOUSE
 
 
@@ -175,6 +175,8 @@ def _clear_visits(data) -> None:
     data.position_visit_counts.clear()
     data.direction_counts.clear()
     data.map_transitions.clear()
+    data.reward_sums.clear()
+    data._last_heatmap_pos = None
     data.recent_positions.clear()
     data.recent_actions.clear()
     data.loop_flag = False
@@ -498,7 +500,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--goal",
         default=None,
-        help="Active curriculum goal (default: left_house, same as train)",
+        help="Active curriculum goal (default: pc_tutorial, same as train)",
     )
     p.add_argument(
         "--stage",

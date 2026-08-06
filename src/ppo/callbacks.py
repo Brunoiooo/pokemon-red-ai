@@ -32,6 +32,7 @@ class HeatmapCallback(BaseCallback):
                     positions,
                     info.get("heatmap_directions"),
                     info.get("heatmap_transitions"),
+                    info.get("heatmap_rewards"),
                     info.get("heatmap_steps") or 0,
                     info.get("stage"),
                 )
@@ -49,7 +50,7 @@ class MilestoneCallback(BaseCallback):
         self,
         window: int = 100,
         auto_curriculum: bool = True,
-        start_stage: str = "stage_left_house",
+        start_stage: str = "stage_pc_tutorial",
         success_threshold: float | None = None,
         min_episodes: int | None = None,
         check_every: int | None = None,

@@ -26,6 +26,8 @@ def run(args):
     from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecMonitor
 
     from curriculum_config import (
+        GOAL_INDEX,
+        GOAL_ORDER,
         get_curriculum_saves,
         get_goal_for_stage,
         get_stage_max_steps,
@@ -35,6 +37,10 @@ def run(args):
     from ppo.callbacks import MilestoneCallback
     from ppo.checkpoints import atomic_model_save, resolve_model_path
     from ppo.features import PokemonFeaturesExtractor
+    from ppo.migrate import migrate_state_dict
+
+    if args.resume is not None and args.migrate is not None:
+        raise SystemExit("Pass either --resume or --migrate, not both.")
 
     if args.cpu:
         os.environ["CUDA_VISIBLE_DEVICES"] = ""
@@ -111,7 +117,7 @@ def run(args):
                 auto_advance=args.auto_curriculum,
                 worker_rank=rank,
                 n_workers=args.workers,
-                collect_heatmap=args.heatmap,
+                collect_heatmap=args.heatmap and rank == 0,
             )
             env.reset(seed=args.seed + rank)
             return env
@@ -178,6 +184,28 @@ def run(args):
             verbose=1,
             seed=args.seed,
         )
+        if args.migrate is not None:
+            # A checkpoint from before a curriculum goal was added won't
+            # load via PPO.load() — its "vector" observation width no
+            # longer matches (goal one-hot grew). Build a fresh model
+            # against the *current* env/spaces above, then transplant every
+            # weight that still matches shape-for-shape, remapping just the
+            # goal one-hot columns by name (see ppo/migrate.py).
+            migrate_arg = None if args.migrate in ("", "AUTO") else args.migrate
+            migrate_path = resolve_model_path(migrate_arg, prefer_latest=True)
+            print(f"Migrating weights from {migrate_path}")
+            from stable_baselines3.common.save_util import load_from_zip_file
+
+            _, old_params, _ = load_from_zip_file(
+                str(migrate_path), device=device, load_data=False
+            )
+            merged = migrate_state_dict(
+                old_params["policy"],
+                model.policy.state_dict(),
+                GOAL_ORDER,
+                GOAL_INDEX,
+            )
+            model.policy.load_state_dict(merged)
 
     checkpoint_cb = CheckpointCallback(
         save_freq=max(args.checkpoint_freq // max(args.workers, 1), 1),
@@ -267,7 +295,7 @@ def build_argparser(parent=None):
     p.add_argument("--ent-coef", type=float, default=0.05)
     p.add_argument("--frame-skip", type=int, default=16)
     p.add_argument("--max-steps", type=int, default=None)
-    p.add_argument("--stage", default="stage_left_house",
+    p.add_argument("--stage", default="stage_pc_tutorial",
                    help="Starting curriculum stage (see curriculum_config.STAGE_ORDER)")
     p.add_argument("--list-stages", action="store_true",
                    help="List all curriculum stages (id, goal, max_steps, save) and exit")
@@ -284,6 +312,18 @@ def build_argparser(parent=None):
         const="AUTO",
         default=None,
         help="Resume from .zip; omit path to auto-pick newest ppo_latest.zip (else best)",
+    )
+    p.add_argument(
+        "--migrate",
+        nargs="?",
+        const="AUTO",
+        default=None,
+        help="Like --resume, but for a checkpoint whose 'vector' observation "
+             "width no longer matches (e.g. after a new curriculum goal grew "
+             "GOAL_ORDER). Builds a fresh model and transplants every "
+             "shape-matching weight, remapping the goal one-hot columns by "
+             "name (see ppo/migrate.py). New goal(s) start at random init — "
+             "expect a short readjustment before training looks normal again.",
     )
     p.add_argument("--checkpoint-freq", type=int, default=100_000)
     p.add_argument("--eval-freq", type=int, default=50_000)

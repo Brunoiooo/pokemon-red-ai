@@ -40,6 +40,7 @@ from pokemon.Data import (
     GOAL_MOLTRES,
     GOAL_OAKS_LAB,
     GOAL_OAKS_PARCEL,
+    GOAL_PC_TUTORIAL,
     GOAL_ROUTE_1,
     GOAL_ROUTE_1_ENTRY,
     GOAL_SNORLAX,
@@ -82,6 +83,7 @@ def _stage(
 
 # Recommended soft order. Flags/badges already true are skipped at advance time.
 STAGE_ORDER = [
+    "stage_pc_tutorial",
     "stage_left_house",
     "stage_route1_entry",
     "stage_oaks_lab",
@@ -116,6 +118,11 @@ STAGE_ORDER = [
 ]
 
 CURRICULUM: dict[str, dict] = {
+    "stage_pc_tutorial": _stage(
+        GOAL_PC_TUTORIAL,
+        max_steps=1024,
+        description="Tutorial: withdraw an item from the PC before leaving the room",
+    ),
     "stage_left_house": _stage(
         GOAL_LEFT_HOUSE, max_steps=2048, description="Leave Red's house"
     ),
