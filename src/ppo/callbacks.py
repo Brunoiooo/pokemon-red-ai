@@ -8,6 +8,36 @@ from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.vec_env import VecEnv
 
 
+class HeatmapCallback(BaseCallback):
+    """Forward per-run (map,x,y)->ticks snapshots to the live --heatmap window.
+
+    Envs only populate info["heatmap_positions"] when collect_heatmap=True,
+    so this is a no-op cost-wise when the flag is off.
+    """
+
+    def __init__(self, queue, verbose: int = 0):
+        super().__init__(verbose)
+        self.queue = queue
+
+    def _on_step(self) -> bool:
+        from utils.PositionHeatmap import push_episode
+
+        for info in self.locals.get("infos", []):
+            if not info:
+                continue
+            positions = info.get("heatmap_positions")
+            if positions:
+                push_episode(
+                    self.queue,
+                    positions,
+                    info.get("heatmap_directions"),
+                    info.get("heatmap_transitions"),
+                    info.get("heatmap_steps") or 0,
+                    info.get("stage"),
+                )
+        return True
+
+
 class MilestoneCallback(BaseCallback):
     """Track episode milestone hit-rate and loop episode rate.
 

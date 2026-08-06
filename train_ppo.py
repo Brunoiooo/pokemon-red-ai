@@ -88,7 +88,14 @@ def run(args):
     print(f"Total steps:{args.timesteps:,}")
     print(f"GUI:        {'ON' if args.gui else 'OFF'}")
     print(f"Auto curr.: {'ON' if args.auto_curriculum else 'OFF'}")
+    print(f"Heatmap:    {'ON (' + format(args.heatmap_frames, ',') + ' frame window)' if args.heatmap else 'OFF'}")
     print("=" * 70)
+
+    heatmap_proc = heatmap_queue = None
+    if args.heatmap:
+        from utils.PositionHeatmap import start_heatmap_process
+
+        heatmap_proc, heatmap_queue = start_heatmap_process(args.heatmap_frames)
 
     def _make(rank: int):
         def _thunk():
@@ -104,6 +111,7 @@ def run(args):
                 auto_advance=args.auto_curriculum,
                 worker_rank=rank,
                 n_workers=args.workers,
+                collect_heatmap=args.heatmap,
             )
             env.reset(seed=args.seed + rank)
             return env
@@ -195,10 +203,16 @@ def run(args):
         eval_env=eval_env,
     )
 
+    callbacks = [checkpoint_cb, eval_cb, milestone_cb]
+    if args.heatmap:
+        from ppo.callbacks import HeatmapCallback
+
+        callbacks.append(HeatmapCallback(heatmap_queue))
+
     try:
         model.learn(
             total_timesteps=args.timesteps,
-            callback=CallbackList([checkpoint_cb, eval_cb, milestone_cb]),
+            callback=CallbackList(callbacks),
             progress_bar=not args.no_progress,
         )
     except KeyboardInterrupt:
@@ -209,6 +223,10 @@ def run(args):
         print(f"Saved: {out}")
         train_env.close()
         eval_env.close()
+        if heatmap_proc is not None:
+            from utils.PositionHeatmap import stop_heatmap_process
+
+            stop_heatmap_process(heatmap_proc, heatmap_queue)
 
 
 def print_stage_list() -> None:
@@ -274,6 +292,15 @@ def build_argparser(parent=None):
     p.add_argument("--cpu", action="store_true")
     p.add_argument("--gui", action="store_true")
     p.add_argument("--verbose", "-v", action="store_true")
+    p.add_argument(
+        "--heatmap", action="store_true",
+        help="Open a live position-heatmap window (avg ticks/run per map tile, "
+             "rolling window of --heatmap-frames). <-/-> switches map.",
+    )
+    p.add_argument(
+        "--heatmap-frames", type=int, default=300_000,
+        help="Rolling window size in frames, pooled across all runs (default: 300000)",
+    )
     return p
 
 

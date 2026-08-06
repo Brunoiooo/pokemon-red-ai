@@ -90,6 +90,15 @@ p_train.add_argument("--checkpoint-freq", type=int, default=100_000)
 p_train.add_argument("--eval-freq", type=int, default=150_000)
 p_train.add_argument("--eval-episodes", type=int, default=3)
 p_train.add_argument("--no-progress", action="store_true")
+p_train.add_argument(
+    "--heatmap", action="store_true",
+    help="Open a live position-heatmap window (avg ticks/run per map tile, "
+         "rolling window of --heatmap-frames). <-/-> switches map.",
+)
+p_train.add_argument(
+    "--heatmap-frames", type=int, default=300_000,
+    help="Rolling window size in frames, pooled across all runs (default: 300000)",
+)
 
 # ---------------------------------------------------------------------------
 # train-dqn (legacy)
@@ -140,6 +149,15 @@ p_eval.add_argument(
     default=False,
     help="On goal success, overwrite saves/<new_stage>/checkpoint.state with "
          "the reached state (opt-in; off by default)",
+)
+p_eval.add_argument(
+    "--heatmap", action="store_true",
+    help="Open a live position-heatmap window (avg ticks/run per map tile, "
+         "rolling window of --heatmap-frames). <-/-> switches map.",
+)
+p_eval.add_argument(
+    "--heatmap-frames", type=int, default=300_000,
+    help="Rolling window size in frames, pooled across all runs (default: 300000)",
 )
 
 # ---------------------------------------------------------------------------

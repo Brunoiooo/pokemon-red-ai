@@ -598,6 +598,22 @@ class Data:
     position_visit_counts: dict[tuple[int, int, int], int] = field(default_factory=dict)
     map_vision_radius: int = 5
 
+    # --heatmap opt-in (set by PokemonRedEnv from its collect_heatmap ctor arg).
+    # Gates direction_counts below so plain training never pays for it.
+    collect_heatmap: bool = False
+    # World-tile the agent left -> {"up"/"down"/"left"/"right": step count},
+    # for the --heatmap live window's movement-direction overlay.
+    direction_counts: dict[tuple[int, int, int], dict[str, int]] = field(default_factory=dict)
+    # (from_map, to_map) -> {(delta_x, delta_y): count} — one sample per step
+    # that changes map_id while walking. delta = how much to add to a
+    # from_map-local (x, y) to land on the matching to_map-local (x, y),
+    # backed out from the step's direction so it's independent of which
+    # arrow key border was crossed. Used by --heatmap's combined "all maps"
+    # view to auto-stitch adjacent maps into one canvas.
+    map_transitions: dict[tuple[int, int], dict[tuple[int, int], int]] = field(
+        default_factory=dict
+    )
+
     recent_actions: deque = field(default_factory=lambda: deque(maxlen=20))
     recent_positions: deque = field(default_factory=lambda: deque(maxlen=16))
     recent_menu_states: deque = field(default_factory=lambda: deque(maxlen=16))
@@ -716,6 +732,8 @@ class Data:
         self.in_dialog_ticks = 0
         self.visited_positions = {}
         self.position_visit_counts = {}
+        self.direction_counts = {}
+        self.map_transitions = {}
         self.visited_maps = set()
         self.visited_dialogs = {}
         self.recent_actions.clear()
@@ -789,6 +807,44 @@ class Data:
                 self.recent_positions.append(pos)
             elif pos not in self.position_visit_counts:
                 self.position_visit_counts[pos] = 1
+
+            # --heatmap direction overlay: which way the agent actually moved
+            # (position delta), not the raw action — a bumped-into-wall A/B
+            # mash never fires this. Anchored on the tile it left.
+            if self.collect_heatmap and not stayed and memory is not None:
+                prev_pos = self.get_position(memory)
+                if prev_pos[2] == pos[2]:
+                    dx = pos[0] - prev_pos[0]
+                    dy = pos[1] - prev_pos[1]
+                    direction = {
+                        (1, 0): "right",
+                        (-1, 0): "left",
+                        (0, 1): "down",
+                        (0, -1): "up",
+                    }.get((dx, dy))
+                    if direction is not None:
+                        counts = self.direction_counts.setdefault(prev_pos, {})
+                        counts[direction] = counts.get(direction, 0) + 1
+                elif self.is_world(memory):
+                    # Map boundary crossed this step (edge walk or a warp).
+                    # The move is still one of the 4 arrow keys (only way
+                    # position/map changes outside a cutscene) — use it to
+                    # back out the coordinate-system offset between the two
+                    # maps' local (x, y) grids, independent of which edge.
+                    step = {
+                        6: (0, -1),  # up
+                        7: (0, 1),  # down
+                        4: (-1, 0),  # left
+                        5: (1, 0),  # right
+                    }.get(int(action))
+                    if step is not None:
+                        delta = (
+                            pos[0] - prev_pos[0] - step[0],
+                            pos[1] - prev_pos[1] - step[1],
+                        )
+                        key = (prev_pos[2], pos[2])
+                        votes = self.map_transitions.setdefault(key, {})
+                        votes[delta] = votes.get(delta, 0) + 1
         elif (
             self.is_battle(self.pyboy.memory)
             and memory is not None

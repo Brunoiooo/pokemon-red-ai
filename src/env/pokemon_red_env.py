@@ -86,6 +86,7 @@ class PokemonRedEnv(gym.Env):
         stage: str | None = None,
         worker_rank: int = 0,
         n_workers: int = 1,
+        collect_heatmap: bool = False,
     ):
         super().__init__()
         self.save_state = save_state
@@ -100,6 +101,11 @@ class PokemonRedEnv(gym.Env):
         self.auto_advance = bool(auto_advance)
         self.worker_rank = int(worker_rank)
         self.n_workers = max(1, int(n_workers))
+        # When True, snapshot Data.visited_positions (map,x,y)->ticks into info
+        # at every run boundary (episode end or mid-episode curriculum-leg
+        # clear) for the --heatmap live visualizer. Off by default: it copies
+        # a dict every boundary, which is wasted work when nothing reads it.
+        self.collect_heatmap = bool(collect_heatmap)
 
         self._lock = RLock()
         self._emu: Emulator | None = None
@@ -250,6 +256,8 @@ class PokemonRedEnv(gym.Env):
             data = self.emu.data
             data.visited_positions.clear()
             data.position_visit_counts.clear()
+            data.direction_counts.clear()
+            data.map_transitions.clear()
             data.recent_positions.clear()
             data.recent_actions.clear()
             data.loop_flag = False
@@ -316,6 +324,7 @@ class PokemonRedEnv(gym.Env):
         self._restore_base_curriculum()
         save = self._pick_save(options)
         memory, inputs = self.emu.reset(dir=save)
+        self.emu.data.collect_heatmap = self.collect_heatmap
         self.emu.data.goal = self.goal
         if options and options.get("goal"):
             self.emu.data.goal = str(options["goal"])
@@ -352,8 +361,21 @@ class PokemonRedEnv(gym.Env):
 
         goal_success = False
         cleared_stage: str | None = None
+        # (positions, directions, transitions, steps) snapshot of the run
+        # that's ending — either the whole episode or one curriculum leg
+        # (auto_advance clears visits mid-episode on goal success). Grabbed
+        # before Data.clean()/clear_visits wipes them, so it's the "last X
+        # frames" heatmap unit.
+        heatmap_run: tuple[dict, dict, dict, int] | None = None
         # Train/eval parity: success advances in-place instead of ending the episode.
         if terminated and self.auto_advance and not truncated:
+            if self.collect_heatmap:
+                heatmap_run = (
+                    dict(self.emu.data.visited_positions),
+                    dict(self.emu.data.direction_counts),
+                    dict(self.emu.data.map_transitions),
+                    self._step_count,
+                )
             advanced, cleared_stage = self._advance_after_goal()
             if advanced:
                 goal_success = True
@@ -361,12 +383,21 @@ class PokemonRedEnv(gym.Env):
                 # Obs must reflect the new goal one-hot immediately.
                 inputs = self.emu.data.inputs()
 
+        if (terminated or truncated) and self.collect_heatmap and heatmap_run is None:
+            heatmap_run = (
+                dict(self.emu.data.visited_positions),
+                dict(self.emu.data.direction_counts),
+                dict(self.emu.data.map_transitions),
+                self._step_count,
+            )
+
         obs = self._torch_inputs_to_obs(inputs)
         info = self._info(
             terminated=terminated,
             truncated=truncated,
             goal_success=goal_success,
             cleared_stage=cleared_stage,
+            heatmap_run=heatmap_run,
         )
         return obs, float(reward), bool(terminated), bool(truncated), info
 
@@ -376,12 +407,17 @@ class PokemonRedEnv(gym.Env):
         truncated: bool,
         goal_success: bool = False,
         cleared_stage: str | None = None,
+        heatmap_run: tuple[dict, dict, dict, int] | None = None,
     ) -> dict[str, Any]:
         data: Data = self.emu.data
         mem = self.emu.pyboy.memory
         badges = data.badges(mem)
         live_goals = data.live_story_goals()
         return {
+            "heatmap_positions": heatmap_run[0] if heatmap_run else None,
+            "heatmap_directions": heatmap_run[1] if heatmap_run else None,
+            "heatmap_transitions": heatmap_run[2] if heatmap_run else None,
+            "heatmap_steps": heatmap_run[3] if heatmap_run else None,
             "badges": int(sum(badges)),
             "badge_bits": badges,
             "map_id": int(data.map_id(mem)),
@@ -433,6 +469,7 @@ def make_pokemon_env(
     stage: str | None = None,
     render_mode: str | None = None,
     n_workers: int = 1,
+    collect_heatmap: bool = False,
 ):
     """Factory for SubprocVecEnv workers."""
 
@@ -449,6 +486,7 @@ def make_pokemon_env(
             render_mode=render_mode,
             worker_rank=rank,
             n_workers=n_workers,
+            collect_heatmap=collect_heatmap,
         )
         env.reset(seed=seed + rank)
         return env

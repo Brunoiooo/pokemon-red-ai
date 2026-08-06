@@ -12,3 +12,4 @@ tensorboard>=2.14
 keyboard>=0.13.5
 tqdm>=4.66.0
 rich>=13.0.0
+matplotlib>=3.7

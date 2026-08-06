@@ -91,6 +91,14 @@ def run(args):
         save_state = args.checkpoint
         saves = [save_state]
 
+    heatmap_proc = heatmap_queue = None
+    if args.heatmap:
+        from utils.PositionHeatmap import start_heatmap_process
+
+        heatmap_proc, heatmap_queue = start_heatmap_process(
+            args.heatmap_frames, title="Pokemon Red AI - Position Heatmap (eval)"
+        )
+
     env = PokemonRedEnv(
         save_state=save_state,
         max_steps=max_steps,
@@ -103,6 +111,7 @@ def run(args):
         auto_advance=auto,
         worker_rank=0,
         n_workers=1,
+        collect_heatmap=args.heatmap,
     )
     # Monitor forbids step() after terminated; in-place advance keeps the
     # episode alive, so Monitor is fine. Still skip when auto for clarity.
@@ -165,6 +174,18 @@ def run(args):
             steps += 1
             if info.get("loop_flag"):
                 loop_hits += 1
+
+            if args.heatmap and info.get("heatmap_positions"):
+                from utils.PositionHeatmap import push_episode
+
+                push_episode(
+                    heatmap_queue,
+                    info["heatmap_positions"],
+                    info.get("heatmap_directions"),
+                    info.get("heatmap_transitions"),
+                    info.get("heatmap_steps") or 0,
+                    info.get("stage", stage),
+                )
 
             map_id = info.get("map_id")
             milestone = info.get("milestone")
@@ -355,6 +376,10 @@ def run(args):
         )
 
     env.close()
+    if heatmap_proc is not None:
+        from utils.PositionHeatmap import stop_heatmap_process
+
+        stop_heatmap_process(heatmap_proc, heatmap_queue)
 
 
 def main():
@@ -396,6 +421,15 @@ def main():
         "--verbose", "-v", action="count", default=0,
         help="-v: sampled step log + goal/off-path/battle events. "
              "-vv: every step, plus per-hit damage debug.",
+    )
+    p.add_argument(
+        "--heatmap", action="store_true",
+        help="Open a live position-heatmap window (avg ticks/run per map tile, "
+             "rolling window of --heatmap-frames). <-/-> switches map.",
+    )
+    p.add_argument(
+        "--heatmap-frames", type=int, default=300_000,
+        help="Rolling window size in frames, pooled across all runs (default: 300000)",
     )
     run(p.parse_args())
 

@@ -173,6 +173,8 @@ def _clear_visits(data) -> None:
     """Same exploration reset as PokemonRedEnv.set_curriculum(clear_visits=True)."""
     data.visited_positions.clear()
     data.position_visit_counts.clear()
+    data.direction_counts.clear()
+    data.map_transitions.clear()
     data.recent_positions.clear()
     data.recent_actions.clear()
     data.loop_flag = False
