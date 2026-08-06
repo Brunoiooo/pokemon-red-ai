@@ -508,7 +508,10 @@ class Data:
     # Battle exit (wBattleResult @ 0xCF0B): 0=win, 1=lose, 2=fled.
     # Win is mezzo (same scale as event); macro progress stays on event/badge.
     battle_won_reward: float = 2.0
-    battle_lost_penalty: float = -1.0
+    # No penalty for losing a battle — a negative penalty here was making the
+    # agent risk-averse enough to actively avoid fights (and exploit episode
+    # truncation to dodge the -1 before it landed) instead of just playing.
+    battle_lost_penalty: float = 0.0
     # battle_won_reward and per-hit enemy-HP reward are both scaled by a
     # smoothstep (3r^2-2r^3, r=enemy_lv/active_player_lv clamped to [0,1]) so
     # stomping a far weaker wild Pokemon is no longer free farming (e.g.

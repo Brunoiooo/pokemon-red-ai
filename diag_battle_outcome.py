@@ -169,7 +169,7 @@ def run_mock_cases() -> None:
     data = make_data(curr)
     exit_r = data.reward_battle_exit(bytes(prev))
     print(f"LOSE   CF0B=1: exit={exit_r} info={data.last_battle_exit_info}")
-    assert exit_r == data.battle_lost_penalty == -1.0
+    assert exit_r == data.battle_lost_penalty == 0.0
     assert data.last_battle_exit_info["kind"] == "lose"
 
     # Still in battle
