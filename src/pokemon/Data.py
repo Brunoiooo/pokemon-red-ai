@@ -1047,6 +1047,20 @@ class Data:
         # Per-step signal; env accumulates into _episode_loop for episode stats.
         self.loop_flag = False
         self._just_blacked_out = self._detect_blackout(memory)
+        if self._just_blacked_out:
+            # HandlePlayerBlackOut force-warps to the last Pokemon Center —
+            # that departure from the goal map is not the agent choosing to
+            # abandon it, so don't claw back location milestones already
+            # paid for reaching it (mirrors mark_goal_cleared for a
+            # legitimate curriculum-advance departure). Without this, a
+            # near-death fight on the goal map made finishing the loss cost
+            # up to -goal payout (e.g. -24 for route1 at active_goal_scale),
+            # far worse than truncated_reward (-0.05) — so the policy
+            # learned to mash useless inputs and stall out the battle-stuck
+            # fuse instead of ever letting the blackout resolve.
+            for name in REGRESSABLE_GOALS:
+                if name in self._milestones_hit:
+                    self.mark_goal_cleared(name)
 
         milestone += self.reward_core(memory)
         milestone += self.reward_story_milestones()
