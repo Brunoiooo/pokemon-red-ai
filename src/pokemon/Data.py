@@ -1972,10 +1972,10 @@ class Data:
         )
 
     def position_x(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xD361]
+        return memory[0xD362]
 
     def position_y(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xD362]
+        return memory[0xD361]
 
     def is_menu(self, memory: PyBoyMemoryView | bytes):
         return (
