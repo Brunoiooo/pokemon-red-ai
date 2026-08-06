@@ -540,6 +540,16 @@ class Data:
     # farming a ~17 return without the stage goal is no longer attractive.
     visit_penalty_soft: float = -0.05   # visit count > 3
     visit_penalty_hard: float = -0.15   # visit count > 5
+    # A wild encounter saturates its tile's visit counter immediately (see
+    # the battle-entry branch in reward_movement) instead of ramping up over
+    # several farmed fights. battle_won_reward does not decay with repeat
+    # wins, so grinding one grass tile back and forth used to stay net
+    # positive for several fights before visit_penalty_hard/new_position
+    # decay caught up. Set above both the visit_penalty_hard threshold (5)
+    # and new_position_decay_visits (4) so grinding the same tile is already
+    # fully anti-loop-penalized and exploration-decayed after the very first
+    # wild fight there.
+    wild_encounter_visit_fill: int = 6
     action_pattern_penalty: float = -0.08
     spatial_loop_penalty: float = -0.10
     menu_spam_penalty: float = -0.05
@@ -790,10 +800,23 @@ class Data:
         ):
             # Stepped onto a grass/trainer tile and the encounter fired on the
             # same step — is_world() is already False here, so the branch
-            # above never runs. Register the tile once so reward_position()
-            # does not see it as brand new on every world<-battle return.
+            # above never runs. Register the tile so reward_position() does
+            # not see it as brand new on every world<-battle return.
             pos = self.get_position()
-            if pos not in self.position_visit_counts:
+            # wIsInBattle==1 is specifically a wild encounter (2 is a scripted
+            # trainer, which will not keep re-firing off the same tile).
+            # Saturate the counter immediately instead of the usual +1 ramp —
+            # battle_won_reward does not decay with repeat wins, so walking
+            # the same one or two grass tiles back and forth used to stay net
+            # positive for several fights before visit_penalty_hard/
+            # new_position decay caught up. This makes grinding a spot
+            # anti-loop-penalized and exploration-decayed from fight one.
+            if self.type_of_battle(self.pyboy.memory) == 1:
+                self.position_visit_counts[pos] = max(
+                    self.position_visit_counts.get(pos, 0),
+                    self.wild_encounter_visit_fill,
+                )
+            elif pos not in self.position_visit_counts:
                 self.position_visit_counts[pos] = 1
         elif (
             not self.is_battle(self.pyboy.memory)
