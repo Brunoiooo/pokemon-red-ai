@@ -3,12 +3,13 @@ averaged per run, rendered in its own process so it never blocks
 training/eval. Opt-in via --heatmap on train_ppo.py / run_eval_ppo.py.
 
 Data flow: PokemonRedEnv snapshots Data.visited_positions / direction_counts
-/ map_transitions / reward_sums at every "run" boundary (episode end, or a
-mid-episode curriculum-leg clear) into info["heatmap_positions"/
-"heatmap_directions"/"heatmap_transitions"/"heatmap_rewards"/
-"heatmap_steps"]. A callback (training) or the eval loop (eval) forwards
-those snapshots through a multiprocessing.Queue to _run_window, which runs
-in a separate process and owns the matplotlib window.
+/ map_transitions / reward_sums / wild_visit_counts at every "run" boundary
+(episode end, or a mid-episode curriculum-leg clear) into
+info["heatmap_positions"/"heatmap_directions"/"heatmap_transitions"/
+"heatmap_rewards"/"heatmap_wild"/"heatmap_steps"]. A callback (training) or
+the eval loop (eval) forwards those snapshots through a multiprocessing.Queue
+to _run_window, which runs in a separate process and owns the matplotlib
+window.
 
 Two view modes (toggle with 'c'):
   - single map: one map_id's grid + direction arrows, cycled with left/right.
@@ -22,7 +23,7 @@ Two view modes (toggle with 'c'):
     there's no memory-flag here distinguishing "walked across an edge" from
     "used a door", so treat the combined view as approximate.
 
-Two color metrics (toggle with 'r'), independent of the view mode:
+Three color metrics (cycle with 'r'), independent of the view mode:
   - ticks: avg ticks/run per tile (time spent) — the original view.
   - reward: avg reward/run per tile — where reward is actually earned, not
     just where time is spent. A battle-won/lost payout is attributed to the
@@ -30,6 +31,11 @@ Two color metrics (toggle with 'r'), independent of the view mode:
     has no world position, so farming loops (grind a tile for repeat battle
     reward, spam a menu for event-flag reward, etc.) show up as a hot tile
     here even when the ticks view looks unremarkable.
+  - wild: avg wild-encounter count/run per tile (Data.wild_visit_counts) —
+    raw encounter frequency, independent of battle_won_reward's per-tile
+    decay. A tile can show heavily "wild"-hot while its "reward" view looks
+    unremarkable once repeat wins have decayed to ~0, which is exactly the
+    farming-vs-payoff gap worth seeing on its own axis.
 
 Per-tile numeric value labels (toggle with 'v'), independent of view mode
 and metric: prints the exact avg-ticks or avg-reward number on top of each
@@ -90,6 +96,7 @@ class RollingHeatmapAggregator:
                 dict[tuple[int, int, int], int],
                 dict[tuple[int, int, int], dict[str, int]],
                 dict[tuple[int, int, int], float],
+                dict[tuple[int, int, int], int],
             ]
         ] = deque()
         self.total_frames = 0
@@ -97,6 +104,8 @@ class RollingHeatmapAggregator:
         self.sum_ticks: dict[int, dict[tuple[int, int], int]] = {}
         # map_id -> {(x, y): summed reward across runs in the window}
         self.sum_rewards: dict[int, dict[tuple[int, int], float]] = {}
+        # map_id -> {(x, y): summed wild-encounter count across runs in the window}
+        self.sum_wild: dict[int, dict[tuple[int, int], float]] = {}
         # map_id -> number of runs in the window that touched this map
         self.run_count: dict[int, int] = {}
         # map_id -> {(x, y): {"up"/"down"/"left"/"right": step count}}
@@ -111,12 +120,14 @@ class RollingHeatmapAggregator:
         transitions: dict[tuple[int, int], dict[tuple[int, int], int]] | None,
         rewards: dict[tuple[int, int, int], float] | None,
         steps: int,
+        wild: dict[tuple[int, int, int], int] | None = None,
     ) -> None:
         if not positions or steps <= 0:
             return
         directions = directions or {}
         rewards = rewards or {}
-        self._runs.append((steps, positions, directions, rewards))
+        wild = wild or {}
+        self._runs.append((steps, positions, directions, rewards, wild))
         self.total_frames += steps
         touched_maps = set()
         for (x, y, map_id), ticks in positions.items():
@@ -134,6 +145,9 @@ class RollingHeatmapAggregator:
         for (x, y, map_id), r in rewards.items():
             grid = self.sum_rewards.setdefault(map_id, {})
             grid[(x, y)] = grid.get((x, y), 0.0) + r
+        for (x, y, map_id), w in wild.items():
+            grid = self.sum_wild.setdefault(map_id, {})
+            grid[(x, y)] = grid.get((x, y), 0.0) + w
         for key, votes in (transitions or {}).items():
             dest = self.transition_votes.setdefault(key, {})
             for delta, c in votes.items():
@@ -142,7 +156,7 @@ class RollingHeatmapAggregator:
 
     def _evict(self) -> None:
         while self._runs and self.total_frames > self.window_frames:
-            steps, positions, directions, rewards = self._runs.popleft()
+            steps, positions, directions, rewards, wild = self._runs.popleft()
             self.total_frames -= steps
             touched_maps = set()
             for (x, y, map_id), ticks in positions.items():
@@ -192,6 +206,20 @@ class RollingHeatmapAggregator:
                     grid.pop((x, y), None)
                 if not grid:
                     self.sum_rewards.pop(map_id, None)
+            for (x, y, map_id), w in wild.items():
+                grid = self.sum_wild.get(map_id)
+                if grid is None:
+                    continue
+                # Same still-ticked piggyback as reward above — wild counts
+                # are non-negative but a run can legitimately contribute 0.
+                still_ticked = (x, y) in self.sum_ticks.get(map_id, {})
+                remaining = grid.get((x, y), 0.0) - w
+                if still_ticked:
+                    grid[(x, y)] = remaining
+                else:
+                    grid.pop((x, y), None)
+                if not grid:
+                    self.sum_wild.pop(map_id, None)
             # transition_votes is intentionally NOT evicted here — map
             # connectivity is structural, not recent-behavior traffic.
 
@@ -200,11 +228,15 @@ class RollingHeatmapAggregator:
         return sorted(self.sum_ticks, key=lambda m: -sum(self.sum_ticks[m].values()))
 
     def _metric_sums(self, metric: str) -> dict[int, dict[tuple[int, int], float]]:
-        return self.sum_rewards if metric == "reward" else self.sum_ticks
+        if metric == "reward":
+            return self.sum_rewards
+        if metric == "wild":
+            return self.sum_wild
+        return self.sum_ticks
 
     def average_grid(self, map_id: int, metric: str = "ticks"):
         """(grid, x0, y0): grid[y - y0, x - x0] = avg value/run for
-        ``metric`` ("ticks" or "reward"), NaN where unvisited in the current
+        ``metric`` ("ticks", "reward", or "wild"), NaN where unvisited in the current
         window. None if the map isn't in the window.
 
         The footprint (bounding box + which cells are "visited") always
@@ -371,7 +403,7 @@ class RollingHeatmapAggregator:
     def combined_view(self, anchor: int | None = None, metric: str = "ticks"):
         """Stitches every map reachable from ``anchor`` (default: the
         most-visited map in the current window) into one canvas, colored by
-        ``metric`` ("ticks" or "reward").
+        ``metric`` ("ticks", "reward", or "wild").
 
         Returns (grid, x0, y0, offsets, connected_maps, unconnected_maps) or
         None if there's nothing in the window yet.
@@ -393,9 +425,9 @@ class RollingHeatmapAggregator:
         for map_id in connected:
             gx0, gy0 = offsets[map_id]
             n_runs = max(self.run_count.get(map_id, 1), 1)
-            reward_grid = self.sum_rewards.get(map_id, {})
+            metric_grid = self._metric_sums(metric).get(map_id, {})
             for (x, y), ticks in self.sum_ticks.get(map_id, {}).items():
-                val = ticks if metric == "ticks" else reward_grid.get((x, y), 0.0)
+                val = ticks if metric == "ticks" else metric_grid.get((x, y), 0.0)
                 cells.append((x + gx0, y + gy0, val / n_runs))
         if not cells:
             return None
@@ -457,10 +489,15 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
     # reward: signed "reward earned", diverging colormap centered on zero so
     # farming/exploit hotspots (strongly positive) read differently from
     # penalty hotspots (strongly negative) instead of both just being "hot".
+    # wild: non-negative "encounter count", its own sequential colormap so
+    # it's visually distinct from ticks at a glance.
     ticks_cmap = plt.get_cmap("inferno").copy()
     ticks_cmap.set_bad(color="#111111")
     reward_cmap = plt.get_cmap("coolwarm").copy()
     reward_cmap.set_bad(color="#111111")
+    wild_cmap = plt.get_cmap("viridis").copy()
+    wild_cmap.set_bad(color="#111111")
+    _METRICS = ("ticks", "reward", "wild")
 
     fig, ax = plt.subplots(figsize=(8, 8))
     fig.canvas.manager.set_window_title(title)
@@ -504,7 +541,8 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
             redraw()
             return
         if event.key == "r":
-            state["metric"] = "reward" if state["metric"] == "ticks" else "ticks"
+            idx = _METRICS.index(state["metric"])
+            state["metric"] = _METRICS[(idx + 1) % len(_METRICS)]
             redraw()
             return
         if event.key == "v":
@@ -592,6 +630,11 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
             vmax = max(vmax, 1.0)
             im.set_clim(-vmax, vmax)
             cbar.set_label("avg reward / run")
+        elif state["metric"] == "wild":
+            im.set_cmap(wild_cmap)
+            vmax = float(finite.max()) if finite.size else 1.0
+            im.set_clim(0, max(vmax, 1.0))
+            cbar.set_label("avg wild encounters / run")
         else:
             im.set_cmap(ticks_cmap)
             vmax = float(finite.max()) if finite.size else 1.0
@@ -667,7 +710,7 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
             f"[{state['stage']}] {name} (id={state['map_id']})  [{idx}/{len(maps)}]  "
             f"metric={state['metric']}\n"
             f"{n_runs} runs - {agg.total_frames:,} frames in window\n"
-            f"<-/-> switch map, c: combined view, r: toggle ticks/reward, "
+            f"<-/-> switch map, c: combined view, r: cycle ticks/reward/wild, "
             f"v: toggle value labels ({'on' if state['show_values'] else 'off'})"
         )
 
@@ -713,7 +756,7 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
             f"[{state['stage']}] Combined view: {len(connected)} maps stitched  "
             f"metric={state['metric']}\n"
             f"{agg.total_frames:,} frames in window{unconnected_s}\n"
-            f"c: single-map view, r: toggle ticks/reward, "
+            f"c: single-map view, r: cycle ticks/reward/wild, "
             f"v: toggle value labels ({'on' if state['show_values'] else 'off'}) "
             f"(best-effort — connections are inferred, not authoritative)"
         )
@@ -736,13 +779,15 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
                 if item is STOP:
                     plt.close(fig)
                     return
-                positions, directions, transitions, rewards, steps, stage = item
-                agg_all.add_episode(positions, directions, transitions, rewards, steps)
+                positions, directions, transitions, rewards, steps, stage, wild = item
+                agg_all.add_episode(
+                    positions, directions, transitions, rewards, steps, wild
+                )
                 stage_label = stage or "unknown"
                 is_new_stage = stage_label not in stage_aggs
                 stage_aggs.setdefault(
                     stage_label, RollingHeatmapAggregator(window_frames)
-                ).add_episode(positions, directions, transitions, rewards, steps)
+                ).add_episode(positions, directions, transitions, rewards, steps, wild)
                 if is_new_stage:
                     _refresh_stage_dropdown()
                 got_any = True
@@ -781,11 +826,14 @@ def push_episode(
     rewards: dict | None,
     steps: int,
     stage: str | None = None,
+    wild: dict | None = None,
 ) -> None:
     """Non-blocking: drop the update rather than stall the caller if the
     visualizer process is behind."""
     try:
-        q.put_nowait((positions, directions, transitions, rewards, steps, stage))
+        q.put_nowait(
+            (positions, directions, transitions, rewards, steps, stage, wild)
+        )
     except _queue_mod.Full:
         pass
     except Exception:

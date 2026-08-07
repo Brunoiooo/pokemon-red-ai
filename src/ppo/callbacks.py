@@ -35,6 +35,7 @@ class HeatmapCallback(BaseCallback):
                     info.get("heatmap_rewards"),
                     info.get("heatmap_steps") or 0,
                     info.get("stage"),
+                    info.get("heatmap_wild"),
                 )
         return True
 

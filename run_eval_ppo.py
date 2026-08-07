@@ -186,6 +186,7 @@ def run(args):
                     info.get("heatmap_rewards"),
                     info.get("heatmap_steps") or 0,
                     info.get("stage", stage),
+                    info.get("heatmap_wild"),
                 )
 
             map_id = info.get("map_id")
