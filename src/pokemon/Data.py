@@ -548,12 +548,15 @@ class Data:
     # farming a ~17 return without the stage goal is no longer attractive.
     visit_penalty_soft: float = -0.05   # visit count > 3
     visit_penalty_hard: float = -0.15   # visit count > 5
-    # A wild encounter bumps its tile's visit counter by two steps' worth
-    # (see the battle-entry branch in reward_movement) instead of the usual
-    # single +1 per step. battle_won_reward does not decay with repeat wins,
-    # so grinding one grass tile back and forth used to stay net positive for
-    # several fights before visit_penalty_hard/new_position decay caught up.
-    wild_encounter_visit_increment: int = 2
+    # Wild encounters are tracked in their own per-tile counter (wild_visit_
+    # counts), separate from position_visit_counts — walking through a grass
+    # tile is exploration, fighting on it repeatedly is farming, and the two
+    # used to be conflated (a wild encounter bumping the walking counter).
+    # battle_won_reward decays with repeat wild wins on the same tile the
+    # same way new_position_reward decays with repeat walking visits (see
+    # reward_battle_exit / _battle_entry_wild_visits), so grinding one grass
+    # tile back and forth no longer stays net positive indefinitely.
+    wild_visit_decay_visits: int = 4
     action_pattern_penalty: float = -0.08
     spatial_loop_penalty: float = -0.10
     menu_spam_penalty: float = -0.05
@@ -604,6 +607,10 @@ class Data:
 
     visited_positions: dict[tuple[int, int, int], int] = field(default_factory=dict)
     position_visit_counts: dict[tuple[int, int, int], int] = field(default_factory=dict)
+    # Per-tile wild-encounter count, separate from position_visit_counts —
+    # fed to the policy as its own mask (see wild_visit_mask_grid) and drives
+    # battle_won_reward's decay instead of the walking exploration decay.
+    wild_visit_counts: dict[tuple[int, int, int], int] = field(default_factory=dict)
     map_vision_radius: int = 5
 
     # --heatmap opt-in (set by PokemonRedEnv from its collect_heatmap ctor arg).
@@ -687,6 +694,11 @@ class Data:
     # more robust than trusting whatever a single frame happens to show.
     _battle_enemy_level_cache: int = 0
     _battle_active_level_cache: int = 0
+    # wild_visit_counts reading for this tile *before* the current fight's own
+    # count() bump — captured at battle entry, consumed by reward_battle_exit
+    # so the very first encounter on a tile still pays full battle_won_reward
+    # (mirrors reward_position reading position_visit_counts pre-increment).
+    _battle_entry_wild_visits: int = 0
 
     @property
     def visited_pokedex_own(self):
@@ -750,6 +762,7 @@ class Data:
         self.in_dialog_ticks = 0
         self.visited_positions = {}
         self.position_visit_counts = {}
+        self.wild_visit_counts = {}
         self.direction_counts = {}
         self.map_transitions = {}
         self.reward_sums = {}
@@ -780,6 +793,7 @@ class Data:
         self.last_enemy_hp_debug = None
         self._battle_enemy_level_cache = 0
         self._battle_active_level_cache = 0
+        self._battle_entry_wild_visits = 0
         self._start_map_id = self.map_id(self.pyboy.memory)
 
     def _dialog_id_changed(self, memory: bytes | None) -> bool:
@@ -890,18 +904,17 @@ class Data:
             # not see it as brand new on every world<-battle return.
             pos = self.get_position()
             # wIsInBattle==1 is specifically a wild encounter (2 is a scripted
-            # trainer, which will not keep re-firing off the same tile).
-            # Bump the counter by two steps' worth instead of the usual +1
-            # ramp (as if the tile had been walked through twice) — battle_
-            # won_reward does not decay with repeat wins, so walking the same
-            # one or two grass tiles back and forth used to stay net positive
-            # for several fights before visit_penalty_hard/new_position decay
-            # caught up.
+            # trainer, which will not keep re-firing off the same tile). Track
+            # it in its own wild_visit_counts instead of inflating the walking
+            # counter — position_visit_counts only ever needs a single seed
+            # entry here so reward_position() does not see the tile as brand
+            # new on every world<-battle return. The pre-bump reading is
+            # cached for reward_battle_exit's battle_won_reward decay.
             if self.type_of_battle(self.pyboy.memory) == 1:
-                self.position_visit_counts[pos] = (
-                    self.position_visit_counts.get(pos, 0)
-                    + self.wild_encounter_visit_increment
-                )
+                self._battle_entry_wild_visits = self.wild_visit_counts.get(pos, 0)
+                self.wild_visit_counts[pos] = self._battle_entry_wild_visits + 1
+                if pos not in self.position_visit_counts:
+                    self.position_visit_counts[pos] = 1
             elif pos not in self.position_visit_counts:
                 self.position_visit_counts[pos] = 1
         elif (
@@ -978,8 +991,9 @@ class Data:
             digest_size=16,
         ).hexdigest()
 
-    def visit_mask_grid(self) -> list[list[float]]:
-        """Local visit-count mask centered on the player (PokeRL / Whidden style)."""
+    def _local_count_grid(
+        self, counts: dict[tuple[int, int, int], int], cap: int = 10
+    ) -> list[list[float]]:
         r = self.map_vision_radius
         size = 2 * r + 1
         if not self.is_world(self.pyboy.memory):
@@ -988,12 +1002,18 @@ class Data:
         for dy in range(-r, r + 1):
             row: list[float] = []
             for dx in range(-r, r + 1):
-                visits = self.position_visit_counts.get(
-                    self.get_position(offset_x=dx, offset_y=dy), 0
-                )
-                row.append(min(visits, 10) / 10.0)
+                v = counts.get(self.get_position(offset_x=dx, offset_y=dy), 0)
+                row.append(min(v, cap) / cap)
             grid.append(row)
         return grid
+
+    def visit_mask_grid(self) -> list[list[float]]:
+        """Local visit-count mask centered on the player (PokeRL / Whidden style)."""
+        return self._local_count_grid(self.position_visit_counts)
+
+    def wild_visit_mask_grid(self) -> list[list[float]]:
+        """Local wild-encounter-count mask centered on the player."""
+        return self._local_count_grid(self.wild_visit_counts)
 
     def inputs(self):
         r = self.map_vision_radius
@@ -1004,6 +1024,9 @@ class Data:
             ).view(1, 18, 20),
             "visit_mask": torch.tensor(
                 self.visit_mask_grid(), dtype=torch.float32
+            ).view(1, 2 * r + 1, 2 * r + 1),
+            "wild_visit_mask": torch.tensor(
+                self.wild_visit_mask_grid(), dtype=torch.float32
             ).view(1, 2 * r + 1, 2 * r + 1),
             "core": torch.tensor(self.core_data(), dtype=torch.float32),
             "battle": torch.tensor(self.battle_data(), dtype=torch.float32),
@@ -2952,6 +2975,15 @@ class Data:
             # question is whole-team risk, not this fight's difficulty.
             difficulty_scale = self._battle_difficulty_scale(enemy_lv, active_lv)
             reward = self.battle_won_reward * difficulty_scale
+            # Wild wins decay with repeat encounters on the same tile, same
+            # shape as reward_position's exploration decay — trainer battles
+            # are one-shot per sprite so they are exempt (type_of_battle read
+            # from `memory`, the still-in-battle previous frame).
+            if self.type_of_battle(memory) == 1:
+                reward *= max(
+                    0.0,
+                    1.0 - self._battle_entry_wild_visits / self.wild_visit_decay_visits,
+                )
             kind = "win"
         elif result == 1:
             reward = self.battle_lost_penalty

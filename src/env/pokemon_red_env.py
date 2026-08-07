@@ -129,6 +129,12 @@ class PokemonRedEnv(gym.Env):
                     shape=(1, VISIT_MASK_SIZE, VISIT_MASK_SIZE),
                     dtype=np.float32,
                 ),
+                "wild_visit_mask": spaces.Box(
+                    low=0.0,
+                    high=1.0,
+                    shape=(1, VISIT_MASK_SIZE, VISIT_MASK_SIZE),
+                    dtype=np.float32,
+                ),
                 "vector": spaces.Box(
                     low=-np.inf,
                     high=np.inf,
@@ -187,10 +193,17 @@ class PokemonRedEnv(gym.Env):
             visit = inputs["visit_mask"].detach().cpu().numpy().astype(np.float32)
         else:
             visit = np.zeros((1, VISIT_MASK_SIZE, VISIT_MASK_SIZE), dtype=np.float32)
+        if "wild_visit_mask" in inputs:
+            wild_visit = (
+                inputs["wild_visit_mask"].detach().cpu().numpy().astype(np.float32)
+            )
+        else:
+            wild_visit = np.zeros((1, VISIT_MASK_SIZE, VISIT_MASK_SIZE), dtype=np.float32)
 
         return {
             "screen_tiles": screen,
             "visit_mask": visit,
+            "wild_visit_mask": wild_visit,
             "vector": vector,
         }
 
@@ -256,6 +269,7 @@ class PokemonRedEnv(gym.Env):
             data = self.emu.data
             data.visited_positions.clear()
             data.position_visit_counts.clear()
+            data.wild_visit_counts.clear()
             data.direction_counts.clear()
             data.map_transitions.clear()
             data.reward_sums.clear()
