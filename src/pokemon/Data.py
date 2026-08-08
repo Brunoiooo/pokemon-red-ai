@@ -148,10 +148,6 @@ ACTION_NONE = 8
 INTERACT_ACTIONS = frozenset({ACTION_A, ACTION_B})
 
 # Curriculum / episode goals (map, event flags, badges).
-# Tutorial: withdraw an item from the player's own PC before ever leaving the
-# starting room, so the agent learns the mechanic exists instead of relying
-# on it being found by chance later (see reward_player_items/is_pc_withdrawal).
-GOAL_PC_TUTORIAL = "pc_tutorial"
 GOAL_LEFT_HOUSE = "left_house"
 # Stepping onto Route 1 before getting a starter auto-triggers Oak's
 # "it's dangerous" intercept — this fires as a dialog while map_id is still
@@ -387,7 +383,6 @@ _MAPS_MEWTWO = (
 _MAPS_ALL_BADGES = _MAPS_MEWTWO  # by now every badge-path map is covered
 
 GOAL_ALLOWED_MAPS: dict[str, frozenset[int]] = {
-    GOAL_PC_TUTORIAL: frozenset({MAP_REDS_HOUSE_1F}),
     GOAL_LEFT_HOUSE: _MAPS_LEFT_HOUSE,
     GOAL_ROUTE_1_ENTRY: _MAPS_ROUTE_1_ENTRY,
     GOAL_OAKS_LAB: _MAPS_OAKS_LAB,
@@ -440,7 +435,6 @@ REGRESSABLE_GOALS = frozenset(
 
 # Ordered early→late checklist for live progress counting / regression metrics.
 STORY_GOAL_ORDER = (
-    GOAL_PC_TUTORIAL,
     GOAL_LEFT_HOUSE,
     GOAL_ROUTE_1_ENTRY,
     GOAL_OAKS_LAB,
@@ -487,8 +481,6 @@ class Data:
     # Hierarchical rewards: macro >> meso >> micro (PokeRL / Whidden style).
     badge_reward: float = 10.0          # macro
     event_reward: float = 2.0           # macro
-    # Tutorial milestone — first PC item withdrawal, paid before left_house.
-    pc_tutorial_reward: float = 3.0     # macro early milestone
     left_house_reward: float = 5.0      # macro early milestone
     # Oak's "dangerous" intercept — reaching Route 1 before the starter.
     # Distinct from route1_reward below (the later, post-starter return trip)
@@ -670,9 +662,6 @@ class Data:
     # free Pokemon-Center-style heal) and reward_battle_exit (classify the
     # exit correctly instead of trusting wBattleResult).
     _just_blacked_out: bool = False
-    # One-shot flag: set the first time the bag gains what the PC box lost
-    # (see reward_player_items). Backs GOAL_PC_TUTORIAL / is_goal_satisfied.
-    _pc_withdrawal_done: bool = False
     _start_map_id: int | None = None
     # Distinct dialog screen hashes seen for the current dialog_id. Blink frames
     # revisit old hashes; only a *new* hash counts as text progress.
@@ -782,7 +771,6 @@ class Data:
         self._last_regressed = []
         self._last_hard_regressed = []
         self._peak_live_goals = 0
-        self._pc_withdrawal_done = False
         self._dialog_screens_seen = set()
         self._completed_dialogs = set()
         self._dialog_reopen_counts = {}
@@ -1257,6 +1245,22 @@ class Data:
         """Story goals that are true in the *current* game state (can shrink)."""
         return [g for g in STORY_GOAL_ORDER if self.is_goal_satisfied(g)]
 
+    def _prereq_cleared(self, goal: str) -> bool:
+        """Whether ``goal`` was paid out at some point this episode.
+
+        Used to gate early-game milestone payouts on STORY_GOAL_ORDER so a
+        later beat cannot pay out for free by skipping the one before it —
+        see reward_story_milestones. Checks _milestones_spent too: a
+        regressable goal that was hit and later clawed back (e.g. walked
+        back into a house) still genuinely happened, so it should not
+        un-satisfy a downstream prerequisite.
+        """
+        return (
+            goal in self._milestones_hit
+            or goal in self._milestones_spent
+            or goal in self._cleared_goals
+        )
+
     def reward_goal_regression(self) -> float:
         """Claw back location milestones that are no longer true.
 
@@ -1315,11 +1319,6 @@ class Data:
 
         checks = [
             (
-                GOAL_PC_TUTORIAL,
-                self._pc_withdrawal_done,
-                self.pc_tutorial_reward,
-            ),
-            (
                 GOAL_LEFT_HOUSE,
                 bool(self._start_map_id in HOUSE_MAPS and mid not in HOUSE_MAPS),
                 self.left_house_reward,
@@ -1329,11 +1328,14 @@ class Data:
                 # Oak's intercept fires as a dialog while still on Pallet Town
                 # (see is_goal_satisfied) — map_id never actually becomes
                 # MAP_ROUTE_1 for this pre-starter trigger.
-                mid == MAP_ROUTE_1
-                or (
-                    mid == MAP_PALLET_TOWN
-                    and self.is_dialog(self.pyboy.memory)
-                    and self.dialog_id(self.pyboy.memory) == ROUTE1_ENTRY_DIALOG_ID
+                self._prereq_cleared(GOAL_LEFT_HOUSE)
+                and (
+                    mid == MAP_ROUTE_1
+                    or (
+                        mid == MAP_PALLET_TOWN
+                        and self.is_dialog(self.pyboy.memory)
+                        and self.dialog_id(self.pyboy.memory) == ROUTE1_ENTRY_DIALOG_ID
+                    )
                 ),
                 self.route1_entry_reward,
             ),
@@ -1343,19 +1345,29 @@ class Data:
                 # check: without it, GOAL_ROUTE_1 fires (muted, off-goal) the
                 # instant Route 1 is touched during stage_route1_entry, then
                 # gets clawed back by reward_goal_regression() on the forced
-                # walk into the Lab — a spurious earn/regress cycle.
-                mid == MAP_ROUTE_1 and self.goal != GOAL_ROUTE_1_ENTRY,
+                # walk into the Lab — a spurious earn/regress cycle. The
+                # oaks_lab prereq below now covers this too, but the explicit
+                # goal check is cheap insurance against reordering.
+                self._prereq_cleared(GOAL_OAKS_LAB)
+                and mid == MAP_ROUTE_1
+                and self.goal != GOAL_ROUTE_1_ENTRY,
                 self.route1_reward,
             ),
-            (GOAL_OAKS_LAB, mid == MAP_OAKS_LAB, self.oaks_lab_reward),
+            (
+                GOAL_OAKS_LAB,
+                self._prereq_cleared(GOAL_ROUTE_1_ENTRY) and mid == MAP_OAKS_LAB,
+                self.oaks_lab_reward,
+            ),
             (
                 GOAL_OAKS_PARCEL,
-                bool(self.have_oaks_parcel(self.pyboy.memory)),
+                self._prereq_cleared(GOAL_ROUTE_1)
+                and bool(self.have_oaks_parcel(self.pyboy.memory)),
                 self.event_reward,
             ),
             (
                 GOAL_TOWN_MAP,
-                bool(self.have_town_map(self.pyboy.memory)),
+                self._prereq_cleared(GOAL_OAKS_PARCEL)
+                and bool(self.have_town_map(self.pyboy.memory)),
                 self.event_reward,
             ),
         ]
@@ -1563,9 +1575,16 @@ class Data:
         ticks_here = self.visited_positions.get(pos, 0)
         visit_count = self.position_visit_counts.get(pos, 0)
         waste_factor = min(ticks_here, self.max_useless_ticks) / self.max_useless_ticks
+        step_penalty = self.base_reward * (1.0 + waste_factor * 9.0)
+        # Tiles that have already produced a wild encounter (wild_visit_counts)
+        # pay no walking-exploration bonus — reward on those tiles should only
+        # come from the battle itself (battle_won_reward), not from stepping
+        # on/off the grass, otherwise the agent can farm exploration_reward by
+        # pacing back and forth over a known wild tile.
+        if pos in self.wild_visit_counts:
+            return step_penalty
         decay = max(0.0, 1.0 - visit_count / self.new_position_decay_visits)
         exploration_reward = self.new_position_reward * decay
-        step_penalty = self.base_reward * (1.0 + waste_factor * 9.0)
         return exploration_reward + step_penalty
 
     def is_menu_illegal_move(self, memory: bytes):
@@ -1608,10 +1627,7 @@ class Data:
         stored_delta = sum(self.stored_items_quantities(self.pyboy.memory)) - sum(
             self.stored_items_quantities(memory)
         )
-        if bag_delta > 0 and stored_delta < 0:
-            # A genuine PC withdrawal — bag gained what the box lost.
-            self._pc_withdrawal_done = True
-        elif bag_delta < 0 and stored_delta <= 0:
+        if bag_delta < 0 and stored_delta <= 0:
             # A bag decrease not matched by a PC increase is plain usage/selling,
             # not a deposit — don't punish the agent for using its items.
             return 0.0
@@ -1629,11 +1645,15 @@ class Data:
         )
 
     def reward_map(self):
-        return (
-            self.new_screen_reward
-            if self.map_id(self.pyboy.memory) not in self.visited_maps
-            else 0.0
-        )
+        if self.map_id(self.pyboy.memory) in self.visited_maps:
+            return 0.0
+        # Don't reward "discovering" a map that's off the active goal's path
+        # (see off_goal_camp_penalty / GOAL_ALLOWED_MAPS) — first-visit credit
+        # should not offset the penalty for straying off-course.
+        allowed = GOAL_ALLOWED_MAPS.get(self.goal)
+        if allowed is not None and self.map_id(self.pyboy.memory) not in allowed:
+            return 0.0
+        return self.new_screen_reward
 
     def reward_player_pokemons_current_hps(self, memory: bytes):
         reward = 0.0
@@ -1798,8 +1818,6 @@ class Data:
         mid = self.map_id(mem)
         badges = self.badges(mem)
 
-        if goal == GOAL_PC_TUTORIAL:
-            return self._pc_withdrawal_done
         if goal == GOAL_LEFT_HOUSE:
             return mid not in HOUSE_MAPS
         if goal == GOAL_ROUTE_1_ENTRY:
@@ -1880,24 +1898,16 @@ class Data:
             and self.max_useless_ticks
             <= self.visited_positions.get(self.get_position(), 0)
         )
-        # Tutorial map lock: GOAL_ALLOWED_MAPS's off_goal_camp_penalty
-        # (reward_anti_loop #4) is a soft, delayed nudge — it only fires
-        # after >2 revisits to the same off-map tile — and reward_map even
-        # pays a small novelty bonus for stepping into a brand-new map. That
-        # doesn't stop a fresh/undertrained policy from wandering out of the
-        # PC's room instead of finding it, so fail the episode outright the
-        # instant it leaves the one allowed map.
-        left_tutorial_room = (
-            self.goal == GOAL_PC_TUTORIAL
-            and not self.is_cutscene_locked(self.pyboy.memory)
-            and self.map_id(self.pyboy.memory)
-            not in GOAL_ALLOWED_MAPS[GOAL_PC_TUTORIAL]
-        )
+        # Tutorial map lock: leaving the one allowed map (GOAL_ALLOWED_MAPS)
+        # used to fail the episode outright. It now costs an escalating
+        # penalty instead (off_map_ticks / off_map_penalty_scale, tracked in
+        # count() and applied in reward()), so a fresh/undertrained policy
+        # gets pushed back toward the PC's room rather than losing the
+        # episode the instant it steps out.
         return (
             True
             if stuck_tile
             or stuck_dialog
-            or left_tutorial_room
             or self._dialog_reopen_truncate
             or self.loop_streak >= self.max_loop_streak
             or self.max_useless_battle_ticks <= self.in_battle_ticks
@@ -1939,7 +1949,6 @@ class Data:
             GOAL_OAKS_LAB,
             GOAL_ROUTE_1_ENTRY,
             GOAL_LEFT_HOUSE,
-            GOAL_PC_TUTORIAL,
         )
         for g in priority:
             if self.is_goal_satisfied(g):
@@ -2917,6 +2926,19 @@ class Data:
         r = min(1.0, enemy_lv / player_lv)
         return 3 * r**2 - 2 * r**3
 
+    def _wild_encounter_decay(self) -> float:
+        """Per-tile decay factor for repeat wild encounters this episode.
+
+        Floors at 0 after ``wild_visit_decay_visits`` prior wild fights on
+        the current tile (``_battle_entry_wild_visits``, cached at battle
+        entry). Applied to every positive reward a wild fight can pay
+        (``reward_enemy_hp``, ``reward_enemy_status``, ``battle_won_reward``)
+        so grinding one grass tile drains to zero reward, not just the win
+        bonus. Trainer battles never call this — they are one-shot per
+        sprite, not repeatable on the same tile.
+        """
+        return max(0.0, 1.0 - self._battle_entry_wild_visits / self.wild_visit_decay_visits)
+
     def reward_battle_exit(self, memory: bytes) -> float:
         """Reward battle outcome on battle→overworld transition (wBattleResult).
 
@@ -2980,10 +3002,7 @@ class Data:
             # are one-shot per sprite so they are exempt (type_of_battle read
             # from `memory`, the still-in-battle previous frame).
             if self.type_of_battle(memory) == 1:
-                reward *= max(
-                    0.0,
-                    1.0 - self._battle_entry_wild_visits / self.wild_visit_decay_visits,
-                )
+                reward *= self._wild_encounter_decay()
             kind = "win"
         elif result == 1:
             reward = self.battle_lost_penalty
@@ -3057,6 +3076,12 @@ class Data:
 
         scale = self._battle_difficulty_scale(enemy_lv, active_lv)
         scaled = frac * scale
+        # Same per-tile decay as battle_won_reward (see _wild_encounter_decay)
+        # — only the positive (damage-dealt) side; a negative frac (e.g. an
+        # enemy switch-in reading higher HP than the fainted mon it replaced)
+        # is not a reward being farmed, so it is left undiscounted.
+        if scaled > 0 and self.type_of_battle(self.pyboy.memory) == 1:
+            scaled *= self._wild_encounter_decay()
         self.last_enemy_hp_debug = {
             "enemy_level": enemy_lv,
             "active_level": active_lv,
@@ -3077,7 +3102,11 @@ class Data:
             elif bit_before == 1 and bit_after == 0:
                 reward += -self.status_reward
 
-        return max(0, reward)
+        reward = max(0, reward)
+        # Same per-tile wild-encounter decay as reward_enemy_hp/battle_won_reward.
+        if reward > 0 and self.type_of_battle(self.pyboy.memory) == 1:
+            reward *= self._wild_encounter_decay()
+        return reward
 
     def reward_pokedex(self, memory: bytes):
         return self.reward_pokedex_own(memory) + self.reward_pokedex_seen(memory)

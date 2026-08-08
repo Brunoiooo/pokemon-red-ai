@@ -295,7 +295,7 @@ def build_argparser(parent=None):
     p.add_argument("--ent-coef", type=float, default=0.05)
     p.add_argument("--frame-skip", type=int, default=16)
     p.add_argument("--max-steps", type=int, default=None)
-    p.add_argument("--stage", default="stage_pc_tutorial",
+    p.add_argument("--stage", default="stage_left_house",
                    help="Starting curriculum stage (see curriculum_config.STAGE_ORDER)")
     p.add_argument("--list-stages", action="store_true",
                    help="List all curriculum stages (id, goal, max_steps, save) and exit")

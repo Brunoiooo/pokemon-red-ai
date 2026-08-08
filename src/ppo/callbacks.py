@@ -51,7 +51,7 @@ class MilestoneCallback(BaseCallback):
         self,
         window: int = 100,
         auto_curriculum: bool = True,
-        start_stage: str = "stage_pc_tutorial",
+        start_stage: str = "stage_left_house",
         success_threshold: float | None = None,
         min_episodes: int | None = None,
         check_every: int | None = None,

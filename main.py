@@ -14,7 +14,7 @@ def main():
     print(
         "The Tk GUI (main.py) is deprecated / broken.\n"
         "Use the PPO CLI:\n"
-        "  python cli.py train --workers 8 --stage stage_pc_tutorial\n"
+        "  python cli.py train --workers 8 --stage stage_left_house\n"
         "  python cli.py eval --model models/<run>/best/best_model.zip\n"
         "\n"
         "Legacy DQN:\n"

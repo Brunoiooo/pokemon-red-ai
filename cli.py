@@ -70,7 +70,7 @@ p_train.add_argument(
 )
 p_train.add_argument("--frame-skip", type=int, default=16)
 p_train.add_argument("--max-steps", type=int, default=None)
-p_train.add_argument("--stage", default="stage_pc_tutorial",
+p_train.add_argument("--stage", default="stage_left_house",
                      help="Starting curriculum stage (see curriculum_config.STAGE_ORDER)")
 p_train.add_argument("--list-stages", action="store_true",
                      help="List all curriculum stages (id, goal, max_steps, save) and exit")
@@ -140,7 +140,7 @@ p_eval.add_argument("--checkpoint", "-c", default="start")
 p_eval.add_argument("--max-steps", "-s", type=int, default=None,
                     help="Override max steps (default: per-stage limit)")
 p_eval.add_argument("--frame-skip", type=int, default=16)
-p_eval.add_argument("--stage", default="stage_pc_tutorial",
+p_eval.add_argument("--stage", default="stage_left_house",
                     help="Starting curriculum stage (see curriculum_config.STAGE_ORDER)")
 p_eval.add_argument(
     "--goal", default="left_house",

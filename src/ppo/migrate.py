@@ -20,16 +20,19 @@ from __future__ import annotations
 
 import torch
 
-from pokemon.Data import GOAL_PC_TUTORIAL
-
 # Goals introduced after older checkpoints were trained. Extend this set
 # (never remove past entries) whenever GOAL_ORDER grows, so --migrate keeps
 # working against checkpoints saved at any earlier point in training history.
 # The internal consistency check in _remap_goal_columns raises loudly if this
 # set doesn't fully account for a checkpoint's actual goal count, rather than
 # silently mis-mapping columns.
+#
+# "pc_tutorial" is a plain string, not a live GOAL_* constant: the stage was
+# later removed from curriculum_config entirely, so any checkpoint that still
+# carries that column now hits the "goal no longer in curriculum, weights
+# discarded" path in _remap_goal_columns instead of being remapped.
 NEW_GOALS_SINCE: dict[str, str] = {
-    GOAL_PC_TUTORIAL: "2026-08-06: pc_tutorial stage inserted at STAGE_ORDER[0]",
+    "pc_tutorial": "2026-08-06: pc_tutorial stage inserted at STAGE_ORDER[0]",
 }
 
 _VECTOR_MLP_IN_KEYS = (
