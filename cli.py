@@ -41,6 +41,7 @@ parser = argparse.ArgumentParser(
         "  python cli.py train --workers 8\n"
         "  python cli.py eval --gui\n"
         "  python cli.py eval --model models/ppo_<timestamp>/best/best_model.zip --gui\n"
+        "  python cli.py eval --batch 300000 --batch-workers 8\n"
         "  python cli.py train-dqn --workers 5\n"
         "  python cli.py eval-dqn --model models/best.pth\n"
     ),
@@ -168,6 +169,37 @@ p_eval.add_argument(
 p_eval.add_argument(
     "--heatmap-frames", type=int, default=300_000,
     help="Rolling window size in frames, pooled across all runs (default: 300000)",
+)
+p_eval.add_argument(
+    "--batch", type=int, default=None, metavar="N",
+    help="Batch mode: run N total episodes/curriculum-legs across "
+         "--batch-workers parallel workers and save static heatmap PNGs to "
+         "--batch-out at the end. Pass --heatmap too to also open the same "
+         "live window as plain eval, fed live from the batch run — it just "
+         "won't auto-close when the batch finishes. E.g. --batch 300000.",
+)
+p_eval.add_argument(
+    "--batch-workers", type=int, default=8,
+    help="Parallel PyBoy worker processes for --batch (default: 8)",
+)
+p_eval.add_argument(
+    "--batch-out", default=None,
+    help="Output directory for --batch heatmap PNGs "
+         "(default: heatmaps/eval_<timestamp>)",
+)
+p_eval.add_argument(
+    "--batch-metrics", nargs="+", choices=["ticks", "reward", "winrate"],
+    default=["ticks"],
+    help="Which heatmap metric(s) to render in --batch mode (default: ticks)",
+)
+p_eval.add_argument(
+    "--batch-top-maps", type=int, default=6,
+    help="Per stage, also render single-map views for the N most-visited "
+         "maps, in addition to the combined view (default: 6)",
+)
+p_eval.add_argument(
+    "--seed", type=int, default=0,
+    help="Base worker seed for --batch mode (each worker gets seed + rank)",
 )
 
 # ---------------------------------------------------------------------------
@@ -301,7 +333,10 @@ def main():
 
     elif args.command == "eval":
         import run_eval_ppo as _m
-        _m.run(args)
+        if args.batch:
+            _m.run_batch(args)
+        else:
+            _m.run(args)
 
     elif args.command == "eval-dqn":
         import run_eval as _m

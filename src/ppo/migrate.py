@@ -33,6 +33,11 @@ import torch
 # discarded" path in _remap_goal_columns instead of being remapped.
 NEW_GOALS_SINCE: dict[str, str] = {
     "pc_tutorial": "2026-08-06: pc_tutorial stage inserted at STAGE_ORDER[0]",
+    "gave_parcel": (
+        "2026-08-09: gave_parcel stage inserted between "
+        "oaks_parcel and town_map"
+    ),
+    "champion": "2026-08-09: champion stage appended after all_badges",
 }
 
 _VECTOR_MLP_IN_KEYS = (

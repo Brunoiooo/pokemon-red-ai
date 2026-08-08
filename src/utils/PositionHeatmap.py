@@ -3,13 +3,24 @@ averaged per run, rendered in its own process so it never blocks
 training/eval. Opt-in via --heatmap on train_ppo.py / run_eval_ppo.py.
 
 Data flow: PokemonRedEnv snapshots Data.visited_positions / direction_counts
-/ map_transitions / reward_sums / wild_visit_counts at every "run" boundary
-(episode end, or a mid-episode curriculum-leg clear) into
-info["heatmap_positions"/"heatmap_directions"/"heatmap_transitions"/
-"heatmap_rewards"/"heatmap_wild"/"heatmap_steps"]. A callback (training) or
-the eval loop (eval) forwards those snapshots through a multiprocessing.Queue
-to _run_window, which runs in a separate process and owns the matplotlib
-window.
+/ map_transitions / reward_sums / battle_outcome_counts / milestone_hit_counts
+at every "run" boundary (episode end, or a mid-episode curriculum-leg clear)
+into info["heatmap_positions"/"heatmap_directions"/"heatmap_transitions"/
+"heatmap_rewards"/"heatmap_battle_outcomes"/"heatmap_milestones"/
+"heatmap_steps"].
+A callback (training) or the eval loop (eval) forwards those snapshots
+through a multiprocessing.Queue to _run_window, which runs in a separate
+process and owns the matplotlib window.
+
+`run_eval_ppo.py --batch` always feeds RollingHeatmapAggregator(s) directly
+(window_frames=None — an unbounded pooled total, not a rolling window) and
+calls save_heatmap_images() once at the end to render static PNGs headlessly
+— a run that size needs a permanent artifact, not just a window. Pass
+--heatmap alongside --batch and it *also* opens the same live _run_window as
+plain eval, fed the same snapshots as they arrive; the difference from plain
+eval is only that it's left open at the end instead of auto-closed, since a
+300k-run batch is exactly the case where you want to sit and read the result
+afterward.
 
 Two view modes (toggle with 'c'):
   - single map: one map_id's grid + direction arrows, cycled with left/right.
@@ -23,7 +34,7 @@ Two view modes (toggle with 'c'):
     there's no memory-flag here distinguishing "walked across an edge" from
     "used a door", so treat the combined view as approximate.
 
-Three color metrics (cycle with 'r'), independent of the view mode:
+Six color metrics (cycle with 'r'), independent of the view mode:
   - ticks: avg ticks/run per tile (time spent) — the original view.
   - reward: avg reward/run per tile — where reward is actually earned, not
     just where time is spent. A battle-won/lost payout is attributed to the
@@ -31,16 +42,36 @@ Three color metrics (cycle with 'r'), independent of the view mode:
     has no world position, so farming loops (grind a tile for repeat battle
     reward, spam a menu for event-flag reward, etc.) show up as a hot tile
     here even when the ticks view looks unremarkable.
-  - wild: avg wild-encounter count/run per tile (Data.wild_visit_counts) —
-    raw encounter frequency, independent of battle_won_reward's per-tile
-    decay. A tile can show heavily "wild"-hot while its "reward" view looks
-    unremarkable once repeat wins have decayed to ~0, which is exactly the
-    farming-vs-payoff gap worth seeing on its own axis.
+  - winrate: battle win-rate per tile (wins / (wins + losses), a fled battle
+    counts as neither), same attribution as reward. Separates "this tile pays
+    well" from "this tile pays well because it's an easy fight" — a grass
+    tile can be reward-hot and win-rate-low at once (rare wins pay a lot on
+    net) or the reverse (frequent small wins).
+  - fleerate: successful-flee quality per tile (smart / (smart + coward)) —
+    smart means the enemy outleveled the whole party, coward means it didn't.
+    Disjoint from winrate (a fled fight is neither a win nor a loss), same
+    _MIN_BATTLE_SAMPLES floor.
+  - recency: episodes since a tile was last touched, within the current
+    window. Not an average — a raw "how long ago" count, for spotting tiles
+    the policy has drifted away from recently without waiting for them to
+    fall out of the window entirely.
+  - milestones: avg story-milestone hits/run per tile — how much of the
+    curriculum's critical path actually lines up with where the agent
+    spends time, same attribution as reward.
+  Rate metrics (winrate/fleerate) are left blank on tiles with too few
+  recorded battles (< _MIN_BATTLE_SAMPLES) rather than shown at a noisy
+  100%/0%.
+
+Off-goal map cue (combined and single views, all metrics): any map not in
+GOAL_ALLOWED_MAPS for the active stage's goal — the same critical-path set
+reward_off_goal_camp penalizes dwelling outside of — is labeled and tinted
+red. A map-level classification, not a new per-tile signal, and skipped
+for the "All" stage pool (no single goal to check against).
 
 Per-tile numeric value labels (toggle with 'v'), independent of view mode
-and metric: prints the exact avg-ticks or avg-reward number on top of each
-cell, for reading precise values instead of eyeballing color. Auto-hidden
-above _MAX_VALUE_LABELS cells since that many text artists stalls redraws.
+and metric: prints the exact per-tile value on top of each cell, for
+reading precise values instead of eyeballing color. Auto-hidden above
+_MAX_VALUE_LABELS cells since that many text artists stalls redraws.
 """
 from __future__ import annotations
 
@@ -57,6 +88,14 @@ _DIRS = ("up", "down", "left", "right")
 # Cells need at least this many recorded steps before an arrow is drawn —
 # a single pass-through is noise, not a "most common direction".
 _MIN_DIRECTION_SAMPLES = 3
+# Tiles need at least this many recorded battles (per the relevant pair of
+# buckets below) before a rate metric shows a value — one lucky/unlucky
+# fight would otherwise read as a solid 100%/0% hotspot.
+_MIN_BATTLE_SAMPLES = 3
+# metric name -> (numerator bucket, denominator-partner bucket) into
+# battle_outcome_counts. winrate and fleerate are both a ratio over one
+# disjoint pair of that dict's four buckets (win/loss, smart/coward).
+_RATE_METRICS = {"winrate": ("win", "loss"), "fleerate": ("smart", "coward")}
 # Above this many cells, per-tile value labels are skipped — matplotlib text
 # artists are expensive enough that a big combined view would stall redraws.
 _MAX_VALUE_LABELS = 800
@@ -86,26 +125,48 @@ class RollingHeatmapAggregator:
     One ``add_episode`` call = one "run": a full episode, or one curriculum
     leg when auto-curriculum clears visited_positions mid-episode. That's
     the unit "average per run" is taken over.
+
+    ``window_frames=None`` disables the rolling window entirely: runs are
+    never evicted and never even kept around (no ``_runs`` deque growth), so
+    the aggregator becomes a plain unbounded accumulator. Used by the batch
+    eval mode, which wants a total over e.g. 300k runs rather than a "recent
+    traffic" window — keeping every run's raw position dict for a batch that
+    size would be a lot of wasted memory for eviction bookkeeping nothing
+    will ever use.
     """
 
-    def __init__(self, window_frames: int):
-        self.window_frames = int(window_frames)
+    def __init__(self, window_frames: int | None):
+        self.window_frames = None if window_frames is None else int(window_frames)
         self._runs: deque[
             tuple[
                 int,
                 dict[tuple[int, int, int], int],
                 dict[tuple[int, int, int], dict[str, int]],
                 dict[tuple[int, int, int], float],
+                dict[tuple[int, int, int], dict[str, int]],
                 dict[tuple[int, int, int], int],
             ]
         ] = deque()
         self.total_frames = 0
+        # Total add_episode() calls that weren't dropped for being empty —
+        # unlike total_frames/run_count this never gets decremented by
+        # eviction, so it's the right "N runs" figure for a batch summary.
+        self.total_episodes = 0
         # map_id -> {(x, y): summed ticks across runs in the window}
         self.sum_ticks: dict[int, dict[tuple[int, int], int]] = {}
         # map_id -> {(x, y): summed reward across runs in the window}
         self.sum_rewards: dict[int, dict[tuple[int, int], float]] = {}
-        # map_id -> {(x, y): summed wild-encounter count across runs in the window}
-        self.sum_wild: dict[int, dict[tuple[int, int], float]] = {}
+        # map_id -> {(x, y): {"win"/"loss": count summed across runs in window}}
+        self.sum_battle_outcomes: dict[int, dict[tuple[int, int], dict[str, int]]] = {}
+        # map_id -> {(x, y): summed story-milestone hit count across runs in window}
+        self.sum_milestones: dict[int, dict[tuple[int, int], int]] = {}
+        # map_id -> {(x, y): total_episodes value as of the last run that
+        # touched this tile} — permanent, never evicted (like
+        # transition_votes), so "recency" can keep pointing at how long ago
+        # a tile was last touched even after its ticks/reward eviction age
+        # out; the "recency" metric's own footprint is the ticks grid, so an
+        # entry only actually renders while its tile is still in-window.
+        self.last_seen: dict[int, dict[tuple[int, int], int]] = {}
         # map_id -> number of runs in the window that touched this map
         self.run_count: dict[int, int] = {}
         # map_id -> {(x, y): {"up"/"down"/"left"/"right": step count}}
@@ -119,21 +180,28 @@ class RollingHeatmapAggregator:
         directions: dict[tuple[int, int, int], dict[str, int]] | None,
         transitions: dict[tuple[int, int], dict[tuple[int, int], int]] | None,
         rewards: dict[tuple[int, int, int], float] | None,
+        battle_outcomes: dict[tuple[int, int, int], dict[str, int]] | None,
+        milestones: dict[tuple[int, int, int], int] | None,
         steps: int,
-        wild: dict[tuple[int, int, int], int] | None = None,
     ) -> None:
         if not positions or steps <= 0:
             return
+        self.total_episodes += 1
         directions = directions or {}
         rewards = rewards or {}
-        wild = wild or {}
-        self._runs.append((steps, positions, directions, rewards, wild))
+        battle_outcomes = battle_outcomes or {}
+        milestones = milestones or {}
+        if self.window_frames is not None:
+            self._runs.append(
+                (steps, positions, directions, rewards, battle_outcomes, milestones)
+            )
         self.total_frames += steps
         touched_maps = set()
         for (x, y, map_id), ticks in positions.items():
             touched_maps.add(map_id)
             grid = self.sum_ticks.setdefault(map_id, {})
             grid[(x, y)] = grid.get((x, y), 0) + ticks
+            self.last_seen.setdefault(map_id, {})[(x, y)] = self.total_episodes
         for map_id in touched_maps:
             self.run_count[map_id] = self.run_count.get(map_id, 0) + 1
         for (x, y, map_id), dcounts in directions.items():
@@ -145,18 +213,27 @@ class RollingHeatmapAggregator:
         for (x, y, map_id), r in rewards.items():
             grid = self.sum_rewards.setdefault(map_id, {})
             grid[(x, y)] = grid.get((x, y), 0.0) + r
-        for (x, y, map_id), w in wild.items():
-            grid = self.sum_wild.setdefault(map_id, {})
-            grid[(x, y)] = grid.get((x, y), 0.0) + w
+        for (x, y, map_id), counts in battle_outcomes.items():
+            cell = self.sum_battle_outcomes.setdefault(map_id, {}).setdefault(
+                (x, y), {"win": 0, "loss": 0}
+            )
+            for k, c in counts.items():
+                cell[k] = cell.get(k, 0) + c
+        for (x, y, map_id), n in milestones.items():
+            grid = self.sum_milestones.setdefault(map_id, {})
+            grid[(x, y)] = grid.get((x, y), 0) + n
         for key, votes in (transitions or {}).items():
             dest = self.transition_votes.setdefault(key, {})
             for delta, c in votes.items():
                 dest[delta] = dest.get(delta, 0) + c
-        self._evict()
+        if self.window_frames is not None:
+            self._evict()
 
     def _evict(self) -> None:
         while self._runs and self.total_frames > self.window_frames:
-            steps, positions, directions, rewards, wild = self._runs.popleft()
+            steps, positions, directions, rewards, battle_outcomes, milestones = (
+                self._runs.popleft()
+            )
             self.total_frames -= steps
             touched_maps = set()
             for (x, y, map_id), ticks in positions.items():
@@ -206,20 +283,32 @@ class RollingHeatmapAggregator:
                     grid.pop((x, y), None)
                 if not grid:
                     self.sum_rewards.pop(map_id, None)
-            for (x, y, map_id), w in wild.items():
-                grid = self.sum_wild.get(map_id)
+            for (x, y, map_id), counts in battle_outcomes.items():
+                bmap = self.sum_battle_outcomes.get(map_id)
+                cell = bmap.get((x, y)) if bmap is not None else None
+                if cell is None:
+                    continue
+                for k, c in counts.items():
+                    cell[k] = cell.get(k, 0) - c
+                if not any(cell.values()):
+                    bmap.pop((x, y), None)
+                    if not bmap:
+                        self.sum_battle_outcomes.pop(map_id, None)
+            for (x, y, map_id), n in milestones.items():
+                grid = self.sum_milestones.get(map_id)
                 if grid is None:
                     continue
-                # Same still-ticked piggyback as reward above — wild counts
-                # are non-negative but a run can legitimately contribute 0.
+                # Same piggyback-on-ticks rule as reward: milestone hits are
+                # rare and sparse, so drop the entry once its tile has no
+                # ticks left rather than tracking staleness independently.
                 still_ticked = (x, y) in self.sum_ticks.get(map_id, {})
-                remaining = grid.get((x, y), 0.0) - w
+                remaining = grid.get((x, y), 0) - n
                 if still_ticked:
                     grid[(x, y)] = remaining
                 else:
                     grid.pop((x, y), None)
                 if not grid:
-                    self.sum_wild.pop(map_id, None)
+                    self.sum_milestones.pop(map_id, None)
             # transition_votes is intentionally NOT evicted here — map
             # connectivity is structural, not recent-behavior traffic.
 
@@ -230,19 +319,35 @@ class RollingHeatmapAggregator:
     def _metric_sums(self, metric: str) -> dict[int, dict[tuple[int, int], float]]:
         if metric == "reward":
             return self.sum_rewards
-        if metric == "wild":
-            return self.sum_wild
+        if metric == "milestones":
+            return self.sum_milestones
         return self.sum_ticks
+
+    @staticmethod
+    def _outcome_rate(
+        counts: dict[str, int], num_key: str, den_key: str
+    ) -> float | None:
+        """num_key / (num_key + den_key), or None if under _MIN_BATTLE_SAMPLES.
+        Shared by winrate (win vs loss) and fleerate (smart vs coward) —
+        both are ratios over the same two-bucket slice of battle_outcome_counts."""
+        total = counts.get(num_key, 0) + counts.get(den_key, 0)
+        if total < _MIN_BATTLE_SAMPLES:
+            return None
+        return counts.get(num_key, 0) / total
 
     def average_grid(self, map_id: int, metric: str = "ticks"):
         """(grid, x0, y0): grid[y - y0, x - x0] = avg value/run for
-        ``metric`` ("ticks", "reward", or "wild"), NaN where unvisited in the current
-        window. None if the map isn't in the window.
+        ``metric`` ("ticks" or "reward"), a rate in [0, 1] for "winrate"
+        (win / (win+loss)) or "fleerate" (smart / (smart+coward)), or
+        episodes-since-last-visit for "recency", NaN where unvisited (or,
+        for the rate metrics, under-sampled) in the current window. None if
+        the map isn't in the window.
 
         The footprint (bounding box + which cells are "visited") always
-        follows the ticks grid — reward is attributed to the same tiles
-        visited_positions tracks, so ticks is the authoritative visited-set;
-        a tile with exactly zero net reward is still "visited", not NaN.
+        follows the ticks grid — reward/winrate/fleerate are attributed to a
+        subset of the tiles visited_positions tracks, so ticks is the
+        authoritative visited-set; a tile with exactly zero net reward is
+        still "visited", not NaN.
         """
         grid_ticks = self.sum_ticks.get(map_id)
         n_runs = self.run_count.get(map_id, 0)
@@ -253,6 +358,21 @@ class RollingHeatmapAggregator:
         x0, x1 = min(xs), max(xs)
         y0, y1 = min(ys), max(ys)
         out = np.full((y1 - y0 + 1, x1 - x0 + 1), np.nan, dtype=np.float32)
+        rate_keys = _RATE_METRICS.get(metric)
+        if rate_keys is not None:
+            outcome_grid = self.sum_battle_outcomes.get(map_id, {})
+            for (x, y), counts in outcome_grid.items():
+                rate = self._outcome_rate(counts, *rate_keys)
+                if rate is not None:
+                    out[y - y0, x - x0] = rate
+            return out, x0, y0
+        if metric == "recency":
+            seen = self.last_seen.get(map_id, {})
+            for (x, y) in grid_ticks:
+                last = seen.get((x, y))
+                if last is not None:
+                    out[y - y0, x - x0] = self.total_episodes - last
+            return out, x0, y0
         source = self._metric_sums(metric).get(map_id, {})
         for (x, y), ticks in grid_ticks.items():
             val = ticks if metric == "ticks" else source.get((x, y), 0.0)
@@ -403,7 +523,8 @@ class RollingHeatmapAggregator:
     def combined_view(self, anchor: int | None = None, metric: str = "ticks"):
         """Stitches every map reachable from ``anchor`` (default: the
         most-visited map in the current window) into one canvas, colored by
-        ``metric`` ("ticks", "reward", or "wild").
+        ``metric`` ("ticks", "reward", "winrate", "fleerate", "recency", or
+        "milestones").
 
         Returns (grid, x0, y0, offsets, connected_maps, unconnected_maps) or
         None if there's nothing in the window yet.
@@ -422,8 +543,22 @@ class RollingHeatmapAggregator:
         unconnected = [m for m in maps_in_window if m not in offsets]
 
         cells: list[tuple[int, int, float]] = []
+        rate_keys = _RATE_METRICS.get(metric)
         for map_id in connected:
             gx0, gy0 = offsets[map_id]
+            if rate_keys is not None:
+                for (x, y), counts in self.sum_battle_outcomes.get(map_id, {}).items():
+                    rate = self._outcome_rate(counts, *rate_keys)
+                    if rate is not None:
+                        cells.append((x + gx0, y + gy0, rate))
+                continue
+            if metric == "recency":
+                seen = self.last_seen.get(map_id, {})
+                for (x, y) in self.sum_ticks.get(map_id, {}):
+                    last = seen.get((x, y))
+                    if last is not None:
+                        cells.append((x + gx0, y + gy0, self.total_episodes - last))
+                continue
             n_runs = max(self.run_count.get(map_id, 1), 1)
             metric_grid = self._metric_sums(metric).get(map_id, {})
             for (x, y), ticks in self.sum_ticks.get(map_id, {}).items():
@@ -469,6 +604,28 @@ def _stage_order_lookup() -> list[str]:
         return []
 
 
+def _allowed_maps_lookup() -> dict[str, frozenset[int] | None]:
+    """stage label -> GOAL_ALLOWED_MAPS entry for that stage's goal, for the
+    off-goal-map visual cue in the combined/single views. A missing or None
+    entry (stage not recognized, or its goal has no restriction in
+    GOAL_ALLOWED_MAPS) just means off-goal highlighting is skipped for that
+    stage — it's the same map-level check reward_off_goal_camp uses, not a
+    new per-tile signal, so there's nothing to fall back to."""
+    try:
+        from curriculum_config import get_goal_for_stage
+
+        from pokemon.Data import GOAL_ALLOWED_MAPS
+    except Exception:
+        return {}
+    out: dict[str, frozenset[int] | None] = {}
+    for stage in _stage_order_lookup():
+        try:
+            out[stage] = GOAL_ALLOWED_MAPS.get(get_goal_for_stage(stage))
+        except Exception:
+            continue
+    return out
+
+
 def _run_window(q: "Queue", window_frames: int, title: str) -> None:
     import matplotlib
 
@@ -481,6 +638,7 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
 
     map_names = _map_name_lookup()
     stage_order = _stage_order_lookup()
+    allowed_maps_by_stage = _allowed_maps_lookup()
     # "All" pools every run regardless of stage; stage_aggs holds one
     # independent rolling aggregator per curriculum stage seen so far.
     agg_all = RollingHeatmapAggregator(window_frames)
@@ -489,15 +647,27 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
     # reward: signed "reward earned", diverging colormap centered on zero so
     # farming/exploit hotspots (strongly positive) read differently from
     # penalty hotspots (strongly negative) instead of both just being "hot".
-    # wild: non-negative "encounter count", its own sequential colormap so
-    # it's visually distinct from ticks at a glance.
+    # winrate: a fixed-range [0, 1] fraction, red-to-green so losing tiles
+    # and winning tiles are immediately distinguishable regardless of sample
+    # size (unlike ticks/reward, the color scale never rescales to the data).
     ticks_cmap = plt.get_cmap("inferno").copy()
     ticks_cmap.set_bad(color="#111111")
     reward_cmap = plt.get_cmap("coolwarm").copy()
     reward_cmap.set_bad(color="#111111")
-    wild_cmap = plt.get_cmap("viridis").copy()
-    wild_cmap.set_bad(color="#111111")
-    _METRICS = ("ticks", "reward", "wild")
+    winrate_cmap = plt.get_cmap("RdYlGn").copy()
+    winrate_cmap.set_bad(color="#111111")
+    # fleerate shares winrate's fixed-range red-green scale — same "0-1
+    # fraction, green is the good outcome" shape, just a different pair of
+    # battle_outcome_counts buckets (smart/coward instead of win/loss).
+    # recency: non-negative "episodes since last visit", sequential like
+    # ticks but a distinct colormap so the two aren't visually confused.
+    recency_cmap = plt.get_cmap("viridis").copy()
+    recency_cmap.set_bad(color="#111111")
+    # milestones: non-negative sparse counts (most tiles are 0), same
+    # avg/run convention as reward — distinct colormap from ticks/recency.
+    milestones_cmap = plt.get_cmap("plasma").copy()
+    milestones_cmap.set_bad(color="#111111")
+    _METRICS = ("ticks", "reward", "winrate", "fleerate", "recency", "milestones")
 
     fig, ax = plt.subplots(figsize=(8, 8))
     fig.canvas.manager.set_window_title(title)
@@ -630,11 +800,24 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
             vmax = max(vmax, 1.0)
             im.set_clim(-vmax, vmax)
             cbar.set_label("avg reward / run")
-        elif state["metric"] == "wild":
-            im.set_cmap(wild_cmap)
+        elif state["metric"] == "winrate":
+            im.set_cmap(winrate_cmap)
+            im.set_clim(0.0, 1.0)
+            cbar.set_label("battle win rate")
+        elif state["metric"] == "fleerate":
+            im.set_cmap(winrate_cmap)
+            im.set_clim(0.0, 1.0)
+            cbar.set_label("flee smart-rate (smart / smart+coward)")
+        elif state["metric"] == "recency":
+            im.set_cmap(recency_cmap)
             vmax = float(finite.max()) if finite.size else 1.0
             im.set_clim(0, max(vmax, 1.0))
-            cbar.set_label("avg wild encounters / run")
+            cbar.set_label("episodes since last visit")
+        elif state["metric"] == "milestones":
+            im.set_cmap(milestones_cmap)
+            vmax = float(finite.max()) if finite.size else 1.0
+            im.set_clim(0, max(vmax, 1.0))
+            cbar.set_label("avg milestone hits / run")
         else:
             im.set_cmap(ticks_cmap)
             vmax = float(finite.max()) if finite.size else 1.0
@@ -669,7 +852,14 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
                 f"x  (values hidden: {xs.size} cells > {_MAX_VALUE_LABELS} cap)"
             )
             return
-        fmt = "{:+.2f}" if state["metric"] == "reward" else "{:.0f}"
+        if state["metric"] == "reward":
+            fmt = "{:+.2f}"
+        elif state["metric"] in ("winrate", "fleerate"):
+            fmt = "{:.0%}"
+        elif state["metric"] == "milestones":
+            fmt = "{:.2f}"
+        else:
+            fmt = "{:.0f}"
         stroke = [pe.withStroke(linewidth=1.5, foreground="black")]
         for iy, ix in zip(ys, xs):
             value_texts.append(
@@ -706,11 +896,18 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
         name = name_of(state["map_id"])
         n_runs = agg.run_count.get(state["map_id"], 0)
         idx = maps.index(state["map_id"]) + 1
+        allowed = allowed_maps_by_stage.get(state["stage"])
+        off_goal_s = (
+            "  [OFF-GOAL MAP]"
+            if allowed is not None and state["map_id"] not in allowed
+            else ""
+        )
         ax.set_title(
-            f"[{state['stage']}] {name} (id={state['map_id']})  [{idx}/{len(maps)}]  "
+            f"[{state['stage']}] {name} (id={state['map_id']}){off_goal_s}  "
+            f"[{idx}/{len(maps)}]  "
             f"metric={state['metric']}\n"
             f"{n_runs} runs - {agg.total_frames:,} frames in window\n"
-            f"<-/-> switch map, c: combined view, r: cycle ticks/reward/wild, "
+            f"<-/-> switch map, c: combined view, r: cycle metric, "
             f"v: toggle value labels ({'on' if state['show_values'] else 'off'})"
         )
 
@@ -731,6 +928,8 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
         _clear_overlays()
         _draw_quiver(agg._direction_arrays(offsets))
         _draw_value_labels(grid, x0, y0)
+        allowed = allowed_maps_by_stage.get(state["stage"])
+        off_goal_count = 0
         for map_id in connected:
             gx0, gy0 = offsets[map_id]
             cells = agg.sum_ticks.get(map_id)
@@ -738,14 +937,27 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
                 continue
             cx = gx0 + sum(p[0] for p in cells) / len(cells)
             cy = gy0 + sum(p[1] for p in cells) / len(cells)
+            # Off-goal = this map isn't in the current stage's
+            # GOAL_ALLOWED_MAPS, i.e. the same "critical path" set
+            # reward_off_goal_camp penalizes dwelling outside of — a purely
+            # visual cue, no new per-tile data needed since it's a map-level
+            # (not tile-level) classification.
+            off_goal = allowed is not None and map_id not in allowed
+            if off_goal:
+                off_goal_count += 1
             labels.append(
                 ax.text(
-                    cx, cy, name_of(map_id),
+                    cx, cy, name_of(map_id) + (" [OFF-GOAL]" if off_goal else ""),
                     color="white", fontsize=8, ha="center", va="center",
-                    bbox=dict(boxstyle="round,pad=0.2", fc="black", alpha=0.5, lw=0),
+                    bbox=dict(
+                        boxstyle="round,pad=0.2",
+                        fc="#8b1a1a" if off_goal else "black",
+                        alpha=0.75 if off_goal else 0.5, lw=0,
+                    ),
                 )
             )
 
+        off_goal_s = f"  |  {off_goal_count} off-goal map(s)" if off_goal_count else ""
         unconnected_s = (
             f"  |  {len(unconnected)} not yet connected: "
             f"{', '.join(name_of(m) for m in unconnected[:6])}"
@@ -755,8 +967,8 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
         ax.set_title(
             f"[{state['stage']}] Combined view: {len(connected)} maps stitched  "
             f"metric={state['metric']}\n"
-            f"{agg.total_frames:,} frames in window{unconnected_s}\n"
-            f"c: single-map view, r: cycle ticks/reward/wild, "
+            f"{agg.total_frames:,} frames in window{unconnected_s}{off_goal_s}\n"
+            f"c: single-map view, r: cycle metric, "
             f"v: toggle value labels ({'on' if state['show_values'] else 'off'}) "
             f"(best-effort — connections are inferred, not authoritative)"
         )
@@ -779,15 +991,22 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
                 if item is STOP:
                     plt.close(fig)
                     return
-                positions, directions, transitions, rewards, steps, stage, wild = item
+                (
+                    positions, directions, transitions, rewards,
+                    battle_outcomes, milestones, steps, stage,
+                ) = item
                 agg_all.add_episode(
-                    positions, directions, transitions, rewards, steps, wild
+                    positions, directions, transitions, rewards,
+                    battle_outcomes, milestones, steps,
                 )
                 stage_label = stage or "unknown"
                 is_new_stage = stage_label not in stage_aggs
                 stage_aggs.setdefault(
                     stage_label, RollingHeatmapAggregator(window_frames)
-                ).add_episode(positions, directions, transitions, rewards, steps, wild)
+                ).add_episode(
+                    positions, directions, transitions, rewards,
+                    battle_outcomes, milestones, steps,
+                )
                 if is_new_stage:
                     _refresh_stage_dropdown()
                 got_any = True
@@ -824,17 +1043,170 @@ def push_episode(
     directions: dict | None,
     transitions: dict | None,
     rewards: dict | None,
+    battle_outcomes: dict | None,
+    milestones: dict | None,
     steps: int,
     stage: str | None = None,
-    wild: dict | None = None,
 ) -> None:
     """Non-blocking: drop the update rather than stall the caller if the
     visualizer process is behind."""
     try:
         q.put_nowait(
-            (positions, directions, transitions, rewards, steps, stage, wild)
+            (
+                positions, directions, transitions, rewards,
+                battle_outcomes, milestones, steps, stage,
+            )
         )
     except _queue_mod.Full:
         pass
     except Exception:
         pass
+
+
+def _slug(label: str) -> str:
+    """Filesystem-safe stem for a stage/metric label."""
+    out = "".join(c if c.isalnum() else "_" for c in str(label))
+    return out.strip("_") or "x"
+
+
+def save_heatmap_images(
+    aggregators: dict[str, "RollingHeatmapAggregator"],
+    out_dir,
+    metrics: tuple[str, ...] = ("ticks",),
+    top_maps: int = 6,
+) -> list:
+    """Render static PNGs for a batch of pooled runs — one combined-view
+    image plus up to ``top_maps`` single-map images (most-visited first),
+    per metric, per aggregator in ``aggregators`` (e.g. {"all": agg_all,
+    **stage_aggs}).
+
+    Unlike ``_run_window``, this has no event loop or live queue: it's meant
+    for the --batch eval mode, which can run far too many episodes (e.g.
+    300k) to drive an interactive matplotlib window. Uses the non-interactive
+    Agg backend, so it works headless (no display needed).
+
+    Returns the list of written file paths.
+    """
+    from pathlib import Path
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.patheffects as pe
+    import matplotlib.pyplot as plt
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    map_names = _map_name_lookup()
+
+    _rate_cmap = plt.get_cmap("RdYlGn").copy()
+    cmap_of = {
+        "ticks": plt.get_cmap("inferno").copy(),
+        "reward": plt.get_cmap("coolwarm").copy(),
+        "winrate": _rate_cmap,
+        "fleerate": _rate_cmap,
+        "recency": plt.get_cmap("viridis").copy(),
+        "milestones": plt.get_cmap("plasma").copy(),
+    }
+    for cmap in cmap_of.values():
+        cmap.set_bad(color="#111111")
+    label_of = {
+        "ticks": "avg ticks / run",
+        "reward": "avg reward / run",
+        "winrate": "battle win rate",
+        "fleerate": "flee smart-rate (smart / smart+coward)",
+        "recency": "episodes since last visit",
+        "milestones": "avg milestone hits / run",
+    }
+
+    def _clim(grid, metric: str) -> tuple[float, float]:
+        finite = grid[~np.isnan(grid)]
+        if metric == "reward":
+            vmax = float(np.abs(finite).max()) if finite.size else 1.0
+            return -max(vmax, 1.0), max(vmax, 1.0)
+        if metric in ("winrate", "fleerate"):
+            return 0.0, 1.0
+        vmax = float(finite.max()) if finite.size else 1.0
+        return 0.0, max(vmax, 1.0)
+
+    def _value_fmt(metric: str) -> str:
+        if metric == "reward":
+            return "{:+.2f}"
+        if metric in ("winrate", "fleerate"):
+            return "{:.0%}"
+        if metric == "milestones":
+            return "{:.2f}"
+        return "{:.0f}"
+
+    def _render(grid, x0: int, y0: int, title: str, metric: str, path: "Path", dgrid) -> None:
+        fig, ax = plt.subplots(figsize=(8, 8))
+        im = ax.imshow(grid, cmap=cmap_of[metric], origin="upper")
+        im.set_extent(
+            (x0 - 0.5, x0 + grid.shape[1] - 0.5, y0 + grid.shape[0] - 0.5, y0 - 0.5)
+        )
+        im.set_clim(*_clim(grid, metric))
+        fig.colorbar(im, ax=ax, label=label_of[metric])
+        ax.set_xlabel("x")
+        ax.set_ylabel("y")
+        ax.set_title(title, fontsize=10)
+        if dgrid is not None:
+            xs, ys, us, vs = dgrid
+            ax.quiver(
+                xs, ys, us, vs,
+                color="#4fd1ff", alpha=0.9, pivot="mid",
+                angles="xy", scale_units="xy", scale=1.3, width=0.006,
+            )
+        ys_idx, xs_idx = np.where(~np.isnan(grid))
+        if 0 < xs_idx.size <= _MAX_VALUE_LABELS:
+            fmt = _value_fmt(metric)
+            stroke = [pe.withStroke(linewidth=1.5, foreground="black")]
+            for iy, ix in zip(ys_idx, xs_idx):
+                ax.text(
+                    x0 + ix, y0 + iy, fmt.format(float(grid[iy, ix])),
+                    color="white", fontsize=6, ha="center", va="center",
+                    path_effects=stroke, zorder=5,
+                )
+        fig.tight_layout()
+        fig.savefig(path, dpi=150)
+        plt.close(fig)
+
+    written: list = []
+    for label, agg in aggregators.items():
+        maps = agg.maps()
+        if not maps:
+            continue
+        slug_label = _slug(label)
+        for metric in metrics:
+            combined = agg.combined_view(metric=metric)
+            if combined is not None:
+                grid, x0, y0, offsets, connected, unconnected = combined
+                path = out_dir / f"{slug_label}_combined_{metric}.png"
+                title = (
+                    f"[{label}] combined: {len(connected)} maps stitched "
+                    f"({len(unconnected)} unconnected)  metric={metric}\n"
+                    f"{agg.total_episodes:,} runs pooled, "
+                    f"{agg.total_frames:,} frames"
+                )
+                _render(
+                    grid, x0, y0, title, metric, path,
+                    dgrid=agg._direction_arrays(offsets),
+                )
+                written.append(path)
+
+            for map_id in maps[:top_maps]:
+                result = agg.average_grid(map_id, metric=metric)
+                if result is None:
+                    continue
+                grid, x0, y0 = result
+                name = map_names.get(map_id, f"map {map_id}")
+                path = out_dir / f"{slug_label}_map{map_id}_{_slug(name)}_{metric}.png"
+                title = (
+                    f"[{label}] {name} (id={map_id})  metric={metric}\n"
+                    f"{agg.run_count.get(map_id, 0):,} runs"
+                )
+                _render(
+                    grid, x0, y0, title, metric, path,
+                    dgrid=agg.direction_grid(map_id),
+                )
+                written.append(path)
+    return written

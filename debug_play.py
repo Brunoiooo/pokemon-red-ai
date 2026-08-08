@@ -130,6 +130,60 @@ def status_line(emu: Emulator) -> str:
     )
 
 
+# Gen 1 item IDs (constants/item_constants.asm in pret/pokered).
+ITEM_NAMES: dict[int, str] = {
+    1: "Master Ball", 2: "Ultra Ball", 3: "Great Ball", 4: "Poké Ball",
+    5: "Town Map", 6: "Bicycle", 7: "Surfboard", 8: "Safari Ball",
+    9: "Pokédex", 10: "Moon Stone", 11: "Antidote", 12: "Burn Heal",
+    13: "Ice Heal", 14: "Awakening", 15: "Parlyz Heal", 16: "Full Restore",
+    17: "Max Potion", 18: "Hyper Potion", 19: "Super Potion", 20: "Potion",
+    21: "Boulderbadge", 22: "Cascadebadge", 23: "Thunderbadge",
+    24: "Rainbowbadge", 25: "Soulbadge", 26: "Marshbadge", 27: "Volcanobadge",
+    28: "Earthbadge", 29: "Escape Rope", 30: "Repel", 31: "Old Amber",
+    32: "Fire Stone", 33: "Thunder Stone", 34: "Water Stone", 35: "HP Up",
+    36: "Protein", 37: "Iron", 38: "Carbos", 39: "Calcium", 40: "Rare Candy",
+    41: "Dome Fossil", 42: "Helix Fossil", 43: "Secret Key",
+    45: "Bike Voucher", 46: "X Accuracy", 47: "Leaf Stone", 48: "Card Key",
+    49: "Nugget", 51: "Poké Doll", 52: "Full Heal", 53: "Revive",
+    54: "Max Revive", 55: "Guard Spec.", 56: "Super Repel", 57: "Max Repel",
+    58: "Dire Hit", 59: "Coin", 60: "Fresh Water", 61: "Soda Pop",
+    62: "Lemonade", 63: "S.S. Ticket", 64: "Gold Teeth", 65: "X Attack",
+    66: "X Defend", 67: "X Speed", 68: "X Special", 69: "Coin Case",
+    70: "Oak's Parcel", 71: "Itemfinder", 72: "Silph Scope", 73: "Poké Flute",
+    74: "Lift Key", 75: "Exp. All", 76: "Old Rod", 77: "Good Rod",
+    78: "Super Rod", 79: "PP Up", 80: "Ether", 81: "Max Ether",
+    82: "Elixer", 83: "Max Elixer",
+    **{0xC4 + i: f"HM{i + 1:02d}" for i in range(5)},
+    **{0xC9 + i: f"TM{i + 1:02d}" for i in range(50)},
+}
+
+
+def item_name(item_id: int) -> str:
+    return ITEM_NAMES.get(item_id, f"Item#{item_id}")
+
+
+def bag_items(emu: Emulator) -> tuple[tuple[int, int], ...]:
+    """Non-empty (id, qty) bag slots, same layout PokemonRedEnv rewards off."""
+    mem = emu.pyboy.memory
+    ids = emu.data.items_ids(mem)
+    qtys = emu.data.items_quantities(mem)
+    out = []
+    for item_id, qty in zip(ids, qtys):
+        if item_id in (0, 255):
+            break
+        out.append((item_id, qty))
+    return tuple(out)
+
+
+def bag_line(emu: Emulator) -> str:
+    items = bag_items(emu)
+    if not items:
+        return "items: (empty)"
+    return "items: " + ", ".join(
+        f"{item_name(item_id)} x{qty}" for item_id, qty in items
+    )
+
+
 def fuse_line(emu: Emulator) -> str:
     data = emu.data
     pos = data.get_position()
@@ -173,7 +227,6 @@ def _clear_visits(data) -> None:
     """Same exploration reset as PokemonRedEnv.set_curriculum(clear_visits=True)."""
     data.visited_positions.clear()
     data.position_visit_counts.clear()
-    data.wild_visit_counts.clear()
     data.direction_counts.clear()
     data.map_transitions.clear()
     data.reward_sums.clear()
@@ -269,10 +322,12 @@ def run(args: argparse.Namespace) -> None:
     emulator.pyboy.tick(1, render=True, sound=False)
     print(f"  Loaded. {status_line(emulator)}")
     print(f"  {fuse_line(emulator)}")
+    print(f"  {bag_line(emulator)}")
     print("  Play toward the first battle dialog and watch reward / mode lines.\n")
 
     prev_mode = _mode_flags(emulator)
     prev_dialog = emulator.data.dialog_id(emulator.pyboy.memory)
+    prev_bag = bag_items(emulator)
     step_i = 0
     total_reward = 0.0
     saves_count = 0
@@ -297,6 +352,7 @@ def run(args: argparse.Namespace) -> None:
             print_help()
             print(f"  {status_line(emulator)}")
             print(f"  {fuse_line(emulator)}")
+            print(f"  {bag_line(emulator)}")
             print(f"  total_reward={total_reward:.4f} steps={step_i}")
             continue
         if label == "SAVE":
@@ -316,6 +372,7 @@ def run(args: argparse.Namespace) -> None:
             emulator.pyboy.tick(1, render=True, sound=False)
             prev_mode = _mode_flags(emulator)
             prev_dialog = emulator.data.dialog_id(emulator.pyboy.memory)
+            prev_bag = bag_items(emulator)
             step_i = 0
             total_reward = 0.0
             goal_done_announced = False
@@ -323,6 +380,7 @@ def run(args: argparse.Namespace) -> None:
                 f"  Reloaded from saves/{from_ckpt}/  "
                 f"stage={stage} ({status_line(emulator)})"
             )
+            print(f"  {bag_line(emulator)}")
             continue
 
         # Match PPO hold length, but pace frame-by-frame at 1x (human speed).
@@ -349,10 +407,13 @@ def run(args: argparse.Namespace) -> None:
         did = emulator.data.dialog_id(emulator.pyboy.memory)
         mode_changed = mode != prev_mode
         dialog_changed = did != prev_dialog
+        cur_bag = bag_items(emulator)
+        bag_changed = cur_bag != prev_bag
         interesting = (
             action != NONE_ACTION
             or mode_changed
             or dialog_changed
+            or bag_changed
             or abs(float(reward)) >= 0.005
             or emulator.data.loop_flag
             or advanced
@@ -369,6 +430,8 @@ def run(args: argparse.Namespace) -> None:
                 marks.append(f"{prev_mode}->{mode}")
             if dialog_changed:
                 marks.append(f"dialog {prev_dialog}->{did}")
+            if bag_changed:
+                marks.append("BAG")
             if emulator.data.loop_flag:
                 marks.append("LOOP")
             if getattr(emulator.data, "_last_regressed", None):
@@ -454,9 +517,12 @@ def run(args: argparse.Namespace) -> None:
                 or exit_info
             ):
                 print(f"       {fuse_line(emulator)}  Σr={total_reward:.4f}")
+            if bag_changed:
+                print(f"       {bag_line(emulator)}")
 
         prev_mode = mode
         prev_dialog = did
+        prev_bag = cur_bag
 
         if advanced and cleared_goal:
             print(

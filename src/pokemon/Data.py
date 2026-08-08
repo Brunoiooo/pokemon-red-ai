@@ -133,8 +133,12 @@ MAP_LANCES_ROOM = 113
 MAP_SS_ANNE = frozenset(range(95, 105))  # 1F..B1F_ROOMS ($5F-$68)
 MAP_POKEMON_TOWER = frozenset(range(142, 149))  # 1F-7F ($8E-$94)
 MAP_SEAFOAM_ISLANDS_CAVES = frozenset({159, 160, 161, 162})  # B1F-B4F ($9F-$A2)
-MAP_ROCKET_HIDEOUT = frozenset({199, 200, 201, 202, 203})  # B1F-B4F + elevator ($C7-$CB)
-MAP_CINNABAR_LAB_ROOMS = frozenset({167, 168, 169, 170})  # main + trade/metronome/fossil ($A7-$AA)
+MAP_ROCKET_HIDEOUT = frozenset(
+    {199, 200, 201, 202, 203}
+)  # B1F-B4F + elevator ($C7-$CB)
+MAP_CINNABAR_LAB_ROOMS = frozenset(
+    {167, 168, 169, 170}
+)  # main + trade/metronome/fossil ($A7-$AA)
 MAP_SILPH_CO = frozenset(
     {181, 207, 208, 209, 210, 211, 212, 213, 233, 234, 235, 236}
 )  # 1F, 2F-8F, 9F-11F, elevator
@@ -159,6 +163,11 @@ ROUTE1_ENTRY_DIALOG_ID = 1
 GOAL_ROUTE_1 = "route1"
 GOAL_OAKS_LAB = "oaks_lab"
 GOAL_OAKS_PARCEL = "oaks_parcel"
+# Between picking up the parcel and getting credit for the Town Map: walk it
+# back to Oak. Gen 1 lets key items be deposited into the PC item storage
+# (no separate key-item pocket), so "delivered" must check both the bag and
+# the PC box — otherwise stashing it in the PC would fake completion.
+GOAL_GAVE_PARCEL = "gave_parcel"
 GOAL_TOWN_MAP = "town_map"
 GOAL_FOUGHT_BROCK = "fought_brock"
 GOAL_FOUGHT_MISTY = "fought_misty"
@@ -185,6 +194,15 @@ GOAL_MOLTRES = "moltres"
 GOAL_FOSSIL = "fossil"
 GOAL_MEWTWO = "mewtwo"
 GOAL_ALL_BADGES = "all_badges"
+# True end-game goal: beat the Elite Four and Champion (auto-warps to the
+# Hall of Fame room) while still holding all 8 badges.
+GOAL_CHAMPION = "champion"
+
+# Item / Pokédex IDs needed for goal checks below (constants/item_constants.asm
+# and the National Pokédex order, both from pret/pokered — not RAM addresses).
+ITEM_ID_OAKS_PARCEL = 0x46  # 70
+ITEM_ID_TOWN_MAP = 0x05
+MEWTWO_POKEDEX_NUMBER = 150  # fixed since Gen 1, same order as wPokedexOwned
 
 # Maps on the critical path for each curriculum goal (excludes distraction
 # detours like the rivals' house, Game Corner floor, Safari Zone, etc. unless
@@ -206,7 +224,9 @@ _MAPS_OAKS_PARCEL = _MAPS_ROUTE_1 | {
     MAP_VIRIDIAN_MART,
     MAP_VIRIDIAN_POKECENTER,
 }
-_MAPS_TOWN_MAP = _MAPS_OAKS_PARCEL | {MAP_RIVALS_HOUSE}  # Daisy's gift, Pallet Town
+# Delivery walk-back ends at Oak's Lab, already in _MAPS_ROUTE_1 — no new maps.
+_MAPS_GAVE_PARCEL = _MAPS_OAKS_PARCEL
+_MAPS_TOWN_MAP = _MAPS_GAVE_PARCEL | {MAP_RIVALS_HOUSE}  # Daisy's gift, Pallet Town
 
 _MAPS_FOUGHT_BROCK = _MAPS_TOWN_MAP | {
     MAP_ROUTE_2,
@@ -381,6 +401,7 @@ _MAPS_MEWTWO = (
 )
 
 _MAPS_ALL_BADGES = _MAPS_MEWTWO  # by now every badge-path map is covered
+_MAPS_CHAMPION = _MAPS_ALL_BADGES  # Victory Road / Elite Four / Hall of Fame already covered
 
 GOAL_ALLOWED_MAPS: dict[str, frozenset[int]] = {
     GOAL_LEFT_HOUSE: _MAPS_LEFT_HOUSE,
@@ -388,6 +409,7 @@ GOAL_ALLOWED_MAPS: dict[str, frozenset[int]] = {
     GOAL_OAKS_LAB: _MAPS_OAKS_LAB,
     GOAL_ROUTE_1: _MAPS_ROUTE_1,
     GOAL_OAKS_PARCEL: _MAPS_OAKS_PARCEL,
+    GOAL_GAVE_PARCEL: _MAPS_GAVE_PARCEL,
     GOAL_TOWN_MAP: _MAPS_TOWN_MAP,
     GOAL_FOUGHT_BROCK: _MAPS_FOUGHT_BROCK,
     GOAL_BADGE_1: _MAPS_BADGE_1,
@@ -414,6 +436,7 @@ GOAL_ALLOWED_MAPS: dict[str, frozenset[int]] = {
     GOAL_FOSSIL: _MAPS_FOSSIL,
     GOAL_MEWTWO: _MAPS_MEWTWO,
     GOAL_ALL_BADGES: _MAPS_ALL_BADGES,
+    GOAL_CHAMPION: _MAPS_CHAMPION,
 }
 
 BADGE_GOALS = (
@@ -440,6 +463,7 @@ STORY_GOAL_ORDER = (
     GOAL_OAKS_LAB,
     GOAL_ROUTE_1,
     GOAL_OAKS_PARCEL,
+    GOAL_GAVE_PARCEL,
     GOAL_TOWN_MAP,
     GOAL_FOUGHT_BROCK,
     GOAL_BADGE_1,
@@ -466,6 +490,7 @@ STORY_GOAL_ORDER = (
     GOAL_FOSSIL,
     GOAL_MEWTWO,
     GOAL_ALL_BADGES,
+    GOAL_CHAMPION,
 )
 
 
@@ -479,32 +504,42 @@ class Data:
     visited_dialogs: dict[tuple[int, int], int] = field(default_factory=dict)
 
     # Hierarchical rewards: macro >> meso >> micro (PokeRL / Whidden style).
-    badge_reward: float = 10.0          # macro
-    event_reward: float = 2.0           # macro
-    left_house_reward: float = 5.0      # macro early milestone
+    badge_reward: float = 10.0  # macro
+    event_reward: float = 2.0  # macro
+    left_house_reward: float = 5.0  # macro early milestone
     # Oak's "dangerous" intercept — reaching Route 1 before the starter.
     # Distinct from route1_reward below (the later, post-starter return trip)
     # so the entry stage gets full active-goal credit instead of borrowing
     # route1_reward's muted off-goal share.
-    route1_entry_reward: float = 4.0    # macro early milestone
-    route1_reward: float = 8.0          # macro early milestone (scaled further when active goal)
-    oaks_lab_reward: float = 3.0        # meso/macro story
+    route1_entry_reward: float = 4.0  # macro early milestone
+    route1_reward: float = (
+        8.0  # macro early milestone (scaled further when active goal)
+    )
+    oaks_lab_reward: float = 3.0  # meso/macro story
     # Goal conditioning: full credit only for the active curriculum goal so the
     # policy cannot farm house/lab returns while the stage target is route1+.
     active_goal_scale: float = 3.0
     off_goal_milestone_scale: float = 0.1
-    new_screen_reward: float = 0.1      # meso (new map)
+    new_screen_reward: float = 1.0  # meso (new map)
+    # Separate from new_screen_reward — this pays reward_battle_useless_count's
+    # per-turn-changed credit. Was accidentally sharing new_screen_reward, so
+    # bumping the map reward silently 10x'd this too and made stalling
+    # trainer battles with non-damaging stat-down moves (Growl/Tail Whip/…)
+    # farm free reward every turn, since trainer battles get no wild-encounter
+    # decay. Kept at the old shared value (0.1) so this payout is unaffected
+    # by future new_screen_reward tuning.
+    battle_turn_reward: float = 0.1  # micro (turn progressed in battle)
     new_position_reward: float = 0.008  # micro (slightly lower to curb tile farming)
     # Revisit taper: full credit stays a one-shot, but the drop to 0 no longer
     # happens in a single step. Linear ramp-down over this many visits, so a
     # necessary backtrack (e.g. retracing to a room's only exit) isn't an
     # instant cliff from full bonus to the bare step penalty.
     new_position_decay_visits: int = 4
-    new_dialog_reward: float = 0.05     # meso — first enter of a (dialog_id, map)
+    new_dialog_reward: float = 0.05  # meso — first enter of a (dialog_id, map)
     # Mid-dialog text farming was an exploit (post-rival Oak speech): tiny
     # +0.01 per screen kept the agent camping without leaving for Route 1.
     dialog_advance_reward: float = 0.0
-    dialog_exit_reward: float = 0.2     # meso — leaving dialog is real progress
+    dialog_exit_reward: float = 0.2  # meso — leaving dialog is real progress
     # Battle exit (wBattleResult @ 0xCF0B): 0=win, 1=lose, 2=fled.
     # Win is mezzo (same scale as event); macro progress stays on event/badge.
     battle_won_reward: float = 2.0
@@ -538,17 +573,19 @@ class Data:
 
     # Anti-loop / anti-spam penalties (PokeRL-style). Stronger than before so
     # farming a ~17 return without the stage goal is no longer attractive.
-    visit_penalty_soft: float = -0.05   # visit count > 3
-    visit_penalty_hard: float = -0.15   # visit count > 5
-    # Wild encounters are tracked in their own per-tile counter (wild_visit_
-    # counts), separate from position_visit_counts — walking through a grass
-    # tile is exploration, fighting on it repeatedly is farming, and the two
-    # used to be conflated (a wild encounter bumping the walking counter).
-    # battle_won_reward decays with repeat wild wins on the same tile the
-    # same way new_position_reward decays with repeat walking visits (see
-    # reward_battle_exit / _battle_entry_wild_visits), so grinding one grass
-    # tile back and forth no longer stays net positive indefinitely.
-    wild_visit_decay_visits: int = 4
+    visit_penalty_soft: float = -0.05  # visit count > 3
+    visit_penalty_hard: float = -0.15  # visit count > 5
+    # Wild-battle rewards (battle_won_reward, and the positive side of
+    # reward_enemy_hp/reward_enemy_status) decay with repeat position_visit_
+    # counts on the tile a fight started on — same counter as
+    # new_position_reward's walking decay (see reward_battle_exit /
+    # _wild_encounter_decay / _battle_entry_wild_visits), so grinding one
+    # grass tile back and forth no longer stays net positive indefinitely.
+    # Set well above new_position_decay_visits (4) — position_visit_counts
+    # climbs from ordinary foot traffic (not just fights), so a threshold
+    # this low would zero out wild rewards on any well-trodden route tile
+    # before the agent ever got its first fight there.
+    wild_visit_decay_visits: int = 8
     action_pattern_penalty: float = -0.08
     spatial_loop_penalty: float = -0.10
     menu_spam_penalty: float = -0.05
@@ -599,10 +636,6 @@ class Data:
 
     visited_positions: dict[tuple[int, int, int], int] = field(default_factory=dict)
     position_visit_counts: dict[tuple[int, int, int], int] = field(default_factory=dict)
-    # Per-tile wild-encounter count, separate from position_visit_counts —
-    # fed to the policy as its own mask (see wild_visit_mask_grid) and drives
-    # battle_won_reward's decay instead of the walking exploration decay.
-    wild_visit_counts: dict[tuple[int, int, int], int] = field(default_factory=dict)
     map_vision_radius: int = 5
 
     # --heatmap opt-in (set by PokemonRedEnv from its collect_heatmap ctor arg).
@@ -610,7 +643,9 @@ class Data:
     collect_heatmap: bool = False
     # World-tile the agent left -> {"up"/"down"/"left"/"right": step count},
     # for the --heatmap live window's movement-direction overlay.
-    direction_counts: dict[tuple[int, int, int], dict[str, int]] = field(default_factory=dict)
+    direction_counts: dict[tuple[int, int, int], dict[str, int]] = field(
+        default_factory=dict
+    )
     # (from_map, to_map) -> {(delta_x, delta_y): count} — one sample per step
     # that changes map_id while walking. delta = how much to add to a
     # from_map-local (x, y) to land on the matching to_map-local (x, y),
@@ -626,6 +661,24 @@ class Data:
     # dialog/menu is on screen, so e.g. a battle-won reward triggered by
     # walking onto a grass tile lands on that tile, not nowhere.
     reward_sums: dict[tuple[int, int, int], float] = field(default_factory=dict)
+    # Battle outcomes per (x, y, map_id): {"win"/"loss"/"smart"/"coward": n},
+    # for --heatmap's win-rate (win vs loss) and flee-rate (smart vs coward)
+    # overlays. Attributed to the same last-known-world tile as reward_sums
+    # (a battle has no world position of its own). "loss" folds in both a
+    # fainted-but-continued loss and a full blackout. "smart"/"coward" are a
+    # successful flee's TryRunningFromBattle classification (fled from an
+    # over-leveled enemy vs a beatable one) — disjoint from win/loss, so a
+    # tile's win-rate denominator never includes a fled fight and vice versa.
+    battle_outcome_counts: dict[tuple[int, int, int], dict[str, int]] = field(
+        default_factory=dict
+    )
+    # Story-milestone payouts triggered per (x, y, map_id), for --heatmap's
+    # milestone-density overlay — how much of the curriculum's critical path
+    # actually lines up with where the agent spends time. Same
+    # _last_heatmap_pos attribution as reward_sums/battle_outcome_counts.
+    milestone_hit_counts: dict[tuple[int, int, int], int] = field(
+        default_factory=dict
+    )
     _last_heatmap_pos: tuple[int, int, int] | None = None
 
     recent_actions: deque = field(default_factory=lambda: deque(maxlen=20))
@@ -683,10 +736,11 @@ class Data:
     # more robust than trusting whatever a single frame happens to show.
     _battle_enemy_level_cache: int = 0
     _battle_active_level_cache: int = 0
-    # wild_visit_counts reading for this tile *before* the current fight's own
-    # count() bump — captured at battle entry, consumed by reward_battle_exit
-    # so the very first encounter on a tile still pays full battle_won_reward
-    # (mirrors reward_position reading position_visit_counts pre-increment).
+    # position_visit_counts reading for this tile *before* the current fight's
+    # own count() seed — captured at battle entry, consumed by
+    # _wild_encounter_decay so a tile only walked over a handful of times
+    # still pays close to full battle_won_reward (mirrors reward_position
+    # reading position_visit_counts pre-increment).
     _battle_entry_wild_visits: int = 0
 
     @property
@@ -751,10 +805,11 @@ class Data:
         self.in_dialog_ticks = 0
         self.visited_positions = {}
         self.position_visit_counts = {}
-        self.wild_visit_counts = {}
         self.direction_counts = {}
         self.map_transitions = {}
         self.reward_sums = {}
+        self.battle_outcome_counts = {}
+        self.milestone_hit_counts = {}
         self._last_heatmap_pos = None
         self.visited_maps = set()
         self.visited_dialogs = {}
@@ -800,7 +855,13 @@ class Data:
             return True
         return False
 
-    def count(self, reward: float, action: int, memory: bytes | None = None, duration: int = 16):
+    def count(
+        self,
+        reward: float,
+        action: int,
+        memory: bytes | None = None,
+        duration: int = 16,
+    ):
         self.visited_pokedex_own = self.pokedex_own(self.pyboy.memory)
         self.visited_pokedex_seen = self.pokedex_seen(self.pyboy.memory)
 
@@ -833,9 +894,7 @@ class Data:
             # the policy can stand in Oak's lab spamming A forever: sprite does
             # not move, NPCs animate, and truncated() never fires until max_steps.
             # Soft visit *penalties* still skip A/B so a normal talk can open.
-            self.visited_positions[pos] = (
-                self.visited_positions.get(pos, 0) + duration
-            )
+            self.visited_positions[pos] = self.visited_positions.get(pos, 0) + duration
             if not (stayed and interacting):
                 self.position_visit_counts[pos] = (
                     self.position_visit_counts.get(pos, 0) + 1
@@ -892,29 +951,24 @@ class Data:
             # not see it as brand new on every world<-battle return.
             pos = self.get_position()
             # wIsInBattle==1 is specifically a wild encounter (2 is a scripted
-            # trainer, which will not keep re-firing off the same tile). Track
-            # it in its own wild_visit_counts instead of inflating the walking
-            # counter — position_visit_counts only ever needs a single seed
-            # entry here so reward_position() does not see the tile as brand
-            # new on every world<-battle return. The pre-bump reading is
-            # cached for reward_battle_exit's battle_won_reward decay.
+            # trainer, which will not keep re-firing off the same tile). Cache
+            # the pre-seed position_visit_counts reading for
+            # _wild_encounter_decay before the seed below bumps it, so a tile
+            # never walked before this fight still reads 0 (full reward).
+            # position_visit_counts only ever needs a single seed entry here
+            # so reward_position() does not see the tile as brand new on
+            # every world<-battle return.
             if self.type_of_battle(self.pyboy.memory) == 1:
-                self._battle_entry_wild_visits = self.wild_visit_counts.get(pos, 0)
-                self.wild_visit_counts[pos] = self._battle_entry_wild_visits + 1
-                if pos not in self.position_visit_counts:
-                    self.position_visit_counts[pos] = 1
-            elif pos not in self.position_visit_counts:
+                self._battle_entry_wild_visits = self.position_visit_counts.get(pos, 0)
+            if pos not in self.position_visit_counts:
                 self.position_visit_counts[pos] = 1
-        elif (
-            not self.is_battle(self.pyboy.memory)
-            and not self.is_dialog(self.pyboy.memory)
+        elif not self.is_battle(self.pyboy.memory) and not self.is_dialog(
+            self.pyboy.memory
         ):
             # Menu with no movement (blocked, NPCs still walk): same stuck fuse
             # as world. Skip during dialog — text uses its own fuse.
             pos = self.get_position()
-            self.visited_positions[pos] = (
-                self.visited_positions.get(pos, 0) + duration
-            )
+            self.visited_positions[pos] = self.visited_positions.get(pos, 0) + duration
 
         if self.is_menu(self.pyboy.memory):
             self.in_menu_ticks += duration
@@ -942,7 +996,9 @@ class Data:
 
         if self.is_dialog(self.pyboy.memory):
             dialog = self.get_dialog()
-            self.visited_dialogs[dialog] = self.visited_dialogs.get(dialog, 0) + duration
+            self.visited_dialogs[dialog] = (
+                self.visited_dialogs.get(dialog, 0) + duration
+            )
             # Fuse resets only on dialog_id change (or leaving dialog below).
             # New text frames alone used to reset forever → infinite camp.
             if self._dialog_id_changed(memory):
@@ -979,9 +1035,8 @@ class Data:
             digest_size=16,
         ).hexdigest()
 
-    def _local_count_grid(
-        self, counts: dict[tuple[int, int, int], int], cap: int = 10
-    ) -> list[list[float]]:
+    def visit_mask_grid(self) -> list[list[float]]:
+        """Local visit-count mask centered on the player (PokeRL / Whidden style)."""
         r = self.map_vision_radius
         size = 2 * r + 1
         if not self.is_world(self.pyboy.memory):
@@ -990,18 +1045,12 @@ class Data:
         for dy in range(-r, r + 1):
             row: list[float] = []
             for dx in range(-r, r + 1):
-                v = counts.get(self.get_position(offset_x=dx, offset_y=dy), 0)
-                row.append(min(v, cap) / cap)
+                visits = self.position_visit_counts.get(
+                    self.get_position(offset_x=dx, offset_y=dy), 0
+                )
+                row.append(min(visits, 10) / 10.0)
             grid.append(row)
         return grid
-
-    def visit_mask_grid(self) -> list[list[float]]:
-        """Local visit-count mask centered on the player (PokeRL / Whidden style)."""
-        return self._local_count_grid(self.position_visit_counts)
-
-    def wild_visit_mask_grid(self) -> list[list[float]]:
-        """Local wild-encounter-count mask centered on the player."""
-        return self._local_count_grid(self.wild_visit_counts)
 
     def inputs(self):
         r = self.map_vision_radius
@@ -1012,9 +1061,6 @@ class Data:
             ).view(1, 18, 20),
             "visit_mask": torch.tensor(
                 self.visit_mask_grid(), dtype=torch.float32
-            ).view(1, 2 * r + 1, 2 * r + 1),
-            "wild_visit_mask": torch.tensor(
-                self.wild_visit_mask_grid(), dtype=torch.float32
             ).view(1, 2 * r + 1, 2 * r + 1),
             "core": torch.tensor(self.core_data(), dtype=torch.float32),
             "battle": torch.tensor(self.battle_data(), dtype=torch.float32),
@@ -1365,8 +1411,18 @@ class Data:
                 self.event_reward,
             ),
             (
-                GOAL_TOWN_MAP,
+                GOAL_GAVE_PARCEL,
                 self._prereq_cleared(GOAL_OAKS_PARCEL)
+                and bool(self.gave_oaks_parcel(self.pyboy.memory)),
+                self.event_reward,
+            ),
+            (
+                GOAL_TOWN_MAP,
+                # Must be received in the rival's house (Daisy's gift) —
+                # checking inventory alone isn't enough to pin the trigger to
+                # that specific hand-off.
+                self._prereq_cleared(GOAL_GAVE_PARCEL)
+                and mid == MAP_RIVALS_HOUSE
                 and bool(self.have_town_map(self.pyboy.memory)),
                 self.event_reward,
             ),
@@ -1397,6 +1453,13 @@ class Data:
                 GOAL_ALL_BADGES,
             )
         ]
+        # Beating the Elite Four / Champion is the true end-game milestone —
+        # pay it at badge scale, not the muted event_reward the rest of this
+        # later-game list uses.
+        checks.append(
+            (GOAL_CHAMPION, self.is_goal_satisfied(GOAL_CHAMPION), self.badge_reward)
+        )
+        milestones_hit_this_step = 0
         for name, hit, value in checks:
             if not hit or name in self._milestones_hit:
                 continue
@@ -1408,6 +1471,7 @@ class Data:
             self._milestone_payouts[name] = payout
             reward += payout
             self.last_milestone_payouts.append((name, payout))
+            milestones_hit_this_step += 1
 
         badges = self.badges(self.pyboy.memory)
         for i, name in enumerate(BADGE_GOALS):
@@ -1416,6 +1480,21 @@ class Data:
                 self._milestones_hit.add(name)
                 self._milestone_payouts[name] = payout
                 reward += payout
+                milestones_hit_this_step += 1
+
+        # --heatmap milestone-density overlay: same _last_heatmap_pos
+        # attribution as reward_sums/battle_outcome_counts (a milestone can
+        # fire mid-dialog, off is_world(), so it's anchored on the last
+        # known world tile rather than nowhere).
+        if (
+            self.collect_heatmap
+            and milestones_hit_this_step
+            and self._last_heatmap_pos is not None
+        ):
+            self.milestone_hit_counts[self._last_heatmap_pos] = (
+                self.milestone_hit_counts.get(self._last_heatmap_pos, 0)
+                + milestones_hit_this_step
+            )
 
         return reward
 
@@ -1530,17 +1609,26 @@ class Data:
 
     def reward_battle_useless_count(self, memory: bytes) -> tuple[float, float]:
         entered = not self.is_battle(memory) and self.is_battle(self.pyboy.memory)
-        turn_changed = (
-            self.number_of_turns_in_current_battle(memory)
-            != self.number_of_turns_in_current_battle(self.pyboy.memory)
-        )
+        turn_changed = self.number_of_turns_in_current_battle(
+            memory
+        ) != self.number_of_turns_in_current_battle(self.pyboy.memory)
         if entered:
             # No reward for entering a battle, from world or dialog (trainer
             # intros) alike — it was luring the agent into farming grass or
             # trainer sprites for the entry bonus and fleeing immediately after.
             return 0.0, 0.0
         if turn_changed:
-            return self.new_screen_reward, 0.0
+            reward = self.battle_turn_reward
+            # Same per-tile decay as reward_enemy_hp / battle_won_reward (see
+            # _wild_encounter_decay) — without it, mashing through turns on a
+            # repeat wild encounter paid full price forever regardless of
+            # position_visit_counts, even after enemy-HP/win rewards had
+            # already decayed to zero. Trainer battles are exempt (one-shot
+            # per sprite, type_of_battle read from `memory` like the other
+            # decay call sites).
+            if self.type_of_battle(memory) == 1:
+                reward *= self._wild_encounter_decay()
+            return reward, 0.0
         return (
             0.0,
             self.in_battle_ticks / self.max_useless_battle_ticks * self.base_reward,
@@ -1576,13 +1664,6 @@ class Data:
         visit_count = self.position_visit_counts.get(pos, 0)
         waste_factor = min(ticks_here, self.max_useless_ticks) / self.max_useless_ticks
         step_penalty = self.base_reward * (1.0 + waste_factor * 9.0)
-        # Tiles that have already produced a wild encounter (wild_visit_counts)
-        # pay no walking-exploration bonus — reward on those tiles should only
-        # come from the battle itself (battle_won_reward), not from stepping
-        # on/off the grass, otherwise the agent can farm exploration_reward by
-        # pacing back and forth over a known wild tile.
-        if pos in self.wild_visit_counts:
-            return step_penalty
         decay = max(0.0, 1.0 - visit_count / self.new_position_decay_visits)
         exploration_reward = self.new_position_reward * decay
         return exploration_reward + step_penalty
@@ -1832,6 +1913,8 @@ class Data:
             return mid == MAP_OAKS_LAB
         if goal == GOAL_OAKS_PARCEL:
             return bool(self.have_oaks_parcel(mem))
+        if goal == GOAL_GAVE_PARCEL:
+            return bool(self.gave_oaks_parcel(mem))
         if goal == GOAL_TOWN_MAP:
             return bool(self.have_town_map(mem))
         if goal == GOAL_FOUGHT_BROCK:
@@ -1871,9 +1954,18 @@ class Data:
         if goal == GOAL_FOSSIL:
             return bool(self.fossilized_pokemon(mem))
         if goal == GOAL_MEWTWO:
-            return bool(self.mewtwo_can_be_caught(mem))
+            # mewtwo_can_be_caught (0xD85F bit1) means "encounterable", not
+            # "caught" — the real goal is catching it, read off the Pokédex
+            # owned bit instead (see has_caught_mewtwo).
+            return bool(self.has_caught_mewtwo(mem))
         if goal == GOAL_ALL_BADGES:
             return bool(badges) and all(badges)
+        if goal == GOAL_CHAMPION:
+            # Hall of Fame is only ever entered via the auto-warp right after
+            # beating the Champion — no other way in, so map_id alone is a
+            # reliable trigger. badges check is belt-and-suspenders (can't
+            # reach Indigo Plateau without all 8 anyway).
+            return mid == MAP_HALL_OF_FAME and bool(badges) and all(badges)
         return False
 
     def goal_reached(self) -> bool:
@@ -1918,6 +2010,7 @@ class Data:
     def current_milestone(self) -> str:
         # Furthest known goal that is currently satisfied (order-independent).
         priority = (
+            GOAL_CHAMPION,
             GOAL_ALL_BADGES,
             GOAL_MEWTWO,
             GOAL_MOLTRES,
@@ -2670,11 +2763,49 @@ class Data:
     def starters_back(self, memory: PyBoyMemoryView | bytes):
         return memory[0xD5AB] & 1
 
-    def have_town_map(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xD5F3] & 1
+    def have_town_map(self, memory: PyBoyMemoryView | bytes) -> bool:
+        """True once the Town Map is actually held: in the bag or in PC item
+        storage. The wD5F3 event byte alone is not trustworthy as a trigger
+        (see GOAL_TOWN_MAP), so this checks real inventory contents instead."""
+        if self._has_item_in_slots(
+            self.items_ids(memory), self.items_quantities(memory), ITEM_ID_TOWN_MAP
+        ):
+            return True
+        return self._has_item_in_slots(
+            self.stored_items_ids(memory),
+            self.stored_items_quantities(memory),
+            ITEM_ID_TOWN_MAP,
+        )
 
     def have_oaks_parcel(self, memory: PyBoyMemoryView | bytes):
         return memory[0xD60D] & 1
+
+    def _has_item_in_slots(
+        self, ids: list[int], quantities: list[int], item_id: int
+    ) -> bool:
+        for slot_id, qty in zip(ids, quantities):
+            if slot_id in (0, 255):
+                break
+            if slot_id == item_id and qty > 0:
+                return True
+        return False
+
+    def gave_oaks_parcel(self, memory: PyBoyMemoryView | bytes) -> bool:
+        """Delivered to Oak: had the parcel at some point (persistent event
+        flag) and it's now gone from both the bag and PC item storage."""
+        if not self.have_oaks_parcel(memory):
+            return False
+        if self._has_item_in_slots(
+            self.items_ids(memory), self.items_quantities(memory), ITEM_ID_OAKS_PARCEL
+        ):
+            return False
+        if self._has_item_in_slots(
+            self.stored_items_ids(memory),
+            self.stored_items_quantities(memory),
+            ITEM_ID_OAKS_PARCEL,
+        ):
+            return False
+        return True
 
     def bike_speed(self, memory: PyBoyMemoryView | bytes):
         return memory[0xD700]
@@ -2743,7 +2874,18 @@ class Data:
         return memory[0xD803] & 1
 
     def mewtwo_can_be_caught(self, memory: PyBoyMemoryView | bytes):
+        """Whether Mewtwo can currently be encountered in Cerulean Cave.
+
+        Kept as-is for the observation vector (event_flags_data) — it's
+        genuinely different information from "caught": see has_caught_mewtwo
+        for the actual GOAL_MEWTWO completion check.
+        """
         return 1 if memory[0xD85F] & 2 else 0
+
+    def has_caught_mewtwo(self, memory: PyBoyMemoryView | bytes) -> bool:
+        """wPokedexOwned bit for Mewtwo (National Pokédex #150, fixed since
+        Gen 1) — set once it's caught, independent of internal species IDs."""
+        return bool(self.pokedex_own(memory)[MEWTWO_POKEDEX_NUMBER - 1])
 
     def stored_pokemon_data(self, memory: PyBoyMemoryView | bytes):
         data = []
@@ -2900,9 +3042,7 @@ class Data:
     def all_party_levels(self, memory: PyBoyMemoryView | bytes) -> list[int]:
         """Levels of every occupied party slot (not just the active battler)."""
         count = min(int(self.party_count(memory)), self.__pokemon_count)
-        return [
-            memory[0xD18C + self.__player_pokemon_size * i] for i in range(count)
-        ]
+        return [memory[0xD18C + self.__player_pokemon_size * i] for i in range(count)]
 
     def max_party_level(self, memory: PyBoyMemoryView | bytes) -> int:
         levels = [lv for lv in self.all_party_levels(memory) if lv > 0]
@@ -2927,17 +3067,23 @@ class Data:
         return 3 * r**2 - 2 * r**3
 
     def _wild_encounter_decay(self) -> float:
-        """Per-tile decay factor for repeat wild encounters this episode.
+        """Per-tile decay factor for wild-battle rewards, keyed off ordinary
+        tile traffic rather than a dedicated encounter counter.
 
-        Floors at 0 after ``wild_visit_decay_visits`` prior wild fights on
-        the current tile (``_battle_entry_wild_visits``, cached at battle
-        entry). Applied to every positive reward a wild fight can pay
+        Floors at 0 after ``wild_visit_decay_visits`` prior position_visit_
+        counts on the current tile (``_battle_entry_wild_visits``, the
+        pre-seed reading cached at battle entry) — walking a grass tile and
+        fighting on it both spend down the same budget, so pacing on/off a
+        known wild tile without even triggering a fight already burns its
+        reward down. Applied to every positive reward a wild fight can pay
         (``reward_enemy_hp``, ``reward_enemy_status``, ``battle_won_reward``)
         so grinding one grass tile drains to zero reward, not just the win
         bonus. Trainer battles never call this — they are one-shot per
         sprite, not repeatable on the same tile.
         """
-        return max(0.0, 1.0 - self._battle_entry_wild_visits / self.wild_visit_decay_visits)
+        return max(
+            0.0, 1.0 - self._battle_entry_wild_visits / self.wild_visit_decay_visits
+        )
 
     def reward_battle_exit(self, memory: bytes) -> float:
         """Reward battle outcome on battle→overworld transition (wBattleResult).
@@ -3019,6 +3165,22 @@ class Data:
                 kind = "coward"
         else:
             return 0.0
+
+        # --heatmap win-rate/flee-rate overlays, both keyed off the same
+        # per-tile counts dict: win/loss feed the win-rate metric, smart/
+        # coward feed the flee-rate metric — they're disjoint outcomes of
+        # the same battle so one dict with four buckets avoids a second
+        # snapshot channel through PokemonRedEnv. Anchored on the same
+        # _last_heatmap_pos reward_sums uses — is_world() has been False for
+        # the whole fight, so it still holds the pre-battle world tile.
+        if self.collect_heatmap and self._last_heatmap_pos is not None:
+            bucket = {"win": "win", "lose": "loss", "blackout": "loss"}.get(kind, kind)
+            if bucket in ("win", "loss", "smart", "coward"):
+                counts = self.battle_outcome_counts.setdefault(
+                    self._last_heatmap_pos,
+                    {"win": 0, "loss": 0, "smart": 0, "coward": 0},
+                )
+                counts[bucket] = counts.get(bucket, 0) + 1
 
         info = {
             "kind": kind,

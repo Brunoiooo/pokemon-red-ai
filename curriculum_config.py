@@ -25,6 +25,7 @@ from pokemon.Data import (
     GOAL_BADGE_6,
     GOAL_BADGE_7,
     GOAL_BADGE_8,
+    GOAL_CHAMPION,
     GOAL_FOSSIL,
     GOAL_FOUGHT_BLAINE,
     GOAL_FOUGHT_BROCK,
@@ -34,6 +35,7 @@ from pokemon.Data import (
     GOAL_FOUGHT_MISTY,
     GOAL_FOUGHT_SABRINA,
     GOAL_FOUGHT_SURGE,
+    GOAL_GAVE_PARCEL,
     GOAL_LAPRAS,
     GOAL_LEFT_HOUSE,
     GOAL_MEWTWO,
@@ -87,6 +89,7 @@ STAGE_ORDER = [
     "stage_oaks_lab",
     "stage_route1",
     "stage_oaks_parcel",
+    "stage_gave_parcel",
     "stage_town_map",
     "stage_fought_brock",
     "stage_badge1",
@@ -113,6 +116,7 @@ STAGE_ORDER = [
     "stage_fossil",
     "stage_mewtwo",
     "stage_all_badges",
+    "stage_champion",
 ]
 
 CURRICULUM: dict[str, dict] = {
@@ -147,12 +151,19 @@ CURRICULUM: dict[str, dict] = {
         checkpoint="stage_oaks_parcel",
         earlier=["start", "stage_route1"],
     ),
+    "stage_gave_parcel": _stage(
+        GOAL_GAVE_PARCEL,
+        max_steps=8192,
+        description="Deliver Oak's Parcel back to Oak",
+        checkpoint="stage_gave_parcel",
+        earlier=["start", "stage_oaks_parcel"],
+    ),
     "stage_town_map": _stage(
         GOAL_TOWN_MAP,
         max_steps=8192,
         description="Obtain the Town Map",
         checkpoint="stage_town_map",
-        earlier=["start", "stage_oaks_parcel"],
+        earlier=["start", "stage_gave_parcel"],
     ),
     "stage_fought_brock": _stage(
         GOAL_FOUGHT_BROCK, max_steps=12288, description="Fight Brock (Pewter Gym)"
@@ -224,10 +235,15 @@ CURRICULUM: dict[str, dict] = {
         GOAL_FOSSIL, max_steps=24576, description="Obtain a fossil"
     ),
     "stage_mewtwo": _stage(
-        GOAL_MEWTWO, max_steps=32768, description="Mewtwo becomes catchable"
+        GOAL_MEWTWO, max_steps=32768, description="Catch Mewtwo"
     ),
     "stage_all_badges": _stage(
         GOAL_ALL_BADGES, max_steps=32768, description="Hold all 8 badges"
+    ),
+    "stage_champion": _stage(
+        GOAL_CHAMPION,
+        max_steps=40960,
+        description="Beat the Elite Four and Champion (Hall of Fame) with all 8 badges",
     ),
 }
 

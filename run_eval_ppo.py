@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
+from datetime import datetime
+from multiprocessing import set_start_method
 from pathlib import Path
 
 sys.path.insert(0, "src")
@@ -184,9 +187,10 @@ def run(args):
                     info.get("heatmap_directions"),
                     info.get("heatmap_transitions"),
                     info.get("heatmap_rewards"),
+                    info.get("heatmap_battle_outcomes"),
+                    info.get("heatmap_milestones"),
                     info.get("heatmap_steps") or 0,
                     info.get("stage", stage),
-                    info.get("heatmap_wild"),
                 )
 
             map_id = info.get("map_id")
@@ -384,6 +388,181 @@ def run(args):
         stop_heatmap_process(heatmap_proc, heatmap_queue)
 
 
+def run_batch(args):
+    """Headless-workers batch mode: run --batch total episodes/curriculum-legs
+    across --batch-workers parallel PyBoy workers, pool their heatmap data
+    into one unbounded RollingHeatmapAggregator per stage (+ "all"), and save
+    static PNGs. Also usable with --heatmap: unlike plain eval, the vec-env
+    workers churn through runs far faster than the live window can redraw,
+    so rather than block on it every step, the window is fed the same way
+    and left running — showing whatever it's managed to draw at any given
+    moment — and, unlike plain eval, is *not* auto-closed at the end: a 300k-run
+    batch is exactly the case where you want to sit down and read the result
+    afterward, not have it vanish the instant the last worker finishes.
+    """
+    set_start_method("spawn", force=True)
+
+    from stable_baselines3 import PPO
+    from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
+
+    from curriculum_config import (
+        get_curriculum_saves,
+        get_goal_for_stage,
+        get_stage_max_steps,
+        resolve_stage_name,
+    )
+    from env.pokemon_red_env import make_pokemon_env
+    from utils.PositionHeatmap import RollingHeatmapAggregator, save_heatmap_images
+
+    model_path = resolve_model_path(getattr(args, "model", None))
+    auto = bool(getattr(args, "auto_curriculum", True))
+    stage = resolve_stage_name(args.stage)
+
+    if auto:
+        goal = get_goal_for_stage(stage)
+        max_steps = args.max_steps if args.max_steps else get_stage_max_steps(stage)
+        saves = get_curriculum_saves(stage)
+        save_state = args.checkpoint if args.checkpoint != "start" else saves[-1]
+    else:
+        goal = args.goal
+        max_steps = args.max_steps if args.max_steps else 5000
+        save_state = args.checkpoint
+        saves = [save_state]
+
+    n_workers = max(1, args.batch_workers)
+    target_runs = args.batch
+    out_dir = (
+        Path(args.batch_out)
+        if args.batch_out
+        else Path("heatmaps") / f"eval_{datetime.now():%Y%m%d_%H%M%S}"
+    )
+
+    print("=" * 70)
+    print("  Pokemon Red AI - Batch Eval (heatmap export)")
+    print("=" * 70)
+    print(f"Model:      {model_path}")
+    print(f"Runs:       {target_runs:,}")
+    print(f"Workers:    {n_workers}")
+    print(f"Stage:      {stage}  goal={goal}  max_steps={max_steps}")
+    print(f"Auto curr.: {'ON' if auto else 'OFF'}")
+    print(f"Metrics:    {', '.join(args.batch_metrics)}")
+    print(f"Out dir:    {out_dir}")
+    print(f"Live view:  {'ON' if args.heatmap else 'OFF'}")
+    print("=" * 70)
+
+    heatmap_proc = heatmap_queue = None
+    if args.heatmap:
+        from utils.PositionHeatmap import start_heatmap_process
+
+        heatmap_proc, heatmap_queue = start_heatmap_process(
+            args.heatmap_frames, title="Pokemon Red AI - Position Heatmap (eval)"
+        )
+
+    def _make(rank: int):
+        return make_pokemon_env(
+            save_state=save_state,
+            max_steps=max_steps,
+            frame_skip=args.frame_skip,
+            goal=goal,
+            rank=rank,
+            seed=args.seed,
+            curriculum_mix=0.0,
+            curriculum_saves=saves,
+            auto_advance=auto,
+            stage=stage,
+            render_mode=None,
+            n_workers=n_workers,
+            collect_heatmap=True,
+        )
+
+    if n_workers <= 1:
+        vec_env = DummyVecEnv([_make(0)])
+    else:
+        vec_env = SubprocVecEnv([_make(i) for i in range(n_workers)], start_method="spawn")
+
+    model = PPO.load(str(model_path), device="cpu" if args.cpu else "auto")
+
+    agg_all = RollingHeatmapAggregator(window_frames=None)
+    stage_aggs: dict[str, RollingHeatmapAggregator] = {}
+
+    def _record(info: dict) -> None:
+        payload = (
+            info["heatmap_positions"],
+            info.get("heatmap_directions"),
+            info.get("heatmap_transitions"),
+            info.get("heatmap_rewards"),
+            info.get("heatmap_battle_outcomes"),
+            info.get("heatmap_milestones"),
+            info.get("heatmap_steps") or 0,
+        )
+        agg_all.add_episode(*payload)
+        stage_label = info.get("stage") or "unknown"
+        stage_aggs.setdefault(
+            stage_label, RollingHeatmapAggregator(window_frames=None)
+        ).add_episode(*payload)
+        if heatmap_queue is not None:
+            from utils.PositionHeatmap import push_episode
+
+            push_episode(heatmap_queue, *payload, stage_label)
+
+    runs_done = 0
+    goal_successes = 0
+    obs = vec_env.reset()
+    t0 = time.time()
+
+    from tqdm.auto import tqdm
+
+    pbar = tqdm(total=target_runs, unit="run", desc="batch eval")
+    try:
+        while runs_done < target_runs:
+            actions, _ = model.predict(obs, deterministic=not args.stochastic)
+            obs, rewards, dones, infos = vec_env.step(actions)
+            before = runs_done
+            for info in infos:
+                if info.get("heatmap_positions"):
+                    _record(info)
+                    runs_done += 1
+                if info.get("goal_success"):
+                    goal_successes += 1
+            if runs_done > before:
+                pbar.update(runs_done - before)
+                pbar.set_postfix(successes=goal_successes, refresh=False)
+    except KeyboardInterrupt:
+        print("\nInterrupted - rendering heatmap from partial data...")
+    finally:
+        pbar.close()
+        vec_env.close()
+
+    elapsed = time.time() - t0
+    print(
+        f"Done: {runs_done:,} runs in {elapsed:.0f}s "
+        f"({runs_done / max(elapsed, 1e-9):.1f} runs/s)"
+    )
+    if runs_done > 0:
+        print(f"Rendering heatmap images to {out_dir} ...")
+        aggregators = {"all": agg_all, **stage_aggs}
+        written = save_heatmap_images(
+            aggregators, out_dir,
+            metrics=tuple(args.batch_metrics), top_maps=args.batch_top_maps,
+        )
+        print(f"Wrote {len(written)} image(s) to {out_dir}")
+    else:
+        print("No runs completed - nothing to render.")
+
+    if heatmap_proc is not None:
+        print(
+            "Heatmap window stays open - close it manually when you're done "
+            "(Ctrl+C here closes it now)."
+        )
+        try:
+            heatmap_proc.join()
+        except KeyboardInterrupt:
+            from utils.PositionHeatmap import stop_heatmap_process
+
+            print("\nClosing heatmap window...")
+            stop_heatmap_process(heatmap_proc, heatmap_queue)
+
+
 def main():
     p = argparse.ArgumentParser(description="Evaluate PPO Pokemon Red agent")
     p.add_argument(
@@ -433,7 +612,47 @@ def main():
         "--heatmap-frames", type=int, default=300_000,
         help="Rolling window size in frames, pooled across all runs (default: 300000)",
     )
-    run(p.parse_args())
+    p.add_argument(
+        "--batch", type=int, default=None, metavar="N",
+        help="Batch mode: run N total episodes/curriculum-legs across "
+             "--batch-workers parallel workers and save static heatmap PNGs "
+             "to --batch-out at the end. Pass --heatmap too to also open the "
+             "same live window as plain eval, fed live from the batch run — "
+             "it just won't auto-close when the batch finishes (close it "
+             "yourself, or Ctrl+C). E.g. --batch 300000. All other eval "
+             "params (--model, --stage, --goal, --checkpoint, --max-steps, "
+             "--frame-skip, --stochastic, --auto-curriculum, --cpu) still "
+             "apply.",
+    )
+    p.add_argument(
+        "--batch-workers", type=int, default=8,
+        help="Parallel PyBoy worker processes for --batch (default: 8)",
+    )
+    p.add_argument(
+        "--batch-out", default=None,
+        help="Output directory for --batch heatmap PNGs "
+             "(default: heatmaps/eval_<timestamp>)",
+    )
+    p.add_argument(
+        "--batch-metrics", nargs="+",
+        choices=["ticks", "reward", "winrate", "fleerate", "recency", "milestones"],
+        default=["ticks"],
+        help="Which heatmap metric(s) to render in --batch mode (default: ticks)",
+    )
+    p.add_argument(
+        "--batch-top-maps", type=int, default=6,
+        help="Per stage, also render single-map views for the N most-visited "
+             "maps, in addition to the combined view (default: 6)",
+    )
+    p.add_argument(
+        "--seed", type=int, default=0,
+        help="Base worker seed for --batch mode (each worker gets seed + rank)",
+    )
+    args = p.parse_args()
+    if args.batch:
+        run_batch(args)
+    else:
+        run(args)
 
 
 if __name__ == "__main__":

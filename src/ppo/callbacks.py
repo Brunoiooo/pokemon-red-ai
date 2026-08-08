@@ -33,9 +33,10 @@ class HeatmapCallback(BaseCallback):
                     info.get("heatmap_directions"),
                     info.get("heatmap_transitions"),
                     info.get("heatmap_rewards"),
+                    info.get("heatmap_battle_outcomes"),
+                    info.get("heatmap_milestones"),
                     info.get("heatmap_steps") or 0,
                     info.get("stage"),
-                    info.get("heatmap_wild"),
                 )
         return True
 
