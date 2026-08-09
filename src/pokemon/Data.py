@@ -723,6 +723,12 @@ class Data:
     _completed_dialogs: set[tuple[int, int]] = field(default_factory=set)
     _dialog_reopen_counts: dict[tuple[int, int], int] = field(default_factory=dict)
     _dialog_reopen_truncate: bool = False
+    # True once the parcel has actually been observed sitting in the bag/PC
+    # (see gave_oaks_parcel) — guards against the have_oaks_parcel event flag
+    # (D60D) landing one frame-skip window before the item is actually
+    # written into the bag, which would otherwise read as "gone" (=delivered)
+    # before it was ever really carried.
+    _saw_oaks_parcel_in_bag: bool = False
     # Set each step by reward_battle_exit (debug_play / diagnostics).
     last_flee_reward: float = 0.0
     last_flee_info: dict | None = None
@@ -830,6 +836,7 @@ class Data:
         self._completed_dialogs = set()
         self._dialog_reopen_counts = {}
         self._dialog_reopen_truncate = False
+        self._saw_oaks_parcel_in_bag = False
         self.last_flee_reward = 0.0
         self.last_flee_info = None
         self.last_battle_exit_info = None
@@ -2792,20 +2799,29 @@ class Data:
 
     def gave_oaks_parcel(self, memory: PyBoyMemoryView | bytes) -> bool:
         """Delivered to Oak: had the parcel at some point (persistent event
-        flag) and it's now gone from both the bag and PC item storage."""
+        flag), it was actually seen carried in the bag/PC at some point, and
+        it's now gone from both. The "actually seen carried" part matters:
+        the D60D event flag is set by the same script that hands you the
+        item, and on the frame_skip window that catches the flag flipping
+        true, the item write into the bag may not have landed yet — without
+        _saw_oaks_parcel_in_bag that transient state reads as "gone" (i.e.
+        delivered) before the parcel was ever really carried, which skips
+        stage_gave_parcel entirely (goes straight from oaks_parcel to
+        town_map)."""
         if not self.have_oaks_parcel(memory):
             return False
-        if self._has_item_in_slots(
+        in_bag = self._has_item_in_slots(
             self.items_ids(memory), self.items_quantities(memory), ITEM_ID_OAKS_PARCEL
-        ):
-            return False
-        if self._has_item_in_slots(
+        )
+        in_pc = self._has_item_in_slots(
             self.stored_items_ids(memory),
             self.stored_items_quantities(memory),
             ITEM_ID_OAKS_PARCEL,
-        ):
+        )
+        if in_bag or in_pc:
+            self._saw_oaks_parcel_in_bag = True
             return False
-        return True
+        return self._saw_oaks_parcel_in_bag
 
     def bike_speed(self, memory: PyBoyMemoryView | bytes):
         return memory[0xD700]

@@ -133,7 +133,6 @@ def run(args):
     ACTION_NAMES = ("NONE", "A", "B", "UP", "DOWN", "LEFT", "RIGHT", "START", "SELECT")
 
     for ep in range(args.episodes):
-        stage = resolve_stage_name(args.stage)
         if auto:
             saves = get_curriculum_saves(stage)
             raw.set_curriculum(
