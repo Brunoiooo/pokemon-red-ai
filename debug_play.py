@@ -44,6 +44,7 @@ import keyboard
 
 from curriculum_config import (
     CURRICULUM,
+    GOAL_ORDER,
     get_goal_for_stage,
     next_stage,
     stage_for_goal,
@@ -213,6 +214,23 @@ def _resolve_stage_goal(args: argparse.Namespace) -> tuple[str, str]:
     """Match train_ppo defaults: stage_left_house → left_house."""
     if args.goal:
         goal = str(args.goal)
+        if goal not in GOAL_ORDER:
+            # A bare goal id (e.g. "gave_parcel") was expected, but this looks
+            # like a stage name (e.g. "stage_gave_parcel") got passed instead.
+            # stage_for_goal() silently falls back to stage_left_house for any
+            # unrecognized goal, which used to make data.goal permanently
+            # unmatchable (no milestone ever equals it -> stuck on muted
+            # rewards and auto-advance never fires) with no error at all.
+            hint = ""
+            if goal in CURRICULUM:
+                hint = (
+                    f" Did you mean --goal {CURRICULUM[goal]['goal']!r} "
+                    f"(or drop --goal and pass --stage {goal!r} instead)?"
+                )
+            raise SystemExit(
+                f"--goal {goal!r} is not a known goal id. Valid values: "
+                f"{', '.join(GOAL_ORDER)}.{hint}"
+            )
         stage = args.stage or stage_for_goal(goal)
         return stage, goal
     stage = args.stage

@@ -2785,7 +2785,19 @@ class Data:
         )
 
     def have_oaks_parcel(self, memory: PyBoyMemoryView | bytes):
-        return memory[0xD60D] & 1
+        """D60D packs two adjacent wEventFlags bits from the Viridian Mart
+        parcel hand-off script: bit 0 is a transient flag that's set mid-
+        dialog and cleared again the instant the parcel actually lands in
+        the bag, while bit 1 (EVENT_GOT_OAKS_PARCEL) is the real persistent
+        "player has received the parcel" flag. Reading bit 0 (as this used
+        to) reads True only for the few frames mid-dialog and then reads
+        False for the rest of the game — including for the entire walk to
+        Oak's Lab — which starved GOAL_OAKS_PARCEL and, transitively,
+        GOAL_GAVE_PARCEL (gave_oaks_parcel() bails out immediately when this
+        reads False) of ever firing. Confirmed by stepping a fresh emulator
+        from the saves/stage_gave_parcel/ checkpoint and dumping D60D frame
+        by frame across the mart hand-off."""
+        return bool(memory[0xD60D] & 2)
 
     def _has_item_in_slots(
         self, ids: list[int], quantities: list[int], item_id: int
