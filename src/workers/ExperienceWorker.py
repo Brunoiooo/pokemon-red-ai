@@ -35,35 +35,34 @@ class ExperienceWorker:
     recv_conn: PipeConnection
     event_start: Event
     files_lock: RLock
+    init_model_state_dict: dict[str, Any]
+    worker_id: int = 0
+
     td_error_steps = 10
     start_save_chance = 0.8
     max_stuck_epsilon = 0.15
     min_stuck_epsilon = 0.0
+
     epsilon_decay_steps: int = field(default=500_000, init=False)
     _total_steps: int = field(default=0, init=False)
     _last_epsilon: float = field(default=0.0, init=False)
     _state_buffer: deque = field(default_factory=lambda: deque(maxlen=64), init=False)
     _last_curriculum_stage: str | None = field(default=None, init=False)
-    _checkpoint_stack: list[str] = field(default_factory=lambda: ["start"], init=False)
-    _truncate_counter: int = field(default=0, init=False)
-    _best_milestone_count: int = field(default=0, init=False)
-    _visited_maps_in_stack: set[int] = field(default_factory=set, init=False)
-    _last_map_id: int | None = field(default=None, init=False)
-    init_model_state_dict: dict[str, Any]
-    max_episode_steps: int = 5000
 
-    __last_save_path = "last"
+    # Checkpoint state
+    _checkpoint_attempts: int = field(default=0, init=False)
+    _fallback_to_start: bool = field(default=False, init=False)
+    _new_checkpoint_this_episode: bool = field(default=False, init=False)
 
     @property
-    def last_save_path(self):
-        return (
-            self.__last_save_path
-            if os.path.exists(f"saves/{self.__last_save_path}")
-            else "start"
-        )
+    def worker_checkpoint_path(self) -> str:
+        return f"worker_{self.worker_id}"
 
     @property
     def random_save_path(self):
+        if not self._fallback_to_start and os.path.exists(f"saves/{self.worker_checkpoint_path}"):
+            return self.worker_checkpoint_path
+
         if CURRICULUM_ENABLED:
             checkpoint = get_checkpoint_for_episode(self._total_steps)
             if checkpoint:
@@ -73,32 +72,30 @@ class ExperienceWorker:
                     self.queue_logs.put(f"Curriculum: Advanced to {current_stage} (using checkpoint: {checkpoint})")
                 return checkpoint
 
-        # Use dynamic checkpoint stack (latest discovered checkpoint)
-        return self._checkpoint_stack[-1]
+        return "start"
 
     def _save_checkpoint(self, reason: str):
-        """Save current game state as a new checkpoint."""
         try:
-            checkpoint_name = f"dynamic_ckpt_{len(self._checkpoint_stack)}"
-            # Note: actual save would happen here if we had access to emulator state
-            self._checkpoint_stack.append(checkpoint_name)
-            stack_depth = len(self._checkpoint_stack) - 1
-            truncates = self._truncate_counter
-            self.queue_logs.put(f"Checkpoint #{stack_depth}: {reason} | Stack depth: {stack_depth} | Truncates reset")
-            self._truncate_counter = 0
+            path = f"saves/{self.worker_checkpoint_path}"
+            self.emulator.save_last_checkpoint(path)
+            self._checkpoint_attempts = 0
+            self._fallback_to_start = False
+            self._new_checkpoint_this_episode = True
+            self.queue_logs.put(f"Worker {self.worker_id} checkpoint: {reason} | attempts reset to 0")
         except Exception as e:
-            self.queue_logs.put(f"Failed to save checkpoint: {e}")
+            self.queue_logs.put(f"Worker {self.worker_id} failed to save checkpoint: {e}")
 
     def _handle_truncate(self):
-        """Handle truncation - if too many in a row, revert to previous checkpoint."""
-        self._truncate_counter += 1
-        if self._truncate_counter >= 10:
-            if len(self._checkpoint_stack) > 1:
-                reverted_from = self._checkpoint_stack.pop()
-                reverted_to = self._checkpoint_stack[-1]
-                self._visited_maps_in_stack.clear()
-                self.queue_logs.put(f"Truncate recovery: 10x in row | Reverting from {reverted_from} → {reverted_to} | Stack depth: {len(self._checkpoint_stack)-1}")
-            self._truncate_counter = 0
+        if self._new_checkpoint_this_episode:
+            return
+
+        self._checkpoint_attempts += 1
+        if self._checkpoint_attempts >= 10:
+            self._fallback_to_start = True
+            self._checkpoint_attempts = 0
+            self.queue_logs.put(f"Worker {self.worker_id}: 10 failed attempts → fallback to start")
+        else:
+            self.queue_logs.put(f"Worker {self.worker_id}: attempt {self._checkpoint_attempts}/10 failed")
 
     __model_state_dict: dict[str, Any] | None = None
 
@@ -153,7 +150,7 @@ class ExperienceWorker:
                 if self.recv_conn.poll(0.1):
                     self.model_state_dict = self.recv_conn.recv()
         except Exception as e:
-            self.queue_logs.put_nowait(f"{e}\n{traceback.print_exc()}")
+            self.queue_logs.put_nowait(f"{e}\n{traceback.format_exc()}")
         finally:
             self.emulator.pyboy.stop(False)
             self.event_start.clear()
@@ -161,13 +158,15 @@ class ExperienceWorker:
 
     def run_game(self, focused: bool = False):
         self._state_buffer.clear()
+        self._new_checkpoint_this_episode = False
         memory, inputs = self.emulator.reset(dir=self.random_save_path)
+
+        visited_maps = set(self.emulator.data.visited_maps)
+        visited_dialogs = set(self.emulator.data.visited_dialogs.keys())
 
         action_counter = [0] * N_META_ACTIONS
         total_episode_reward = 0.0
         step_count = 0
-        episode_milestone_count = 0
-        self._last_map_id = self.emulator.data.map_id(memory)
 
         while self.event_start.is_set():
             action = self.get_action(inputs)
@@ -203,20 +202,19 @@ class ExperienceWorker:
             total_episode_reward += reward
             step_count += 1
 
-            # Track milestone and map for dynamic checkpoints
-            milestone_reward = self.emulator.last_milestone
-            if milestone_reward > 0:
-                episode_milestone_count += 1
-                if episode_milestone_count > self._best_milestone_count:
-                    self._best_milestone_count = episode_milestone_count
-                    self._save_checkpoint(f"Milestone #{episode_milestone_count}")
+            if self.emulator.last_milestone > 0:
+                self._save_checkpoint(f"Milestone reward")
 
             current_map = self.emulator.data.map_id(next_memory)
-            if current_map != self._last_map_id and current_map not in self._visited_maps_in_stack:
-                self._visited_maps_in_stack.add(current_map)
+            if current_map not in visited_maps:
+                visited_maps.add(current_map)
                 self._save_checkpoint(f"New map #{current_map}")
-                self._truncate_counter = 0
-            self._last_map_id = current_map
+
+            if self.emulator.data.is_dialog(next_memory):
+                current_dialog = self.emulator.data.get_dialog(next_memory)
+                if current_dialog not in visited_dialogs:
+                    visited_dialogs.add(current_dialog)
+                    self._save_checkpoint(f"New dialog {current_dialog}")
 
             self.buffer.append(
                 {

@@ -15,18 +15,27 @@ class BufferManager:
         self.buffer_dir.mkdir(parents=True, exist_ok=True)
         self.buffer_path = self.buffer_dir / "replay_buffer.pkl"
 
-    def save_buffer(self, buffer: PrioritizedReplayBuffer) -> bool:
-        """Save buffer to disk. Returns True if successful."""
+    def snapshot(self, buffer: PrioritizedReplayBuffer) -> dict:
+        """Cheap reference-copy of buffer state. `.copy()` on an object-dtype
+        array only copies pointers, not the underlying transitions, so this is
+        fast enough to call while holding the buffer lock. Call `write_snapshot`
+        with the result *without* holding the lock to do the slow pickling."""
+        return {
+            'tree_data': buffer.tree.data.copy(),
+            'tree_array': buffer.tree.tree.copy(),
+            'tree_capacity': buffer.tree.capacity,
+            'tree_data_pointer': buffer.tree.data_pointer,
+            'tree_n_entries': buffer.tree.n_entries,
+            'alpha': buffer.alpha,
+            'epsilon': buffer.epsilon,
+        }
+
+    def write_snapshot(self, buffer_state: dict) -> bool:
+        """Pickle a snapshot to disk. This is the slow, multi-GB part — never
+        call it while holding the buffer lock, or every other thread/process
+        that needs the buffer (sampling, adding new experience) stalls for the
+        entire write."""
         try:
-            buffer_state = {
-                'tree_data': buffer.tree.data.copy(),
-                'tree_array': buffer.tree.tree.copy(),
-                'tree_capacity': buffer.tree.capacity,
-                'tree_data_pointer': buffer.tree.data_pointer,
-                'tree_n_entries': buffer.tree.n_entries,
-                'alpha': buffer.alpha,
-                'epsilon': buffer.epsilon,
-            }
             tmp_fd, tmp_path = tempfile.mkstemp(dir=self.buffer_dir, suffix='.tmp')
             try:
                 with os.fdopen(tmp_fd, 'wb') as f:
@@ -39,6 +48,12 @@ class BufferManager:
         except Exception as e:
             print(f"Error saving buffer: {e}")
             return False
+
+    def save_buffer(self, buffer: PrioritizedReplayBuffer) -> bool:
+        """Convenience: snapshot + write in one call. Prefer calling
+        `snapshot()` under the lock and `write_snapshot()` outside it directly
+        when the caller holds a lock other threads/processes also need."""
+        return self.write_snapshot(self.snapshot(buffer))
 
     def load_buffer(self, capacity: int, alpha: float = 0.6) -> PrioritizedReplayBuffer | None:
         """Load buffer from disk. Returns None if file doesn't exist or fails."""
@@ -64,6 +79,7 @@ class BufferManager:
             buffer.tree.data_pointer = buffer_state['tree_data_pointer']
             buffer.tree.n_entries = buffer_state['tree_n_entries']
             buffer.epsilon = buffer_state['epsilon']
+            buffer.recompute_max_priority()
 
             return buffer
         except Exception as e:

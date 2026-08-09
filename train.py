@@ -1,4 +1,12 @@
 #!/usr/bin/env python3
+"""Legacy Rainbow DQN training entrypoint.
+
+Prefer PPO:
+  python cli.py train
+  python train_ppo.py
+
+This script keeps the old actor-learner DQN loop for ablations.
+"""
 import sys
 import warnings
 warnings.filterwarnings("ignore", message="Detected call of `lr_scheduler.step\\(\\)` before `optimizer.step\\(\\)`")
@@ -12,8 +20,10 @@ from datetime import datetime
 from pathlib import Path
 from multiprocessing import set_start_method
 from workers.TrainWorker import TrainWorker
+from workers.ExperienceWorker import ExperienceWorker
 from utils.MetricsCollector import MetricsCollector
 from pokemon.Emulator import DURATION_BINS, N_META_ACTIONS
+from pokemon.Data import Data
 
 ACTION_NAMES = ["A", "B", "Start", "Sel", "L", "R", "Up", "Dn", "None"]
 
@@ -53,7 +63,7 @@ def run(args):
     Path("logs").mkdir(exist_ok=True)
     session_name = datetime.now().strftime('%Y%m%d_%H%M%S')
     log_file = Path("logs") / f"train_{session_name}.log"
-    log_file_handle = open(log_file, "w", buffering=1)
+    log_file_handle = open(log_file, "w", buffering=1, encoding="utf-8")
 
     train_csv_path = Path("logs") / f"train_steps_{session_name}.csv"
     episode_csv_path = Path("logs") / f"episodes_{session_name}.csv"
@@ -85,9 +95,9 @@ def run(args):
     print(f"Learning rate: {trainer.lr:.2e}")
     print(f"Buffer capacity: {trainer.buffer_capacity}")
     print(f"Buffer entries: {len(trainer.buffer)}")
-    print(f"Episode steps: 5000 (UPDATED)")
-    print(f"Base reward: -0.0001 (UPDATED)")
-    print(f"Exploration: 50-80% (UPDATED)\n")
+    print(f"Episode end: stuck >= {Data.max_useless_ticks} ticks (no hard step cap)")
+    print(f"Base reward: {Data.base_reward}")
+    print(f"Exploration: {ExperienceWorker.min_stuck_epsilon:.0%}-{ExperienceWorker.max_stuck_epsilon:.0%} epsilon, decaying over {ExperienceWorker.epsilon_decay_steps:,} steps\n")
 
     trainer.run()
 
@@ -125,14 +135,6 @@ def run(args):
                 elapsed = time.time() - start_time
                 evals.append((count, avg_ret, elapsed))
 
-                # Collect eval metrics
-                metrics.add_eval_metrics(
-                    eval_num=len(evals),
-                    step=count,
-                    timestamp=elapsed,
-                    return_value=avg_ret,
-                )
-
                 print(f"\n{'='*70}")
                 print(f"[EVAL #{len(evals)}] Step {count} | Return: {avg_ret:.4f} | Time: {format_time(elapsed)}")
                 if len(evals) > 1:
@@ -141,6 +143,21 @@ def run(args):
                     trend = "↑" if delta > 0 else "↓"
                     print(f"Delta: {trend} {abs(delta):+.4f}")
                 print(f"{'='*70}\n")
+
+            # Collect detailed eval metrics (episode length + badges collected —
+            # kept on a separate queue so the GUI's (count, return) scatter feed
+            # on queue_dots is untouched).
+            while not trainer.queue_eval_details.empty():
+                count, avg_ret, ep_len, badges = trainer.queue_eval_details.get_nowait()
+                elapsed = time.time() - start_time
+                metrics.add_eval_metrics(
+                    eval_num=len(metrics.session.eval_metrics) + 1,
+                    step=count,
+                    timestamp=elapsed,
+                    return_value=avg_ret,
+                    episode_length=ep_len,
+                    badges_collected=badges,
+                )
 
             # Collect training/episode stats
             elapsed = time.time() - start_time

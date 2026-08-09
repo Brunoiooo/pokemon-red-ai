@@ -21,6 +21,13 @@ DURATION_BINS = [16, 32, 64, 128, 255]
 N_ACTIONS = 9       # 8 buttons + none
 N_META_ACTIONS = N_ACTIONS * len(DURATION_BINS)   # 45
 
+# Every RAM address Data.py reads falls within WRAM bank 0xC000-0xE000 (highest
+# literal is stored_pokemon_* around 0xDAB0, plus a menu-index offset bounded by
+# the in-game box/bag size of 20 items — max observed ~0xDD69, well under this
+# cutoff). Snapshotting only this window instead of the full 64KB address space
+# avoids copying ROM banks, echo RAM, OAM, and I/O registers that nothing reads.
+MEMORY_SNAPSHOT_END = 0xE000
+
 
 @dataclass
 class Emulator:
@@ -40,7 +47,23 @@ class Emulator:
 
     ALL_BUTTONS = ["a", "b", "start", "select", "left", "right", "up", "down"]
 
+    # button_press()/button_release() only take effect on the next tick() —
+    # releasing at the end of a step and pressing again at the start of the
+    # next one (with zero ticks in between) never actually produces a
+    # released frame, so repeating the same button across consecutive steps
+    # looks like one continuous hold to the game. Gen-1 input handling (e.g.
+    # dialog advance) triggers on a fresh press edge, not on "still held", so
+    # a held A stops advancing text after the first press. Ticking a couple
+    # of frames with everything released between action holds restores that
+    # edge.
+    RELEASE_GAP_TICKS = 2
+
     __use_sdl: bool = False
+    # SDL layout (set by PokemonRedEnv before first pyboy access).
+    sdl_scale: int = 3
+    window_x: int | None = None
+    window_y: int | None = None
+    window_title: str | None = None
 
     @property
     def use_sdl(self) -> bool:
@@ -65,13 +88,32 @@ class Emulator:
 
     __pyboy: None | PyBoy = None
 
+    def _apply_sdl_layout(self) -> None:
+        if self.__pyboy is None or not self.use_sdl:
+            return
+        from utils.gui_layout import apply_pyboy_window
+
+        apply_pyboy_window(
+            self.__pyboy,
+            x=self.window_x,
+            y=self.window_y,
+            title=self.window_title,
+        )
+
     @property
     def pyboy(self):
         if self.__pyboy is None:
             window_str = "SDL2" if self.use_sdl else "null"
-            self.__pyboy = PyBoy(f"rom.gb", sound_emulated=False, window=window_str, cgb=False)
+            kwargs: dict[str, Any] = dict(
+                sound_emulated=False, window=window_str, cgb=False
+            )
+            if self.use_sdl:
+                kwargs["scale"] = max(1, int(self.sdl_scale))
+            self.__pyboy = PyBoy(f"rom.gb", **kwargs)
             if not self.use_sdl:
                 self.__pyboy.set_emulation_speed(0)
+            else:
+                self._apply_sdl_layout()
             if self.__data is not None:
                 self.__data.pyboy = self.__pyboy
 
@@ -89,18 +131,24 @@ class Emulator:
     def reset(self, dir: str | None = None):
         path = f"{self.saves}/{dir}"
 
-        with self.files_lock:
-            with open(f"{path}/checkpoint.state", "rb") as f:
-                self.pyboy.load_state(f)
+        try:
+            with self.files_lock:
+                with open(f"{path}/checkpoint.state", "rb") as f:
+                    self.pyboy.load_state(f)
+        except Exception:
+            with self.files_lock:
+                with open(f"{self.saves}/start/checkpoint.state", "rb") as f:
+                    self.pyboy.load_state(f)
+            path = f"{self.saves}/start"
 
         self.data.clean()
 
         try:
             self.data.load(path=path)
-        except FileNotFoundError:
+        except Exception:
             pass
 
-        return (bytes(self.pyboy.memory[0:0x10000]), self.data.inputs())
+        return (bytes(self.pyboy.memory[0:MEMORY_SNAPSHOT_END]), self.data.inputs())
 
     def step(self, memory: bytes, meta_action: int, render_each: bool = False):
         action_idx = meta_action // len(DURATION_BINS)
@@ -132,20 +180,73 @@ class Emulator:
         self.last_milestone = milestone
         self.last_step = step
 
-        if self.is_milestone(memory=memory):
-            self.data.clean()
+        # Do NOT call data.clean() on event/badge flips. That wiped visit
+        # counts, loop streak, and curriculum _cleared_goals mid-episode,
+        # which let the policy farm door-warp flag noise then reset anti-loop.
 
         return (
-            bytes(self.pyboy.memory[0:0x10000]),
+            bytes(self.pyboy.memory[0:MEMORY_SNAPSHOT_END]),
             self.data.inputs(),
             reward,
             terminated,
             truncated,
         )
 
-    def is_milestone(self, memory: bytes):
-        return 0 < self.data.reward_event_flags(memory) or 0 < self.data.reward_badges(
-            memory
+    def step_discrete(
+        self,
+        memory: bytes,
+        action_idx: int,
+        duration: int = 16,
+        render_each: bool = False,
+    ):
+        """PPO-friendly step: discrete button + fixed hold duration (no meta-actions)."""
+        action_idx = int(action_idx) % N_ACTIONS
+        duration = max(1, int(duration))
+
+        self._press_action(action_idx)
+
+        if render_each:
+            for _ in range(duration):
+                self.pyboy.tick(1, render=True, sound=False)
+        else:
+            self.pyboy.tick(duration, render=self.use_sdl, sound=False)
+
+        for button in self.ALL_BUTTONS:
+            self.pyboy.button_release(button)
+        self._release_gap(render_each=render_each)
+
+        milestone, step = self.data.reward(memory=memory, action=action_idx)
+
+        min_d = DURATION_BINS[0]
+        if step > 0:
+            step *= min_d / duration
+        elif step < 0:
+            step *= duration / min_d
+
+        reward = milestone + step
+        self.data.count(
+            reward=reward, action=action_idx, memory=memory, duration=duration
+        )
+
+        terminated = self.data.terminated(memory)
+        truncated = self.data.truncated(memory)
+
+        if truncated:
+            reward = self.data.truncated_reward
+            milestone = reward
+            step = 0.0
+
+        self.last_milestone = milestone
+        self.last_step = step
+
+        # Intentionally no data.clean() here — see step() above.
+
+        return (
+            bytes(self.pyboy.memory[0:MEMORY_SNAPSHOT_END]),
+            self.data.inputs(),
+            float(reward),
+            bool(terminated),
+            bool(truncated),
         )
 
     def is_new_episode(self, memory: bytes):
@@ -205,7 +306,11 @@ class Emulator:
             # )
             queue_logs.put_nowait(f"key: {key}, reward: {reward:.5f}")
             queue_logs.put_nowait(
-                f"is_dialog: {self.data.is_dialog(self.pyboy.memory)}, is_world: {self.data.is_world(self.pyboy.memory)}, is_menu: {self.data.is_menu(self.pyboy.memory)}, is_battle: {self.data.is_battle(self.pyboy.memory)}"
+                f"is_dialog: {self.data.is_dialog(self.pyboy.memory)}, "
+                f"is_world: {self.data.is_world(self.pyboy.memory)}, "
+                f"is_menu: {self.data.is_menu(self.pyboy.memory)}, "
+                f"is_battle: {self.data.is_battle(self.pyboy.memory)}, "
+                f"cutscene: {self.data.is_cutscene_locked(self.pyboy.memory)}"
             )
             queue_logs.put_nowait(f"visited_maps: {self.data.visited_maps}")
             queue_logs.put_nowait(
@@ -235,21 +340,48 @@ class Emulator:
 
         self.pyboy.stop(False)
 
+    def _press_action(self, action_idx: int) -> None:
+        # During forced walks the engine ignores (or may override) input — skip
+        # presses so we don't disturb scripted sequences. Dialog/menu still need A/B.
+        if self.data.is_cutscene_locked(self.pyboy.memory):
+            return
+        for button in self.buttons[action_idx]:
+            self.pyboy.button_press(button)
+
+    def _release_gap(self, render_each: bool = False) -> None:
+        """Tick a couple of frames with every button released.
+
+        button_release() only takes effect on the *next* tick() — without
+        this, releasing at the end of one step and pressing the same button
+        again at the start of the next (zero ticks in between) never
+        produces an actually-released frame, so repeating an action across
+        steps reads as one continuous hold. See RELEASE_GAP_TICKS.
+        """
+        if render_each:
+            for _ in range(self.RELEASE_GAP_TICKS):
+                self.pyboy.tick(1, render=True, sound=False)
+        else:
+            self.pyboy.tick(self.RELEASE_GAP_TICKS, render=self.use_sdl, sound=False)
+
     def ticks(self, meta_action: int, render_each: bool = False):
         action_idx = meta_action // len(DURATION_BINS)
         duration = DURATION_BINS[meta_action % len(DURATION_BINS)]
 
-        for button in self.buttons[action_idx]:
-            self.pyboy.button_press(button)
+        self._press_action(action_idx)
 
         if render_each:
             for _ in range(duration):
-                self.pyboy.tick(1)
+                self.pyboy.tick(1, render=True, sound=False)
         else:
-            self.pyboy.tick(duration)
+            # Observations are built purely from RAM (Data.py), never from the
+            # framebuffer, so skip PyBoy's render pass entirely unless the SDL
+            # window is actually showing (PyBoy's own docs recommend render=False
+            # for AI training, calling it a substantial and otherwise-needless cost).
+            self.pyboy.tick(duration, render=self.use_sdl, sound=False)
 
         for button in self.ALL_BUTTONS:
             self.pyboy.button_release(button)
+        self._release_gap(render_each=render_each)
 
     def evaluate_greedy(
         self,
@@ -317,9 +449,11 @@ class Emulator:
 
             memory, inputs = (next_memory, next_inputs)
 
+        badges_collected = sum(self.data.badges(self.pyboy.memory))
+
         self.pyboy.stop(False)
 
-        return total_reward, count
+        return total_reward, count, badges_collected
 
     def save_last_checkpoint(self, path: str):
         os.makedirs(path, exist_ok=True)

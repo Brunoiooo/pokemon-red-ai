@@ -29,9 +29,11 @@ from multiprocessing import RLock
 
 import keyboard
 
-from pokemon.Emulator import Emulator
+from pokemon.Emulator import Emulator, DURATION_BINS
 
-BUTTON_NAMES = ["A", "B", "Start", "Select", "Left", "Right", "Up", "Down"]
+BUTTON_NAMES = ["A", "B", "Start", "Select", "Left", "Right", "Up", "Down", "None"]
+BIN_16_IDX = 0  # index of 16-tick bin in DURATION_BINS
+NONE_ACTION = 8  # "no button pressed" — same index the trainer uses for a no-op step
 
 # Keys that map to game actions.  Avoids Z/X (PyBoy SDL2 maps those to A/B).
 KEY_MAP: dict[str, tuple[str, int | None]] = {
@@ -71,6 +73,16 @@ def run(args):
     emulator = Emulator(files_lock=files_lock)
     emulator.use_sdl = True
 
+    # The "stuck" truncation budgets are tuned for a policy that decides every
+    # step instantly. A human standing still to think, or navigating a menu,
+    # burns through the same tick budget in real seconds, so scale it up
+    # further for manual play on top of the global dialog patience in Data.py.
+    patience = getattr(args, "patience", 8)
+    if patience != 1:
+        emulator.data.max_useless_ticks *= patience
+        emulator.data.max_useless_dialog_ticks *= patience
+        emulator.data.max_useless_battle_ticks *= patience
+
     print_sep()
     print("  Pokemon Red AI — Demo Recorder")
     print_sep()
@@ -98,19 +110,25 @@ def run(args):
         try:
             label, action = key_queue.get(timeout=0.016)
         except queue.Empty:
-            # No key yet — tick one frame to keep SDL2 window alive
-            emulator.pyboy.tick(1)
-            continue
+            # No key pressed — still counts as a step (a no-op), matching how
+            # the trainer treats "no button" as a regular env step rather than
+            # a skipped frame.
+            label, action = "-", NONE_ACTION
+        else:
+            if label in ("ESC", "Q"):
+                print("\nStopped.")
+                break
 
-        if label in ("ESC", "Q"):
-            print("\nStopped.")
-            break
+            if action is None:
+                continue
 
-        if action is None:
-            continue
-
+        meta_action = action * len(DURATION_BINS) + BIN_16_IDX
+        # render_each=True paces frame-by-frame at real emulation speed; PyBoy
+        # only rate-limits once per tick() call, so a single batched
+        # tick(duration) call (the default, training-optimized path) blows
+        # through all `duration` frames near-instantly instead of in real time.
         next_memory, next_inputs, reward, terminated, truncated = emulator.step(
-            memory=memory, action=action
+            memory=memory, meta_action=meta_action, render_each=True
         )
         actions.append(action)
         total_reward += reward
@@ -162,6 +180,10 @@ def main():
                         help="Output JSON file (default: demos/demo.json)")
     parser.add_argument("--max-steps", "-n", type=int, default=500,
                         help="Max steps to record (default: 500)")
+    parser.add_argument("--patience", "-p", type=int, default=8,
+                        help="Multiplier on the stuck/idle truncation budget, "
+                             "tuned up from the training default for human "
+                             "reading/reaction speed (default: 8)")
     run(parser.parse_args())
 
 
