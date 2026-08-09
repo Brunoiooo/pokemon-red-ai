@@ -5,17 +5,10 @@ Usage:
   python cli.py [--cpu] [--verbose] [--gui] <command> [command-args]
 
 Commands:
-  train       PPO training (Stable-Baselines3) — primary path
-  train-dqn   Legacy Rainbow DQN training
+  train       PPO training (Stable-Baselines3)
   eval        Evaluate a PPO .zip checkpoint
-  eval-dqn    Evaluate a legacy DQN .pth checkpoint
-  pretrain    Behavioral-cloning pre-training from a human demo (legacy DQN)
-  record      Record human gameplay for BC pre-training
   save-stage  Play manually and save a mid-game state for a curriculum stage
   debug-play  Human play with live reward / dialog / battle debug prints
-  plot        Plot training metrics from CSV logs
-  analyze     Analyze a training metrics JSON
-  benchmark   Run inference / emulation / pipeline benchmarks
 """
 import sys
 sys.path.insert(0, "src")
@@ -34,7 +27,7 @@ _g.add_argument("--gui", action="store_true",
 
 parser = argparse.ArgumentParser(
     prog="pokemon-ai",
-    description="Pokemon Red AI — PPO primary, legacy DQN available",
+    description="Pokemon Red AI — PPO training",
     formatter_class=argparse.RawDescriptionHelpFormatter,
     epilog=(
         "Examples:\n"
@@ -42,8 +35,6 @@ parser = argparse.ArgumentParser(
         "  python cli.py eval --gui\n"
         "  python cli.py eval --model models/ppo_<timestamp>/best/best_model.zip --gui\n"
         "  python cli.py eval --batch 300000 --batch-workers 8\n"
-        "  python cli.py train-dqn --workers 5\n"
-        "  python cli.py eval-dqn --model models/best.pth\n"
     ),
     parents=[_global],
 )
@@ -110,18 +101,6 @@ p_train.add_argument(
     "--heatmap-frames", type=int, default=300_000,
     help="Rolling window size in frames, pooled across all runs (default: 300000)",
 )
-
-# ---------------------------------------------------------------------------
-# train-dqn (legacy)
-# ---------------------------------------------------------------------------
-p_train_dqn = sub.add_parser(
-    "train-dqn",
-    parents=[_global],
-    help="Legacy Rainbow DQN training",
-)
-p_train_dqn.add_argument("--workers", "-w", type=int, default=5)
-p_train_dqn.add_argument("--eval-gui", "-eg", action="store_true")
-p_train_dqn.add_argument("--reset-buffer", "-rb", action="store_true")
 
 # ---------------------------------------------------------------------------
 # eval (PPO)
@@ -203,36 +182,8 @@ p_eval.add_argument(
 )
 
 # ---------------------------------------------------------------------------
-# eval-dqn (legacy)
+# save-stage / debug-play
 # ---------------------------------------------------------------------------
-p_eval_dqn = sub.add_parser(
-    "eval-dqn",
-    parents=[_global],
-    help="Evaluate a legacy DQN .pth checkpoint",
-)
-p_eval_dqn.add_argument("--model", "-m", default="models/best.pth")
-p_eval_dqn.add_argument("--episodes", "-e", type=int, default=1)
-p_eval_dqn.add_argument("--checkpoint", "-c", default="start")
-p_eval_dqn.add_argument("--max-steps", "-s", type=int, default=5000)
-p_eval_dqn.add_argument("--human-speed", action="store_true")
-
-# ---------------------------------------------------------------------------
-# pretrain / record / plot / analyze / benchmark
-# ---------------------------------------------------------------------------
-p_pretrain = sub.add_parser("pretrain", parents=[_global], help="BC pre-training (legacy)")
-p_pretrain.add_argument("--demo", "-d", default="demos/demo.json")
-p_pretrain.add_argument("--model-in", default=None, metavar="MODEL")
-p_pretrain.add_argument("--model-out", default="models/bc_pretrained.pth", metavar="MODEL")
-p_pretrain.add_argument("--epochs", type=int, default=100)
-p_pretrain.add_argument("--lr", type=float, default=1e-4)
-p_pretrain.add_argument("--batch-size", type=int, default=32)
-
-p_record = sub.add_parser("record", parents=[_global], help="Record human demo")
-p_record.add_argument("--checkpoint", "-c", default="start")
-p_record.add_argument("--output", "-o", default="demos/demo.json")
-p_record.add_argument("--max-steps", "-n", type=int, default=500)
-p_record.add_argument("--patience", "-p", type=int, default=8)
-
 p_save_stage = sub.add_parser(
     "save-stage",
     parents=[_global],
@@ -306,17 +257,6 @@ p_debug.add_argument(
     help="Print every agent step (incl. unrecognized-key None)",
 )
 
-p_plot = sub.add_parser("plot", parents=[_global], help="Plot training CSV metrics")
-p_plot.add_argument("train_csv", nargs="?", default=None, metavar="TRAIN_CSV")
-
-p_analyze = sub.add_parser("analyze", parents=[_global], help="Analyze metrics JSON")
-_mex = p_analyze.add_mutually_exclusive_group(required=True)
-_mex.add_argument("--file", "-f", metavar="FILE")
-_mex.add_argument("--latest", "-l", action="store_true")
-
-sub.add_parser("benchmark", parents=[_global], help="Run benchmarks")
-
-
 def main():
     args = parser.parse_args()
 
@@ -327,28 +267,12 @@ def main():
             return
         _m.run(args)
 
-    elif args.command == "train-dqn":
-        import train as _m
-        _m.run(args)
-
     elif args.command == "eval":
         import run_eval_ppo as _m
         if args.batch:
             _m.run_batch(args)
         else:
             _m.run(args)
-
-    elif args.command == "eval-dqn":
-        import run_eval as _m
-        _m.run(args)
-
-    elif args.command == "pretrain":
-        import pretrain_bc as _m
-        _m.run(args)
-
-    elif args.command == "record":
-        import record_demo as _m
-        _m.run(args)
 
     elif args.command == "save-stage":
         import create_stage_save as _m
@@ -357,18 +281,6 @@ def main():
     elif args.command == "debug-play":
         import debug_play as _m
         _m.run(args)
-
-    elif args.command == "plot":
-        import plot_metrics as _m
-        _m.run(args)
-
-    elif args.command == "analyze":
-        import analyze_metrics as _m
-        _m.run(args)
-
-    elif args.command == "benchmark":
-        import benchmark as _m
-        _m.main()
 
 
 if __name__ == "__main__":

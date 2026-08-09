@@ -2,8 +2,6 @@
 
 Train an agent to play **Pokémon Red** with **PPO** (Stable-Baselines3) on **PyBoy**.
 
-The primary training path is PPO. The older Rainbow DQN stack remains available as `train-dqn` / `eval-dqn` for experiments, but is not the supported default.
-
 ## Requirements
 
 - Python 3.10+
@@ -96,15 +94,6 @@ Create mid-game saves by copying `checkpoint.state` into `saves/<stage_name>/` (
 - **Rewards**: hierarchical micro/meso/macro + PokeRL-style anti-loop / menu-spam penalties  
 - **Done**: curriculum goal (`left_house` / `route1` / `oaks_lab` / `badge1` / `all_badges`) or stuck / `max_steps`
 
-## Legacy Rainbow DQN
-
-```bash
-python cli.py train-dqn --workers 5
-python cli.py eval-dqn --model models/best.pth
-```
-
-See `TRAINING_IMPROVEMENTS.md` / `OPTIMIZATION_SUMMARY.md` for historical DQN notes (may be stale vs current code).
-
 ## Project layout
 
 ```
@@ -112,10 +101,5 @@ cli.py / train_ppo.py     # PPO entrypoints
 src/env/                  # Gymnasium PokemonRedEnv
 src/ppo/                  # Feature extractor + callbacks
 src/pokemon/              # PyBoy Emulator + Data (RAM/rewards)
-src/workers/              # Legacy DQN actor-learner
 curriculum_config.py      # PPO curriculum stages
 ```
-
-## Tk GUI
-
-`main.py` (Tk) is **not** supported on the PPO path — the `TrainModel` module is missing. Use the CLI.

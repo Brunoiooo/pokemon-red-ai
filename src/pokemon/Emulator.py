@@ -1,20 +1,14 @@
-from collections import deque
 from dataclasses import dataclass
 import io
 from multiprocessing.synchronize import RLock
 import os
-from queue import Queue
 from typing import Any
 import uuid
 
 import numpy as np
 from pyboy import PyBoy
-import torch
 
 from pokemon.Data import Data
-from pokemon.ModelPokemon import get_model
-import keyboard
-import time
 
 
 DURATION_BINS = [16, 32, 64, 128, 255]
@@ -252,94 +246,6 @@ class Emulator:
     def is_new_episode(self, memory: bytes):
         return ()
 
-    def auto_mode(self, queue_logs: Queue):
-        self.use_sdl = True
-
-        self.pyboy.set_emulation_speed(0)
-
-        memory, inputs = self.reset(dir="start")
-
-        flags = self.data.map_id(self.pyboy.memory), self.data.event_flags_data(
-            self.pyboy.memory
-        )
-
-        while True:
-            action_idx = 8  # none
-
-            key = keyboard.read_key()
-            if key == "up":
-                action_idx = 6
-            elif key == "down":
-                action_idx = 7
-            elif key == "left":
-                action_idx = 4
-            elif key == "right":
-                action_idx = 5
-            elif key == "a":
-                action_idx = 0
-            elif key == "b":
-                action_idx = 1
-            elif key == "space":
-                action_idx = 2
-            elif key == "enter":
-                action_idx = 3
-            elif key == "q":
-                break
-            elif key == "e":
-                self.save_last_checkpoint("saves/manual")
-
-            meta_action = action_idx * len(DURATION_BINS) + 0  # 16-tick bin
-
-            memory, inputs, reward, terminated, truncated = self.step(
-                memory=memory, meta_action=meta_action
-            )
-
-            # queue_logs.put_nowait(
-            #     f"useless_count: {self.data.useless_count, len(self.data.visited_screens)}"
-            # )
-            # queue_logs.put_nowait(f"visited_dialogs: {self.data.visited_dialogs}")
-            # queue_logs.put_nowait(
-            #     f"sprite_data_ids: {self.data.sprite_data_ids(self.pyboy.memory)}"
-            # )
-            # queue_logs.put_nowait(
-            #     f"visited_dialogs.get: {self.data.visited_dialogs.get(self.data.get_dialog(), 0)}"
-            # )
-            queue_logs.put_nowait(f"key: {key}, reward: {reward:.5f}")
-            queue_logs.put_nowait(
-                f"is_dialog: {self.data.is_dialog(self.pyboy.memory)}, "
-                f"is_world: {self.data.is_world(self.pyboy.memory)}, "
-                f"is_menu: {self.data.is_menu(self.pyboy.memory)}, "
-                f"is_battle: {self.data.is_battle(self.pyboy.memory)}, "
-                f"cutscene: {self.data.is_cutscene_locked(self.pyboy.memory)}"
-            )
-            queue_logs.put_nowait(f"visited_maps: {self.data.visited_maps}")
-            queue_logs.put_nowait(
-                f"visited_dialogs: {self.data.visited_dialogs.get(self.data.get_dialog(), 0)}"
-            )
-            queue_logs.put_nowait(
-                f"visited_positions: {self.data.visited_positions.get(self.data.get_position(), 0)}"
-            )
-
-            if truncated:
-                break
-
-            if flags != (
-                self.data.map_id(self.pyboy.memory),
-                self.data.event_flags_data(self.pyboy.memory),
-            ):
-                flags = self.data.map_id(self.pyboy.memory), self.data.event_flags_data(
-                    self.pyboy.memory
-                )
-                queue_logs.put_nowait(
-                    f"{self.data.position_x(self.pyboy.memory), self.data.position_y(self.pyboy.memory),flags}"
-                )
-
-            # queue_logs.put_nowait(f"{reward:.5f}")
-
-            time.sleep(0.1)
-
-        self.pyboy.stop(False)
-
     def _press_action(self, action_idx: int) -> None:
         # During forced walks the engine ignores (or may override) input — skip
         # presses so we don't disturb scripted sequences. Dialog/menu still need A/B.
@@ -382,78 +288,6 @@ class Emulator:
         for button in self.ALL_BUTTONS:
             self.pyboy.button_release(button)
         self._release_gap(render_each=render_each)
-
-    def evaluate_greedy(
-        self,
-        model_state_dict: dict[str, Any],
-        queue_logs: Queue,
-        is_debug: bool,
-        is_evaluation_window: bool,
-        save_name: str = "last",
-    ):
-        checkpoint = f"saves/{save_name}"
-
-        self.use_sdl = is_evaluation_window
-
-        model = get_model(device="cpu", files_lock=self.files_lock)
-        model.load_state_dict(model_state_dict)
-        model.eval()
-
-        total_reward = 0.0
-
-        memory, inputs = self.reset(dir="start")
-
-        self.save_last_checkpoint(checkpoint)
-
-        state_buffer = deque(maxlen=64)
-        count = 0
-        while True:
-            count += 1
-
-            model_inputs = inputs
-            if state_buffer:
-                model_inputs = {
-                    **inputs,
-                    "state_sequence": torch.stack(list(state_buffer)).unsqueeze(0),
-                }
-
-            with torch.inference_mode():
-                out = model(model_inputs)
-                if isinstance(out, dict) and "z" in out:
-                    state_buffer.append(out["z"].squeeze(0).detach())
-                q = out["q"] if isinstance(out, dict) else out
-                q = q.squeeze(0)
-
-            action = int(torch.argmax(q).item())
-
-            next_memory, next_inputs, reward, terminated, truncated = self.step(
-                memory=memory, meta_action=action
-            )
-
-            if (
-                self.data.is_world(self.pyboy.memory)
-                and self.data.visited_positions.get(self.data.get_position(), 0) == 0
-            ):
-                self.save_last_checkpoint(checkpoint)
-                queue_logs.put_nowait(f"saved checkpoint {count}")
-
-            if terminated:
-                queue_logs.put_nowait(
-                    f"Evaluation terminated successfully with total reward: {total_reward:.2f}"
-                )
-
-            total_reward += reward
-
-            if truncated:
-                break
-
-            memory, inputs = (next_memory, next_inputs)
-
-        badges_collected = sum(self.data.badges(self.pyboy.memory))
-
-        self.pyboy.stop(False)
-
-        return total_reward, count, badges_collected
 
     def save_last_checkpoint(self, path: str):
         os.makedirs(path, exist_ok=True)
