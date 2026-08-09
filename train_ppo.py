@@ -117,7 +117,7 @@ def run(args):
                 auto_advance=args.auto_curriculum,
                 worker_rank=rank,
                 n_workers=args.workers,
-                collect_heatmap=args.heatmap and rank == 0,
+                collect_heatmap=args.heatmap,
             )
             env.reset(seed=args.seed + rank)
             return env

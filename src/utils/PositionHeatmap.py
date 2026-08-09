@@ -72,6 +72,13 @@ Per-tile numeric value labels (toggle with 'v'), independent of view mode
 and metric: prints the exact per-tile value on top of each cell, for
 reading precise values instead of eyeballing color. Auto-hidden above
 _MAX_VALUE_LABELS cells since that many text artists stalls redraws.
+
+Interactive view: scroll-wheel zooms centered on the cursor, left-click-drag
+pans. Both views auto-fit to the currently-discovered extent on every redraw
+(so a map's visible area grows as more of it gets explored, and switching
+map/stage/mode re-fits) until the user scrolls or drags, at which point the
+manual viewport sticks — even as new tiles are discovered elsewhere — until
+they switch context again or press '0' to reset the view.
 """
 from __future__ import annotations
 
@@ -686,7 +693,15 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
         "stage": _ALL_STAGES,
         "metric": "ticks",
         "show_values": False,
+        # True once the user scroll-zooms or drag-pans the view. While True,
+        # redraws leave the view alone (so the manual zoom/pan sticks even as
+        # newly-discovered tiles grow the grid off-screen). Reset to False on
+        # any context switch (map/stage/mode) so the view snaps back to
+        # fitting whatever's been discovered in the new context.
+        "user_viewport": False,
     }
+    # Drag-to-pan bookkeeping (left mouse button held over the axes).
+    pan_state = {"active": False, "x0": None, "y0": None, "xlim0": None, "ylim0": None}
 
     def current_agg() -> RollingHeatmapAggregator:
         if state["stage"] == _ALL_STAGES:
@@ -708,6 +723,7 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
     def on_key(event) -> None:
         if event.key == "c":
             state["mode"] = "combined" if state["mode"] == "single" else "single"
+            state["user_viewport"] = False
             redraw()
             return
         if event.key == "r":
@@ -717,6 +733,10 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
             return
         if event.key == "v":
             state["show_values"] = not state["show_values"]
+            redraw()
+            return
+        if event.key == "0":
+            state["user_viewport"] = False
             redraw()
             return
         if state["mode"] != "single":
@@ -729,13 +749,66 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
         idx = maps.index(state["map_id"])
         if event.key in ("right", "n"):
             state["map_id"] = maps[(idx + 1) % len(maps)]
+            state["user_viewport"] = False
             redraw()
         elif event.key in ("left", "p"):
             state["map_id"] = maps[(idx - 1) % len(maps)]
+            state["user_viewport"] = False
             redraw()
+
+    def on_scroll(event) -> None:
+        """Scroll-wheel zoom, centered on the cursor's data position."""
+        if event.inaxes != ax or event.xdata is None or event.ydata is None:
+            return
+        base_scale = 1.15
+        if event.button == "up":
+            scale = 1.0 / base_scale
+        elif event.button == "down":
+            scale = base_scale
+        else:
+            return
+        xlim0, ylim0 = ax.get_xlim(), ax.get_ylim()
+        xdata, ydata = event.xdata, event.ydata
+        new_w = (xlim0[1] - xlim0[0]) * scale
+        new_h = (ylim0[1] - ylim0[0]) * scale
+        relx = (xlim0[1] - xdata) / (xlim0[1] - xlim0[0])
+        rely = (ylim0[1] - ydata) / (ylim0[1] - ylim0[0])
+        ax.set_xlim(xdata - new_w * (1 - relx), xdata + new_w * relx)
+        ax.set_ylim(ydata - new_h * (1 - rely), ydata + new_h * rely)
+        state["user_viewport"] = True
+        fig.canvas.draw_idle()
+
+    def on_button_press(event) -> None:
+        """Start a drag-to-pan gesture (left mouse button over the axes)."""
+        if event.inaxes != ax or event.button != 1:
+            return
+        pan_state["active"] = True
+        pan_state["x0"] = event.xdata
+        pan_state["y0"] = event.ydata
+        pan_state["xlim0"] = ax.get_xlim()
+        pan_state["ylim0"] = ax.get_ylim()
+
+    def on_motion(event) -> None:
+        if not pan_state["active"] or event.xdata is None or event.ydata is None:
+            return
+        dx = event.xdata - pan_state["x0"]
+        dy = event.ydata - pan_state["y0"]
+        xlim0, ylim0 = pan_state["xlim0"], pan_state["ylim0"]
+        ax.set_xlim(xlim0[0] - dx, xlim0[1] - dx)
+        ax.set_ylim(ylim0[0] - dy, ylim0[1] - dy)
+        state["user_viewport"] = True
+        fig.canvas.draw_idle()
+
+    def on_button_release(event) -> None:
+        if event.button == 1:
+            pan_state["active"] = False
 
     fig.canvas.mpl_connect("close_event", on_close)
     fig.canvas.mpl_connect("key_press_event", on_key)
+    fig.canvas.mpl_connect("scroll_event", on_scroll)
+    fig.canvas.mpl_connect("button_press_event", on_button_press)
+    fig.canvas.mpl_connect("motion_notify_event", on_motion)
+    fig.canvas.mpl_connect("button_release_event", on_button_release)
 
     # Stage dropdown, embedded directly in the TkAgg window above the canvas.
     stage_combo = None
@@ -762,6 +835,7 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
             def _on_stage_selected(_event=None) -> None:
                 state["stage"] = stage_var.get()
                 state["map_id"] = None
+                state["user_viewport"] = False
                 redraw()
 
             stage_combo.bind("<<ComboboxSelected>>", _on_stage_selected)
@@ -824,6 +898,21 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
             im.set_clim(0, max(vmax, 1.0))
             cbar.set_label("avg ticks / run")
 
+    def _apply_extent(x0: int, y0: int, grid) -> None:
+        """Set the image extent to the grid's bounding box and, unless the
+        user has manually zoomed/panned this context, snap the view to fit
+        it. Without this the axes view stays wherever it last was (initially
+        a 1x1 box), so a map that grows as more tiles get discovered — or a
+        freshly switched-to map with a totally different footprint — never
+        visibly resizes to match."""
+        extent = (
+            x0 - 0.5, x0 + grid.shape[1] - 0.5, y0 + grid.shape[0] - 0.5, y0 - 0.5,
+        )
+        im.set_extent(extent)
+        if not state["user_viewport"]:
+            ax.set_xlim(extent[0], extent[1])
+            ax.set_ylim(extent[2], extent[3])
+
     def _draw_quiver(dgrid) -> None:
         if dgrid is None:
             return
@@ -884,9 +973,7 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
             return
         grid, x0, y0 = result
         im.set_data(grid)
-        im.set_extent(
-            (x0 - 0.5, x0 + grid.shape[1] - 0.5, y0 + grid.shape[0] - 0.5, y0 - 0.5)
-        )
+        _apply_extent(x0, y0, grid)
         _apply_metric_style(grid)
 
         _clear_overlays()
@@ -908,7 +995,8 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
             f"metric={state['metric']}\n"
             f"{n_runs} runs - {agg.total_frames:,} frames in window\n"
             f"<-/-> switch map, c: combined view, r: cycle metric, "
-            f"v: toggle value labels ({'on' if state['show_values'] else 'off'})"
+            f"v: toggle value labels ({'on' if state['show_values'] else 'off'})\n"
+            f"scroll: zoom, drag: pan, 0: reset view"
         )
 
     def redraw_combined() -> None:
@@ -920,9 +1008,7 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
             return
         grid, x0, y0, offsets, connected, unconnected = result
         im.set_data(grid)
-        im.set_extent(
-            (x0 - 0.5, x0 + grid.shape[1] - 0.5, y0 + grid.shape[0] - 0.5, y0 - 0.5)
-        )
+        _apply_extent(x0, y0, grid)
         _apply_metric_style(grid)
 
         _clear_overlays()
@@ -970,7 +1056,8 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
             f"{agg.total_frames:,} frames in window{unconnected_s}{off_goal_s}\n"
             f"c: single-map view, r: cycle metric, "
             f"v: toggle value labels ({'on' if state['show_values'] else 'off'}) "
-            f"(best-effort — connections are inferred, not authoritative)"
+            f"(best-effort — connections are inferred, not authoritative)\n"
+            f"scroll: zoom, drag: pan, 0: reset view"
         )
 
     def redraw() -> None:
