@@ -50,15 +50,25 @@ def resolve_model_path(
             )
         return path
 
-    patterns = (
-        ("ppo_*/ppo_latest.zip", "ppo_*/best/best_model.zip", "ppo_*/ppo_ckpt_*.zip")
-        if prefer_latest
-        else ("ppo_*/best/best_model.zip", "ppo_*/ppo_latest.zip", "ppo_*/ppo_ckpt_*.zip")
-    )
+    if prefer_latest:
+        # Resuming: the single most-recently-written checkpoint wins, regardless
+        # of which pattern it matches. A crashed session that never got to write
+        # a valid ppo_latest.zip must not fall back to an older session's
+        # ppo_latest.zip when it has a newer ppo_ckpt_* sitting right there.
+        pattern_groups = [
+            ("ppo_*/ppo_latest.zip", "ppo_*/best/best_model.zip", "ppo_*/ppo_ckpt_*.zip")
+        ]
+    else:
+        # Default: prefer the best eval checkpoint over recency.
+        pattern_groups = [
+            ("ppo_*/best/best_model.zip",),
+            ("ppo_*/ppo_latest.zip",),
+            ("ppo_*/ppo_ckpt_*.zip",),
+        ]
     skipped: list[str] = []
-    for pattern in patterns:
+    for patterns in pattern_groups:
         found = sorted(
-            models_root.glob(pattern),
+            (path for pattern in patterns for path in models_root.glob(pattern)),
             key=lambda p: p.stat().st_mtime,
             reverse=True,
         )

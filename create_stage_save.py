@@ -15,8 +15,8 @@ Controls (global keyboard hook — works without focusing the terminal):
   ESC / Q     — quit
 
 Examples:
-  python cli.py save-stage --stage stage_oaks_lab
-  python cli.py save-stage --stage stage_fought_brock --from stage_oaks_lab
+  python cli.py save-stage --stage stage_route1
+  python cli.py save-stage --stage stage_fought_brock --from stage_route1
   python cli.py save-stage --list
 """
 from __future__ import annotations
@@ -93,7 +93,7 @@ def run(args: argparse.Namespace) -> None:
 
     stage = args.stage
     if not stage:
-        print("Pass --stage <name> (or --list). Example: --stage stage_oaks_lab")
+        print("Pass --stage <name> (or --list). Example: --stage stage_route1")
         raise SystemExit(2)
 
     if stage in CURRICULUM:
@@ -204,7 +204,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--stage",
         "-s",
         default=None,
-        help="Stage / folder name under saves/ (e.g. stage_oaks_lab)",
+        help="Stage / folder name under saves/ (e.g. stage_route1)",
     )
     p.add_argument(
         "--from",

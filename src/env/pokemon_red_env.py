@@ -27,7 +27,6 @@ from curriculum_config import (
 from pokemon.Data import (
     GOAL_BADGE_1,
     GOAL_LEFT_HOUSE,
-    GOAL_OAKS_LAB,
     GOAL_ROUTE_1,
     Data,
 )
@@ -261,6 +260,7 @@ class PokemonRedEnv(gym.Env):
             data.reward_sums.clear()
             data.battle_outcome_counts.clear()
             data.milestone_hit_counts.clear()
+            data.dialog_hit_counts.clear()
             data._last_heatmap_pos = None
             data.recent_positions.clear()
             data.recent_actions.clear()
@@ -272,7 +272,6 @@ class PokemonRedEnv(gym.Env):
             data._dialog_screens_seen = set()
             data._completed_dialogs = set()
             data._dialog_reopen_counts = {}
-            data._dialog_reopen_truncate = False
         return {
             "goal": self.goal,
             "stage": self.stage,
@@ -335,6 +334,7 @@ class PokemonRedEnv(gym.Env):
             self.goal = str(options["goal"])
             self.stage = stage_for_goal(self.goal)
             self._store_base_curriculum()
+        self.emu.data.seed_cleared_goals(self.emu.data.goal)
         self._memory = memory
         self._step_count = 0
         self._episode_loop = False
@@ -370,7 +370,7 @@ class PokemonRedEnv(gym.Env):
         # (auto_advance clears visits mid-episode on goal success). Grabbed
         # before Data.clean()/clear_visits wipes them, so it's the "last X
         # frames" heatmap unit.
-        heatmap_run: tuple[dict, dict, dict, dict, dict, dict, int] | None = None
+        heatmap_run: tuple[dict, dict, dict, dict, dict, dict, dict, int] | None = None
         # Train/eval parity: success advances in-place instead of ending the episode.
         if terminated and self.auto_advance and not truncated:
             if self.collect_heatmap:
@@ -381,6 +381,7 @@ class PokemonRedEnv(gym.Env):
                     dict(self.emu.data.reward_sums),
                     dict(self.emu.data.battle_outcome_counts),
                     dict(self.emu.data.milestone_hit_counts),
+                    dict(self.emu.data.dialog_hit_counts),
                     self._step_count,
                 )
             advanced, cleared_stage = self._advance_after_goal()
@@ -398,6 +399,7 @@ class PokemonRedEnv(gym.Env):
                 dict(self.emu.data.reward_sums),
                 dict(self.emu.data.battle_outcome_counts),
                 dict(self.emu.data.milestone_hit_counts),
+                dict(self.emu.data.dialog_hit_counts),
                 self._step_count,
             )
 
@@ -417,12 +419,18 @@ class PokemonRedEnv(gym.Env):
         truncated: bool,
         goal_success: bool = False,
         cleared_stage: str | None = None,
-        heatmap_run: tuple[dict, dict, dict, dict, dict, dict, int] | None = None,
+        heatmap_run: tuple[dict, dict, dict, dict, dict, dict, dict, int] | None = None,
     ) -> dict[str, Any]:
         data: Data = self.emu.data
         mem = self.emu.pyboy.memory
         badges = data.badges(mem)
         live_goals = data.live_story_goals()
+        party_count: int | None = None
+        party_avg_level: float | None = None
+        if heatmap_run:
+            party_count = int(data.party_count(mem))
+            levels = data.all_party_levels(mem)
+            party_avg_level = sum(levels) / len(levels) if levels else 0.0
         return {
             "heatmap_positions": heatmap_run[0] if heatmap_run else None,
             "heatmap_directions": heatmap_run[1] if heatmap_run else None,
@@ -430,7 +438,10 @@ class PokemonRedEnv(gym.Env):
             "heatmap_rewards": heatmap_run[3] if heatmap_run else None,
             "heatmap_battle_outcomes": heatmap_run[4] if heatmap_run else None,
             "heatmap_milestones": heatmap_run[5] if heatmap_run else None,
-            "heatmap_steps": heatmap_run[6] if heatmap_run else None,
+            "heatmap_dialogs": heatmap_run[6] if heatmap_run else None,
+            "heatmap_steps": heatmap_run[7] if heatmap_run else None,
+            "party_count": party_count,
+            "party_avg_level": party_avg_level,
             "badges": int(sum(badges)),
             "badge_bits": badges,
             "map_id": int(data.map_id(mem)),
@@ -515,5 +526,4 @@ __all__ = [
     "GOAL_BADGE_1",
     "GOAL_LEFT_HOUSE",
     "GOAL_ROUTE_1",
-    "GOAL_OAKS_LAB",
 ]

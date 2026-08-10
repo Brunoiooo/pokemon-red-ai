@@ -161,7 +161,6 @@ GOAL_LEFT_HOUSE = "left_house"
 GOAL_ROUTE_1_ENTRY = "route1_entry"
 ROUTE1_ENTRY_DIALOG_ID = 1
 GOAL_ROUTE_1 = "route1"
-GOAL_OAKS_LAB = "oaks_lab"
 GOAL_OAKS_PARCEL = "oaks_parcel"
 # Between picking up the parcel and getting credit for the Town Map: walk it
 # back to Oak. Gen 1 lets key items be deposited into the PC item storage
@@ -213,10 +212,12 @@ MEWTWO_POKEDEX_NUMBER = 150  # fixed since Gen 1, same order as wPokedexOwned
 # Pallet Town, not just the final leg.
 _MAPS_LEFT_HOUSE = HOUSE_MAPS | {MAP_PALLET_TOWN}
 _MAPS_ROUTE_1_ENTRY = frozenset({MAP_PALLET_TOWN, MAP_ROUTE_1, MAP_OAKS_LAB})
-# Includes MAP_ROUTE_1: goal auto-advances to oaks_lab the instant the entry
+# Includes MAP_ROUTE_1: goal auto-advances toward route1 the instant the entry
 # trigger fires, but the forced walk-into-lab cutscene can still read
-# map_id == MAP_ROUTE_1 for a few ticks afterward.
-_MAPS_OAKS_LAB = frozenset({MAP_PALLET_TOWN, MAP_OAKS_LAB, MAP_ROUTE_1})
+# map_id == MAP_ROUTE_1 for a few ticks afterward. Also includes MAP_OAKS_LAB:
+# the entry trigger force-walks the player straight into the lab to pick a
+# starter — that leg is a cutscene, not something the agent navigates, so it
+# is not its own curriculum goal (see former oaks_lab goal, folded in here).
 _MAPS_ROUTE_1 = frozenset({MAP_PALLET_TOWN, MAP_OAKS_LAB, MAP_ROUTE_1})
 
 _MAPS_OAKS_PARCEL = _MAPS_ROUTE_1 | {
@@ -406,7 +407,6 @@ _MAPS_CHAMPION = _MAPS_ALL_BADGES  # Victory Road / Elite Four / Hall of Fame al
 GOAL_ALLOWED_MAPS: dict[str, frozenset[int]] = {
     GOAL_LEFT_HOUSE: _MAPS_LEFT_HOUSE,
     GOAL_ROUTE_1_ENTRY: _MAPS_ROUTE_1_ENTRY,
-    GOAL_OAKS_LAB: _MAPS_OAKS_LAB,
     GOAL_ROUTE_1: _MAPS_ROUTE_1,
     GOAL_OAKS_PARCEL: _MAPS_OAKS_PARCEL,
     GOAL_GAVE_PARCEL: _MAPS_GAVE_PARCEL,
@@ -453,14 +453,13 @@ BADGE_GOALS = (
 # Location goals: true only while on the map / outside the house. Leaving undoes
 # live progress unless the goal was curriculum-cleared (auto_advance).
 REGRESSABLE_GOALS = frozenset(
-    {GOAL_LEFT_HOUSE, GOAL_ROUTE_1_ENTRY, GOAL_ROUTE_1, GOAL_OAKS_LAB}
+    {GOAL_LEFT_HOUSE, GOAL_ROUTE_1_ENTRY, GOAL_ROUTE_1}
 )
 
 # Ordered early→late checklist for live progress counting / regression metrics.
 STORY_GOAL_ORDER = (
     GOAL_LEFT_HOUSE,
     GOAL_ROUTE_1_ENTRY,
-    GOAL_OAKS_LAB,
     GOAL_ROUTE_1,
     GOAL_OAKS_PARCEL,
     GOAL_GAVE_PARCEL,
@@ -515,7 +514,6 @@ class Data:
     route1_reward: float = (
         8.0  # macro early milestone (scaled further when active goal)
     )
-    oaks_lab_reward: float = 3.0  # meso/macro story
     # Goal conditioning: full credit only for the active curriculum goal so the
     # policy cannot farm house/lab returns while the stage target is route1+.
     active_goal_scale: float = 3.0
@@ -595,8 +593,8 @@ class Data:
     menu_loop_penalty: float = -0.10
     # START/SELECT/d-pad while a textbox is open — does not advance story text.
     dialog_wrong_button_penalty: float = -0.08
-    # Scale for in-dialog waste when text is not progressing (was ~base_reward).
-    dialog_waste_scale: float = -0.04
+    # In-dialog waste now reuses base_reward via the same shape as
+    # reward_position's step_penalty (see reward_dialog) — no separate scale.
     # Lingering on a map that cannot complete the active location goal
     # (e.g. rivals' house while targeting Oak's Lab).
     off_goal_camp_penalty: float = -0.12
@@ -679,6 +677,14 @@ class Data:
     milestone_hit_counts: dict[tuple[int, int, int], int] = field(
         default_factory=dict
     )
+    # Ticks spent in a dialog per (x, y, map_id) tile, for --heatmap's
+    # dialog-recency overlay (episodes since a tile last triggered a
+    # dialog). Same _last_heatmap_pos attribution as reward_sums — a dialog
+    # has no world position of its own, so it's anchored on the last known
+    # world tile.
+    dialog_hit_counts: dict[tuple[int, int, int], int] = field(
+        default_factory=dict
+    )
     _last_heatmap_pos: tuple[int, int, int] | None = None
 
     recent_actions: deque = field(default_factory=lambda: deque(maxlen=20))
@@ -719,10 +725,9 @@ class Data:
     # Distinct dialog screen hashes seen for the current dialog_id. Blink frames
     # revisit old hashes; only a *new* hash counts as text progress.
     _dialog_screens_seen: set[str] = field(default_factory=set)
-    # Dialogs cleanly exited this episode → reopen tracking (penalty then truncate).
+    # Dialogs cleanly exited this episode → reopen tracking (penalty per reopen).
     _completed_dialogs: set[tuple[int, int]] = field(default_factory=set)
     _dialog_reopen_counts: dict[tuple[int, int], int] = field(default_factory=dict)
-    _dialog_reopen_truncate: bool = False
     # True once the parcel has actually been observed sitting in the bag/PC
     # (see gave_oaks_parcel) — guards against the have_oaks_parcel event flag
     # (D60D) landing one frame-skip window before the item is actually
@@ -814,6 +819,7 @@ class Data:
         self.direction_counts = {}
         self.map_transitions = {}
         self.reward_sums = {}
+        self.dialog_hit_counts = {}
         self.battle_outcome_counts = {}
         self.milestone_hit_counts = {}
         self._last_heatmap_pos = None
@@ -835,8 +841,15 @@ class Data:
         self._dialog_screens_seen = set()
         self._completed_dialogs = set()
         self._dialog_reopen_counts = {}
-        self._dialog_reopen_truncate = False
-        self._saw_oaks_parcel_in_bag = False
+        # Seed from the just-loaded save rather than always False: a
+        # checkpoint captured *after* the parcel was delivered has
+        # have_oaks_parcel() true with the item already gone from bag/pc, so
+        # gave_oaks_parcel() would otherwise wait forever this episode for a
+        # "seen in bag" moment that already happened before the save was
+        # made (see gave_oaks_parcel). Reading memory here is safe — this is
+        # a settled save snapshot, not the live frame-skip window where the
+        # D60D event flag can flip true a tick before the item write lands.
+        self._saw_oaks_parcel_in_bag = bool(self.have_oaks_parcel(self.pyboy.memory))
         self.last_flee_reward = 0.0
         self.last_flee_info = None
         self.last_battle_exit_info = None
@@ -1006,6 +1019,13 @@ class Data:
             self.visited_dialogs[dialog] = (
                 self.visited_dialogs.get(dialog, 0) + duration
             )
+            # --heatmap dialog-recency overlay: same _last_heatmap_pos
+            # attribution as reward_sums (a dialog can be mid-cutscene, off
+            # is_world(), so it's anchored on the last known world tile).
+            if self.collect_heatmap and self._last_heatmap_pos is not None:
+                self.dialog_hit_counts[self._last_heatmap_pos] = (
+                    self.dialog_hit_counts.get(self._last_heatmap_pos, 0) + duration
+                )
             # Fuse resets only on dialog_id change (or leaving dialog below).
             # New text frames alone used to reset forever → infinite camp.
             if self._dialog_id_changed(memory):
@@ -1159,10 +1179,11 @@ class Data:
         if memory is None:
             memory = self.pyboy.memory
 
+        selected_item = self.real_current_menu_selected_item(memory)
         data = [
-            self.poke_mart_items(memory)[self.real_current_menu_selected_item(memory)],
-            self.items_ids(memory)[self.real_current_menu_selected_item(memory)],
-            self.stored_items_ids(memory)[self.real_current_menu_selected_item(memory)],
+            self._safe_index(self.poke_mart_items(memory), selected_item),
+            self._safe_index(self.items_ids(memory), selected_item),
+            self._safe_index(self.stored_items_ids(memory), selected_item),
         ]
 
         return data if self.is_eq_menu(memory) else [0] * len(data)
@@ -1254,11 +1275,11 @@ class Data:
     def reward_dialog_reopen(self, memory: bytes) -> float:
         """After exiting a dialog, reopening the same (dialog_id, map_id) is a loop.
 
-        1st reopen → penalty; 2nd reopen → truncate (see ``truncated``).
-        Staying inside one conversation does not count — only exit then re-enter.
-        Reopens that happen while the engine owns input (forced-walk cutscenes,
-        e.g. Oak's Route 1 intercept closing/reopening the same textbox) are not
-        the player's doing, so they are exempt from the farming check entirely.
+        Every reopen pays dialog_reopen_penalty — no truncation. Staying inside
+        one conversation does not count — only exit then re-enter. Reopens that
+        happen while the engine owns input (forced-walk cutscenes, e.g. Oak's
+        Route 1 intercept closing/reopening the same textbox) are not the
+        player's doing, so they are exempt from the farming check entirely.
         """
         was_dialog = self.is_dialog(memory)
         now_dialog = self.is_dialog(self.pyboy.memory)
@@ -1273,12 +1294,8 @@ class Data:
             key = self.get_dialog()
             if key not in self._completed_dialogs:
                 return 0.0
-            n = self._dialog_reopen_counts.get(key, 0) + 1
-            self._dialog_reopen_counts[key] = n
+            self._dialog_reopen_counts[key] = self._dialog_reopen_counts.get(key, 0) + 1
             self.loop_flag = True
-            if n >= 2:
-                self._dialog_reopen_truncate = True
-                return 0.0
             return self.dialog_reopen_penalty
 
         return 0.0
@@ -1293,6 +1310,26 @@ class Data:
         """Curriculum auto_advance: leaving this location is not a regression."""
         if goal:
             self._cleared_goals.add(str(goal))
+
+    def seed_cleared_goals(self, active_goal: str) -> None:
+        """Backfill _cleared_goals for every STORY_GOAL_ORDER stage before ``active_goal``.
+
+        A curriculum stage resumes from a checkpoint that already sits past
+        earlier milestones (see curriculum_config.py's per-stage
+        ``checkpoint``), but clean() zeroes _cleared_goals every episode.
+        Without this, _prereq_cleared's same-episode chain in
+        reward_story_milestones can never be satisfied for any goal past the
+        first in the chain — e.g. starting fresh at stage_gave_parcel means
+        oaks_parcel was never "hit" this episode, so gave_parcel's payout
+        (the entire point of that curriculum stage) can never fire, even
+        though is_goal_satisfied() correctly detects completion and the
+        curriculum still auto-advances. Call once per reset, after the
+        episode's Data.clean() and after ``self.goal`` is finalized.
+        """
+        if active_goal not in STORY_GOAL_ORDER:
+            return
+        for name in STORY_GOAL_ORDER[: STORY_GOAL_ORDER.index(active_goal)]:
+            self.mark_goal_cleared(name)
 
     def live_story_goals(self) -> list[str]:
         """Story goals that are true in the *current* game state (can shrink)."""
@@ -1399,17 +1436,14 @@ class Data:
                 # instant Route 1 is touched during stage_route1_entry, then
                 # gets clawed back by reward_goal_regression() on the forced
                 # walk into the Lab — a spurious earn/regress cycle. The
-                # oaks_lab prereq below now covers this too, but the explicit
-                # goal check is cheap insurance against reordering.
-                self._prereq_cleared(GOAL_OAKS_LAB)
+                # explicit goal check below is the only guard against that now
+                # (there used to be an oaks_lab prereq covering it too, but
+                # that stage was folded away — the Lab visit is a forced
+                # cutscene the agent never navigates, see _MAPS_ROUTE_1).
+                self._prereq_cleared(GOAL_ROUTE_1_ENTRY)
                 and mid == MAP_ROUTE_1
                 and self.goal != GOAL_ROUTE_1_ENTRY,
                 self.route1_reward,
-            ),
-            (
-                GOAL_OAKS_LAB,
-                self._prereq_cleared(GOAL_ROUTE_1_ENTRY) and mid == MAP_OAKS_LAB,
-                self.oaks_lab_reward,
             ),
             (
                 GOAL_OAKS_PARCEL,
@@ -1636,10 +1670,16 @@ class Data:
             if self.type_of_battle(memory) == 1:
                 reward *= self._wild_encounter_decay()
             return reward, 0.0
-        return (
-            0.0,
-            self.in_battle_ticks / self.max_useless_battle_ticks * self.base_reward,
+        # Same waste shape and tempo as reward_position/reward_dialog (base_reward
+        # scaled up to 10x at saturation over max_useless_ticks) — idling on a
+        # stuck turn now costs exactly what idling on a tile costs, instead of
+        # the old flat linear ramp that topped out at just -0.001 (10x weaker).
+        # Ramped against max_useless_ticks (512), NOT max_useless_battle_ticks
+        # (2048) — the latter stays the longer stuck fuse for truncated().
+        waste_factor = (
+            min(self.in_battle_ticks, self.max_useless_ticks) / self.max_useless_ticks
         )
+        return 0.0, self.base_reward * (1.0 + waste_factor * 9.0)
 
     def reward_dialog(self, memory: bytes, action: int) -> tuple[float, float]:
         dialog_changed = self.dialog_id(memory) != self.dialog_id(self.pyboy.memory)
@@ -1653,16 +1693,18 @@ class Data:
             dialog_reward = self.dialog_advance_reward
         else:
             dialog_reward = 0.0
-        # Waste grows while the same dialog_id sits on screen without flipping.
-        waste = (
-            0.0
-            if dialog_changed
-            else (
-                self.in_dialog_ticks
-                / self.max_useless_dialog_ticks
-                * self.dialog_waste_scale
-            )
+        # Same per-tick waste shape AND same ramp tempo as reward_position's
+        # step_penalty (base_reward scaled up to 10x at saturation over
+        # max_useless_ticks) — idling in dialog now costs exactly what idling on
+        # a tile costs at every tick, not just at the (old, 4x-slower) cap.
+        # Deliberately ramped against max_useless_ticks (512), NOT
+        # max_useless_dialog_ticks (2048) — the latter stays the longer stuck
+        # fuse for truncated() so a legit long script still isn't cut short,
+        # it just no longer controls the reward ramp's speed.
+        waste_factor = (
+            min(self.in_dialog_ticks, self.max_useless_ticks) / self.max_useless_ticks
         )
+        waste = self.base_reward * (1.0 + waste_factor * 9.0)
         return dialog_reward, waste
 
     def reward_position(self):
@@ -1916,8 +1958,6 @@ class Data:
             )
         if goal == GOAL_ROUTE_1:
             return mid == MAP_ROUTE_1
-        if goal == GOAL_OAKS_LAB:
-            return mid == MAP_OAKS_LAB
         if goal == GOAL_OAKS_PARCEL:
             return bool(self.have_oaks_parcel(mem))
         if goal == GOAL_GAVE_PARCEL:
@@ -2007,7 +2047,6 @@ class Data:
             True
             if stuck_tile
             or stuck_dialog
-            or self._dialog_reopen_truncate
             or self.loop_streak >= self.max_loop_streak
             or self.max_useless_battle_ticks <= self.in_battle_ticks
             or self.max_useless_ticks <= self.in_menu_ticks
@@ -2046,7 +2085,6 @@ class Data:
             GOAL_TOWN_MAP,
             GOAL_OAKS_PARCEL,
             GOAL_ROUTE_1,
-            GOAL_OAKS_LAB,
             GOAL_ROUTE_1_ENTRY,
             GOAL_LEFT_HOUSE,
         )
@@ -2151,20 +2189,13 @@ class Data:
     def inventory_data(self, memory: PyBoyMemoryView | bytes):
         data = []
 
+        selected_item = self.real_current_menu_selected_item(memory)
         data += self.data_normalizer(
-            [
-                self.items_quantities(memory)[
-                    self.real_current_menu_selected_item(memory)
-                ]
-            ]
+            [self._safe_index(self.items_quantities(memory), selected_item)]
         )
         data += self.data_normalizer([self.player_money(memory)], max=0xFFFFFF)
         data += self.data_normalizer(
-            [
-                self.stored_items_quantities(memory)[
-                    self.real_current_menu_selected_item(memory)
-                ]
-            ]
+            [self._safe_index(self.stored_items_quantities(memory), selected_item)]
         )
         data += self.data_normalizer([self.game_coins(memory)], max=0xFFFF)
 
@@ -2292,6 +2323,14 @@ class Data:
 
     def id_of_the_first_displayed_menu_item(self, memory: PyBoyMemoryView | bytes):
         return memory[0xCC36]
+
+    @staticmethod
+    def _safe_index(data: list, index: int):
+        # real_current_menu_selected_item is a cursor shared across menus of
+        # different lengths (mart/bag/PC) — it can exceed a given list's
+        # bounds when read outside that specific menu, so wrap instead of
+        # crashing; the value is discarded downstream unless relevant.
+        return data[index % len(data)] if data else 0
 
     def index_of_current_pokemon_send_out(self, memory: PyBoyMemoryView | bytes):
         return memory[0xCC2F]

@@ -16,7 +16,7 @@ Controls (global keyboard hook — works without focusing the terminal):
 
 Examples:
   python cli.py debug-play --from start
-  python cli.py debug-play --from stage_oaks_lab
+  python cli.py debug-play --from stage_route1
   python cli.py debug-play --from start --frame-skip 16 --real-truncation
 
 Parity with PPO training:
@@ -259,7 +259,6 @@ def _clear_visits(data) -> None:
     data._dialog_screens_seen = set()
     data._completed_dialogs = set()
     data._dialog_reopen_counts = {}
-    data._dialog_reopen_truncate = False
 
 
 def _advance_after_goal(emu: Emulator, stage: str, goal: str) -> tuple[bool, str, str]:
@@ -334,6 +333,7 @@ def run(args: argparse.Namespace) -> None:
 
     memory, _ = emulator.reset(dir=from_ckpt)
     emulator.data.goal = goal
+    emulator.data.seed_cleared_goals(goal)
     # Real-time pace: PyBoy only rate-limits once per tick() call, so batched
     # tick(duration) would still run near-instant. render_each paces each frame.
     emulator.pyboy.set_emulation_speed(1)
@@ -387,6 +387,7 @@ def run(args: argparse.Namespace) -> None:
             memory, _ = emulator.reset(dir=from_ckpt)
             stage, goal = base_stage, base_goal
             emulator.data.goal = goal
+            emulator.data.seed_cleared_goals(goal)
             emulator.pyboy.tick(1, render=True, sound=False)
             prev_mode = _mode_flags(emulator)
             prev_dialog = emulator.data.dialog_id(emulator.pyboy.memory)
@@ -452,9 +453,20 @@ def run(args: argparse.Namespace) -> None:
                 marks.append("BAG")
             if emulator.data.loop_flag:
                 marks.append("LOOP")
-            if getattr(emulator.data, "_last_regressed", None):
-                lost = ",".join(emulator.data._last_regressed)
-                marks.append(f"REGRESS({lost})")
+            # _last_regressed mixes real clawbacks with the ordinary "left a
+            # map whose location goal is curriculum-cleared" case (ambiguous
+            # for a human reading the log) — only _last_hard_regressed
+            # actually docked reward. See Data._last_hard_regressed.
+            hard_regressed = getattr(emulator.data, "_last_hard_regressed", None) or []
+            soft_regressed = [
+                g
+                for g in (getattr(emulator.data, "_last_regressed", None) or [])
+                if g not in hard_regressed
+            ]
+            if hard_regressed:
+                marks.append(f"REGRESS({','.join(hard_regressed)})")
+            if soft_regressed:
+                marks.append(f"goal_off_map({','.join(soft_regressed)})")
             if advanced and cleared_goal:
                 marks.append(f"CLEAR({cleared_goal})->{goal}")
             elif terminated:

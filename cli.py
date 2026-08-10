@@ -193,7 +193,7 @@ p_save_stage.add_argument(
     "--stage",
     "-s",
     default=None,
-    help="Stage / folder under saves/ (e.g. stage_oaks_lab)",
+    help="Stage / folder under saves/ (e.g. stage_route1)",
 )
 p_save_stage.add_argument(
     "--from",

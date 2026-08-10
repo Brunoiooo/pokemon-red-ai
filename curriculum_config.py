@@ -40,7 +40,6 @@ from pokemon.Data import (
     GOAL_LEFT_HOUSE,
     GOAL_MEWTWO,
     GOAL_MOLTRES,
-    GOAL_OAKS_LAB,
     GOAL_OAKS_PARCEL,
     GOAL_ROUTE_1,
     GOAL_ROUTE_1_ENTRY,
@@ -86,7 +85,6 @@ def _stage(
 STAGE_ORDER = [
     "stage_left_house",
     "stage_route1_entry",
-    "stage_oaks_lab",
     "stage_route1",
     "stage_oaks_parcel",
     "stage_gave_parcel",
@@ -130,19 +128,12 @@ CURRICULUM: dict[str, dict] = {
         checkpoint="stage_route1_entry",
         earlier=["start"],
     ),
-    "stage_oaks_lab": _stage(
-        GOAL_OAKS_LAB,
-        max_steps=4096,
-        description="Reach Oak's Lab",
-        checkpoint="stage_oaks_lab",
-        earlier=["start", "stage_route1_entry"],
-    ),
     "stage_route1": _stage(
         GOAL_ROUTE_1,
         max_steps=4096,
         description="Reach Route 1 / tall grass",
         checkpoint="stage_route1",
-        earlier=["start", "stage_oaks_lab"],
+        earlier=["start", "stage_route1_entry"],
     ),
     "stage_oaks_parcel": _stage(
         GOAL_OAKS_PARCEL,

@@ -35,8 +35,11 @@ class HeatmapCallback(BaseCallback):
                     info.get("heatmap_rewards"),
                     info.get("heatmap_battle_outcomes"),
                     info.get("heatmap_milestones"),
+                    info.get("heatmap_dialogs"),
                     info.get("heatmap_steps") or 0,
                     info.get("stage"),
+                    info.get("party_count"),
+                    info.get("party_avg_level"),
                 )
         return True
 
@@ -92,6 +95,10 @@ class MilestoneCallback(BaseCallback):
         self._goals_live: deque[int] = deque(maxlen=window)
         self._goals_peak: deque[int] = deque(maxlen=window)
         self._regressions: deque[int] = deque(maxlen=window)
+        # Hits on the *currently set* goal only (cleared_stage == self.stage).
+        # Reset whenever the stage changes, forward (advance) or back (demote).
+        self._goal_hit_count = 0
+        self._goal_hit_reward_sum = 0.0
         self._ep_loop = None
         self._ep_milestones = None
         self._ep_goal_hit = None
@@ -106,6 +113,13 @@ class MilestoneCallback(BaseCallback):
         self._ep_regressed = [False] * n
         self._ep_goals_peak = [0] * n
         self.logger.record("pokemon/curriculum_stage_idx", self._stage_idx())
+        self._reset_goal_hits()
+
+    def _reset_goal_hits(self) -> None:
+        self._goal_hit_count = 0
+        self._goal_hit_reward_sum = 0.0
+        self.logger.record("pokemon/goal_hits_current_stage", 0.0)
+        self.logger.record("pokemon/goal_hit_avg_reward", 0.0)
 
     def _stage_idx(self) -> int:
         from curriculum_config import stage_index
@@ -157,6 +171,7 @@ class MilestoneCallback(BaseCallback):
         # Fresh window so we don't immediately leap again on stale successes.
         self._successes.clear()
         self._returns.clear()
+        self._reset_goal_hits()
 
         goal = get_goal_for_stage(nxt)
         max_steps = get_stage_max_steps(nxt)
@@ -201,6 +216,7 @@ class MilestoneCallback(BaseCallback):
 
         self._successes.clear()
         self._returns.clear()
+        self._reset_goal_hits()
 
         goal = get_goal_for_stage(prv)
         max_steps = get_stage_max_steps(prv)
@@ -216,6 +232,7 @@ class MilestoneCallback(BaseCallback):
     def _on_step(self) -> bool:
         infos = self.locals.get("infos", [])
         dones = self.locals.get("dones", [])
+        rewards = self.locals.get("rewards", [])
 
         for i, info in enumerate(infos):
             if not info:
@@ -231,6 +248,13 @@ class MilestoneCallback(BaseCallback):
             done = bool(dones[i]) if i < len(dones) else False
             if info.get("goal_success") or info.get("cleared_stage"):
                 self._ep_goal_hit[i] = True
+            # Only count a hit toward the *currently set* goal — envs can
+            # auto-advance in-place past the callback's stage within one
+            # episode, and those later hits belong to a different goal.
+            if info.get("goal_success") and info.get("cleared_stage") == self.stage:
+                self._goal_hit_count += 1
+                if i < len(rewards):
+                    self._goal_hit_reward_sum += float(rewards[i])
             # "hard" = a payout was actually clawed back (goal not yet
             # curriculum-cleared). Plain "goals_regressed" also fires on
             # every ordinary "left a map already cleared en route to the
@@ -295,6 +319,14 @@ class MilestoneCallback(BaseCallback):
             if self._returns:
                 self.logger.record(
                     "pokemon/ep_return_mean", float(np.mean(self._returns))
+                )
+            self.logger.record(
+                "pokemon/goal_hits_current_stage", float(self._goal_hit_count)
+            )
+            if self._goal_hit_count:
+                self.logger.record(
+                    "pokemon/goal_hit_avg_reward",
+                    self._goal_hit_reward_sum / self._goal_hit_count,
                 )
             self.logger.record("pokemon/curriculum_stage_idx", self._stage_idx())
             self._try_advance()

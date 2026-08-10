@@ -68,7 +68,7 @@ Watch especially:
 python cli.py eval --gui
 ```
 
-Auto-picks the newest `best_model.zip` / `ppo_latest.zip`. With **auto-curriculum** (default), one episode keeps playing after each goal and skips already-satisfied flags/badges (prints `✓ stage_left_house cleared → advancing to stage_oaks_lab`).
+Auto-picks the newest `best_model.zip` / `ppo_latest.zip`. With **auto-curriculum** (default), one episode keeps playing after each goal and skips already-satisfied flags/badges (prints `✓ stage_left_house cleared → advancing to stage_route1_entry`).
 
 ```bash
 python cli.py eval --gui --no-auto-curriculum --goal left_house   # fixed single goal
@@ -92,7 +92,7 @@ Create mid-game saves by copying `checkpoint.state` into `saves/<stage_name>/` (
 - **Obs**: `screen_tiles` (1×18×20), `visit_mask` (1×11×11), flat `vector` features from RAM  
 - **Actions**: 9 discrete buttons (A/B/Start/Select/D-pad/None) with fixed `--frame-skip` (default 16)  
 - **Rewards**: hierarchical micro/meso/macro + PokeRL-style anti-loop / menu-spam penalties  
-- **Done**: curriculum goal (`left_house` / `route1` / `oaks_lab` / `badge1` / `all_badges`) or stuck / `max_steps`
+- **Done**: curriculum goal (`left_house` / `route1` / `gave_parcel` / `badge1` / `all_badges`) or stuck / `max_steps`
 
 ## Project layout
 

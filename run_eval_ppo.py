@@ -188,8 +188,11 @@ def run(args):
                     info.get("heatmap_rewards"),
                     info.get("heatmap_battle_outcomes"),
                     info.get("heatmap_milestones"),
+                    info.get("heatmap_dialogs"),
                     info.get("heatmap_steps") or 0,
                     info.get("stage", stage),
+                    info.get("party_count"),
+                    info.get("party_avg_level"),
                 )
 
             map_id = info.get("map_id")
@@ -492,7 +495,10 @@ def run_batch(args):
             info.get("heatmap_rewards"),
             info.get("heatmap_battle_outcomes"),
             info.get("heatmap_milestones"),
+            info.get("heatmap_dialogs"),
             info.get("heatmap_steps") or 0,
+            info.get("party_count"),
+            info.get("party_avg_level"),
         )
         agg_all.add_episode(*payload)
         stage_label = info.get("stage") or "unknown"
@@ -502,7 +508,7 @@ def run_batch(args):
         if heatmap_queue is not None:
             from utils.PositionHeatmap import push_episode
 
-            push_episode(heatmap_queue, *payload, stage_label)
+            push_episode(heatmap_queue, *payload[:8], stage_label, *payload[8:])
 
     runs_done = 0
     goal_successes = 0
@@ -634,7 +640,10 @@ def main():
     )
     p.add_argument(
         "--batch-metrics", nargs="+",
-        choices=["ticks", "reward", "winrate", "fleerate", "recency", "milestones"],
+        choices=[
+            "ticks", "reward", "winrate", "fleerate", "recency", "dialog_recency",
+            "milestones",
+        ],
         default=["ticks"],
         help="Which heatmap metric(s) to render in --batch mode (default: ticks)",
     )

@@ -33,6 +33,11 @@ Two view modes (toggle with 'c'):
     fixed offset every time) and get stitched in at a nonsense position —
     there's no memory-flag here distinguishing "walked across an edge" from
     "used a door", so treat the combined view as approximate.
+    Maps that couldn't be stitched in (no confirmed connection to the
+    anchor) aren't dropped from view: up to _MAX_SIDE_PANELS of them get
+    their own small thumbnail in a side column, sharing the main image's
+    color scale. Beyond that cap, the remainder are just named in the last
+    slot's text instead of rendered.
 
 Six color metrics (cycle with 'r'), independent of the view mode:
   - ticks: avg ticks/run per tile (time spent) — the original view.
@@ -55,6 +60,11 @@ Six color metrics (cycle with 'r'), independent of the view mode:
     window. Not an average — a raw "how long ago" count, for spotting tiles
     the policy has drifted away from recently without waiting for them to
     fall out of the window entirely.
+  - dialog_recency: episodes since a tile last triggered a dialog (NPC talk,
+    sign, cutscene text), NaN on tiles that have never triggered one even if
+    heavily visited. Same "how long ago" shape as recency, but scoped to
+    dialog-bearing tiles only — separates "the policy walked through here
+    recently" from "the policy actually talked to something here recently".
   - milestones: avg story-milestone hits/run per tile — how much of the
     curriculum's critical path actually lines up with where the agent
     spends time, same attribution as reward.
@@ -120,6 +130,16 @@ _MIN_TRANSITION_MAJORITY = 0.75
 # against, so demand more samples and a near-unanimous majority instead.
 _MIN_TRANSITION_VOTES_SOLO = 6
 _MIN_TRANSITION_MAJORITY_SOLO = 0.9
+# Max number of unconnected-map thumbnails shown in the combined view's side
+# column (live window and batch PNG alike). Kept small since each is a full
+# axes/imshow — past this, the last slot becomes a text list of the rest
+# instead of one more thumbnail, so an "All"-stage pool with dozens of
+# not-yet-connected maps doesn't stall the redraw or bury the window.
+_MAX_SIDE_PANELS = 6
+# Episodes kept for the rolling "avg party size / level" indicator — a plain
+# count-based window (see RollingHeatmapAggregator._party_history), not tied
+# to the frame-based eviction everything else here uses.
+_PARTY_HISTORY = 50
 
 
 class RollingHeatmapAggregator:
@@ -174,12 +194,26 @@ class RollingHeatmapAggregator:
         # out; the "recency" metric's own footprint is the ticks grid, so an
         # entry only actually renders while its tile is still in-window.
         self.last_seen: dict[int, dict[tuple[int, int], int]] = {}
+        # map_id -> {(x, y): total_episodes value as of the last run that
+        # triggered a dialog on this tile} — same permanent, never-evicted
+        # shape as last_seen, but populated only from dialog attribution
+        # (see Data.dialog_hit_counts), not every visit. Backs the
+        # "dialog_recency" metric.
+        self.last_dialog_seen: dict[int, dict[tuple[int, int], int]] = {}
         # map_id -> number of runs in the window that touched this map
         self.run_count: dict[int, int] = {}
         # map_id -> {(x, y): {"up"/"down"/"left"/"right": step count}}
         self.direction_sums: dict[int, dict[tuple[int, int], dict[str, int]]] = {}
         # (from_map, to_map) -> {(dx, dy): vote count} — permanent, never evicted.
         self.transition_votes: dict[tuple[int, int], dict[tuple[int, int], int]] = {}
+        # Most recent episode's party size / average level, for the "right
+        # now" indicator — and a small bounded history (count-based, not
+        # frame-windowed like everything else here: a party snapshot is one
+        # scalar per episode, not a per-tile grid, so there's nothing to
+        # evict tile-by-tile) for a steadier running average.
+        self.last_party_count: int | None = None
+        self.last_party_avg_level: float | None = None
+        self._party_history: deque[tuple[int, float]] = deque(maxlen=_PARTY_HISTORY)
 
     def add_episode(
         self,
@@ -189,7 +223,10 @@ class RollingHeatmapAggregator:
         rewards: dict[tuple[int, int, int], float] | None,
         battle_outcomes: dict[tuple[int, int, int], dict[str, int]] | None,
         milestones: dict[tuple[int, int, int], int] | None,
+        dialogs: dict[tuple[int, int, int], int] | None,
         steps: int,
+        party_count: int | None = None,
+        party_avg_level: float | None = None,
     ) -> None:
         if not positions or steps <= 0:
             return
@@ -198,6 +235,13 @@ class RollingHeatmapAggregator:
         rewards = rewards or {}
         battle_outcomes = battle_outcomes or {}
         milestones = milestones or {}
+        dialogs = dialogs or {}
+        for (x, y, map_id) in dialogs:
+            self.last_dialog_seen.setdefault(map_id, {})[(x, y)] = self.total_episodes
+        if party_count is not None and party_avg_level is not None:
+            self.last_party_count = party_count
+            self.last_party_avg_level = party_avg_level
+            self._party_history.append((party_count, party_avg_level))
         if self.window_frames is not None:
             self._runs.append(
                 (steps, positions, directions, rewards, battle_outcomes, milestones)
@@ -323,6 +367,15 @@ class RollingHeatmapAggregator:
         """Map ids currently in the window, most-visited first."""
         return sorted(self.sum_ticks, key=lambda m: -sum(self.sum_ticks[m].values()))
 
+    def avg_party(self) -> tuple[float, float] | None:
+        """(avg party size, avg level) over the last _PARTY_HISTORY episodes
+        that reported party data, or None if none have yet."""
+        if not self._party_history:
+            return None
+        counts = [c for c, _ in self._party_history]
+        levels = [lv for _, lv in self._party_history]
+        return sum(counts) / len(counts), sum(levels) / len(levels)
+
     def _metric_sums(self, metric: str) -> dict[int, dict[tuple[int, int], float]]:
         if metric == "reward":
             return self.sum_rewards
@@ -346,9 +399,10 @@ class RollingHeatmapAggregator:
         """(grid, x0, y0): grid[y - y0, x - x0] = avg value/run for
         ``metric`` ("ticks" or "reward"), a rate in [0, 1] for "winrate"
         (win / (win+loss)) or "fleerate" (smart / (smart+coward)), or
-        episodes-since-last-visit for "recency", NaN where unvisited (or,
-        for the rate metrics, under-sampled) in the current window. None if
-        the map isn't in the window.
+        episodes-since-last-visit for "recency" / episodes-since-last-dialog
+        for "dialog_recency", NaN where unvisited (or, for the rate metrics,
+        under-sampled; for dialog_recency, never dialog-triggered) in the
+        current window. None if the map isn't in the window.
 
         The footprint (bounding box + which cells are "visited") always
         follows the ticks grid — reward/winrate/fleerate are attributed to a
@@ -375,6 +429,13 @@ class RollingHeatmapAggregator:
             return out, x0, y0
         if metric == "recency":
             seen = self.last_seen.get(map_id, {})
+            for (x, y) in grid_ticks:
+                last = seen.get((x, y))
+                if last is not None:
+                    out[y - y0, x - x0] = self.total_episodes - last
+            return out, x0, y0
+        if metric == "dialog_recency":
+            seen = self.last_dialog_seen.get(map_id, {})
             for (x, y) in grid_ticks:
                 last = seen.get((x, y))
                 if last is not None:
@@ -530,8 +591,8 @@ class RollingHeatmapAggregator:
     def combined_view(self, anchor: int | None = None, metric: str = "ticks"):
         """Stitches every map reachable from ``anchor`` (default: the
         most-visited map in the current window) into one canvas, colored by
-        ``metric`` ("ticks", "reward", "winrate", "fleerate", "recency", or
-        "milestones").
+        ``metric`` ("ticks", "reward", "winrate", "fleerate", "recency",
+        "dialog_recency", or "milestones").
 
         Returns (grid, x0, y0, offsets, connected_maps, unconnected_maps) or
         None if there's nothing in the window yet.
@@ -566,6 +627,13 @@ class RollingHeatmapAggregator:
                     if last is not None:
                         cells.append((x + gx0, y + gy0, self.total_episodes - last))
                 continue
+            if metric == "dialog_recency":
+                seen = self.last_dialog_seen.get(map_id, {})
+                for (x, y) in self.sum_ticks.get(map_id, {}):
+                    last = seen.get((x, y))
+                    if last is not None:
+                        cells.append((x + gx0, y + gy0, self.total_episodes - last))
+                continue
             n_runs = max(self.run_count.get(map_id, 1), 1)
             metric_grid = self._metric_sums(metric).get(map_id, {})
             for (x, y), ticks in self.sum_ticks.get(map_id, {}).items():
@@ -584,6 +652,71 @@ class RollingHeatmapAggregator:
             grid[gy - y0, gx - x0] = avg if np.isnan(prev) else max(prev, avg)
 
         return grid, x0, y0, offsets, connected, unconnected
+
+
+def _populate_unconnected_panels(
+    side_axes: list,
+    agg: "RollingHeatmapAggregator",
+    unconnected: list[int],
+    metric: str,
+    name_of,
+    allowed: frozenset[int] | None,
+    cmap,
+    vmin: float,
+    vmax: float,
+) -> None:
+    """Render each map the combined-view stitcher couldn't place (no
+    confirmed connection to the anchor — see global_offsets) as its own
+    small thumbnail in ``side_axes``, sharing the main image's colormap/clim
+    so colors stay comparable. Previously these maps were only named in the
+    title, truncated past 6; now they stay visually inspectable even though
+    their position relative to the stitched cluster is unknown.
+
+    Always clears/hides every side axis first, so calling this with an
+    empty ``unconnected`` (or from a context with no side panels, e.g. the
+    single-map view) is the correct way to blank them out.
+    """
+    for sax in side_axes:
+        sax.clear()
+        sax.set_visible(False)
+    max_panels = len(side_axes)
+    if not unconnected or max_panels == 0:
+        return
+    overflow = len(unconnected) > max_panels
+    thumb_ids = unconnected[: max_panels - 1] if overflow else unconnected[:max_panels]
+    for sax, map_id in zip(side_axes, thumb_ids):
+        sax.set_visible(True)
+        sax.set_xticks([])
+        sax.set_yticks([])
+        off_goal = allowed is not None and map_id not in allowed
+        title = name_of(map_id) + (" [OFF-GOAL]" if off_goal else "")
+        result = agg.average_grid(map_id, metric=metric)
+        if result is None:
+            sax.text(
+                0.5, 0.5, title, ha="center", va="center", fontsize=6,
+                color="white", wrap=True, transform=sax.transAxes,
+            )
+            continue
+        grid, x0, y0 = result
+        sax.imshow(
+            grid, cmap=cmap, vmin=vmin, vmax=vmax, origin="upper",
+            extent=(x0 - 0.5, x0 + grid.shape[1] - 0.5, y0 + grid.shape[0] - 0.5, y0 - 0.5),
+        )
+        sax.set_title(title, fontsize=7, color="#ff8080" if off_goal else "white")
+    if overflow:
+        remaining = unconnected[max_panels - 1:]
+        last_ax = side_axes[max_panels - 1]
+        last_ax.set_visible(True)
+        last_ax.set_xticks([])
+        last_ax.set_yticks([])
+        names = ", ".join(name_of(m) for m in remaining[:8])
+        more = " ..." if len(remaining) > 8 else ""
+        last_ax.text(
+            0.5, 0.5, f"+{len(remaining)} more:\n{names}{more}",
+            ha="center", va="center", fontsize=6, color="#aaaaaa", wrap=True,
+            transform=last_ax.transAxes,
+        )
+        last_ax.set_title("(not shown)", fontsize=7, color="#888888")
 
 
 def _map_name_lookup() -> dict[int, str]:
@@ -642,6 +775,7 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
         pass
     import matplotlib.patheffects as pe
     import matplotlib.pyplot as plt
+    from matplotlib.gridspec import GridSpec
 
     map_names = _map_name_lookup()
     stage_order = _stage_order_lookup()
@@ -670,14 +804,31 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
     # ticks but a distinct colormap so the two aren't visually confused.
     recency_cmap = plt.get_cmap("viridis").copy()
     recency_cmap.set_bad(color="#111111")
+    # dialog_recency: same non-negative "episodes since" shape as recency,
+    # but scoped to dialog-triggering tiles only — distinct colormap so it
+    # doesn't read as the same metric at a glance.
+    dialog_recency_cmap = plt.get_cmap("cividis").copy()
+    dialog_recency_cmap.set_bad(color="#111111")
     # milestones: non-negative sparse counts (most tiles are 0), same
     # avg/run convention as reward — distinct colormap from ticks/recency.
     milestones_cmap = plt.get_cmap("plasma").copy()
     milestones_cmap.set_bad(color="#111111")
-    _METRICS = ("ticks", "reward", "winrate", "fleerate", "recency", "milestones")
+    _METRICS = (
+        "ticks", "reward", "winrate", "fleerate", "recency", "dialog_recency",
+        "milestones",
+    )
 
-    fig, ax = plt.subplots(figsize=(8, 8))
+    fig = plt.figure(figsize=(11, 8))
     fig.canvas.manager.set_window_title(title)
+    # Main plot spans the left 3/4; a stacked column of small axes on the
+    # right holds combined-view thumbnails for maps that couldn't be
+    # stitched in (see _populate_unconnected_panels). Hidden (not just
+    # empty) whenever the single-map view is active or nothing's unconnected.
+    gs = GridSpec(_MAX_SIDE_PANELS, 4, figure=fig, wspace=0.7, hspace=0.6)
+    ax = fig.add_subplot(gs[:, :3])
+    side_axes = [fig.add_subplot(gs[i, 3]) for i in range(_MAX_SIDE_PANELS)]
+    for _sax in side_axes:
+        _sax.set_visible(False)
     im = ax.imshow(np.zeros((1, 1)), cmap=ticks_cmap, origin="upper")
     cbar = fig.colorbar(im, ax=ax, label="avg ticks / run")
     ax.set_xlabel("x")
@@ -887,6 +1038,11 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
             vmax = float(finite.max()) if finite.size else 1.0
             im.set_clim(0, max(vmax, 1.0))
             cbar.set_label("episodes since last visit")
+        elif state["metric"] == "dialog_recency":
+            im.set_cmap(dialog_recency_cmap)
+            vmax = float(finite.max()) if finite.size else 1.0
+            im.set_clim(0, max(vmax, 1.0))
+            cbar.set_label("episodes since last dialog")
         elif state["metric"] == "milestones":
             im.set_cmap(milestones_cmap)
             vmax = float(finite.max()) if finite.size else 1.0
@@ -959,7 +1115,33 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
                 )
             )
 
+    def _hide_side_panels() -> None:
+        for sax in side_axes:
+            sax.clear()
+            sax.set_visible(False)
+
+    def _party_line(agg: RollingHeatmapAggregator) -> str:
+        """'party: N pokemon, avg lvl X.X (last episode)  |  running avg over
+        last _PARTY_HISTORY: N pokemon, lvl X.X' — blank until at least one
+        episode has reported party data."""
+        if agg.last_party_count is None or agg.last_party_avg_level is None:
+            return ""
+        running = agg.avg_party()
+        running_s = ""
+        if running is not None:
+            avg_count, avg_level = running
+            running_s = (
+                f"  |  running avg (last {len(agg._party_history)}): "
+                f"{avg_count:.1f} pokemon, lvl {avg_level:.1f}"
+            )
+        return (
+            f"party: {agg.last_party_count} pokemon, "
+            f"avg lvl {agg.last_party_avg_level:.1f} (last episode)"
+            f"{running_s}\n"
+        )
+
     def redraw_single() -> None:
+        _hide_side_panels()
         agg = current_agg()
         maps = agg.maps()
         if not maps:
@@ -994,6 +1176,7 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
             f"[{idx}/{len(maps)}]  "
             f"metric={state['metric']}\n"
             f"{n_runs} runs - {agg.total_frames:,} frames in window\n"
+            f"{_party_line(agg)}"
             f"<-/-> switch map, c: combined view, r: cycle metric, "
             f"v: toggle value labels ({'on' if state['show_values'] else 'off'})\n"
             f"scroll: zoom, drag: pan, 0: reset view"
@@ -1003,6 +1186,7 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
         agg = current_agg()
         result = agg.combined_view(metric=state["metric"])
         if result is None:
+            _hide_side_panels()
             ax.set_title(f"Heatmap [{state['stage']}] - waiting for runs...")
             fig.canvas.draw_idle()
             return
@@ -1015,6 +1199,11 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
         _draw_quiver(agg._direction_arrays(offsets))
         _draw_value_labels(grid, x0, y0)
         allowed = allowed_maps_by_stage.get(state["stage"])
+        vmin, vmax = im.get_clim()
+        _populate_unconnected_panels(
+            side_axes, agg, unconnected, state["metric"], name_of, allowed,
+            im.get_cmap(), vmin, vmax,
+        )
         off_goal_count = 0
         for map_id in connected:
             gx0, gy0 = offsets[map_id]
@@ -1045,15 +1234,14 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
 
         off_goal_s = f"  |  {off_goal_count} off-goal map(s)" if off_goal_count else ""
         unconnected_s = (
-            f"  |  {len(unconnected)} not yet connected: "
-            f"{', '.join(name_of(m) for m in unconnected[:6])}"
-            f"{' ...' if len(unconnected) > 6 else ''}"
+            f"  |  {len(unconnected)} not yet connected (see side panels)"
             if unconnected else ""
         )
         ax.set_title(
             f"[{state['stage']}] Combined view: {len(connected)} maps stitched  "
             f"metric={state['metric']}\n"
             f"{agg.total_frames:,} frames in window{unconnected_s}{off_goal_s}\n"
+            f"{_party_line(agg)}"
             f"c: single-map view, r: cycle metric, "
             f"v: toggle value labels ({'on' if state['show_values'] else 'off'}) "
             f"(best-effort — connections are inferred, not authoritative)\n"
@@ -1080,11 +1268,13 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
                     return
                 (
                     positions, directions, transitions, rewards,
-                    battle_outcomes, milestones, steps, stage,
+                    battle_outcomes, milestones, dialogs, steps, stage,
+                    party_count, party_avg_level,
                 ) = item
                 agg_all.add_episode(
                     positions, directions, transitions, rewards,
-                    battle_outcomes, milestones, steps,
+                    battle_outcomes, milestones, dialogs, steps,
+                    party_count, party_avg_level,
                 )
                 stage_label = stage or "unknown"
                 is_new_stage = stage_label not in stage_aggs
@@ -1092,7 +1282,8 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
                     stage_label, RollingHeatmapAggregator(window_frames)
                 ).add_episode(
                     positions, directions, transitions, rewards,
-                    battle_outcomes, milestones, steps,
+                    battle_outcomes, milestones, dialogs, steps,
+                    party_count, party_avg_level,
                 )
                 if is_new_stage:
                     _refresh_stage_dropdown()
@@ -1132,8 +1323,11 @@ def push_episode(
     rewards: dict | None,
     battle_outcomes: dict | None,
     milestones: dict | None,
+    dialogs: dict | None,
     steps: int,
     stage: str | None = None,
+    party_count: int | None = None,
+    party_avg_level: float | None = None,
 ) -> None:
     """Non-blocking: drop the update rather than stall the caller if the
     visualizer process is behind."""
@@ -1141,7 +1335,8 @@ def push_episode(
         q.put_nowait(
             (
                 positions, directions, transitions, rewards,
-                battle_outcomes, milestones, steps, stage,
+                battle_outcomes, milestones, dialogs, steps, stage,
+                party_count, party_avg_level,
             )
         )
     except _queue_mod.Full:
@@ -1181,6 +1376,7 @@ def save_heatmap_images(
     matplotlib.use("Agg")
     import matplotlib.patheffects as pe
     import matplotlib.pyplot as plt
+    from matplotlib.gridspec import GridSpec
 
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1193,6 +1389,7 @@ def save_heatmap_images(
         "winrate": _rate_cmap,
         "fleerate": _rate_cmap,
         "recency": plt.get_cmap("viridis").copy(),
+        "dialog_recency": plt.get_cmap("cividis").copy(),
         "milestones": plt.get_cmap("plasma").copy(),
     }
     for cmap in cmap_of.values():
@@ -1203,6 +1400,7 @@ def save_heatmap_images(
         "winrate": "battle win rate",
         "fleerate": "flee smart-rate (smart / smart+coward)",
         "recency": "episodes since last visit",
+        "dialog_recency": "episodes since last dialog",
         "milestones": "avg milestone hits / run",
     }
 
@@ -1225,8 +1423,24 @@ def save_heatmap_images(
             return "{:.2f}"
         return "{:.0f}"
 
-    def _render(grid, x0: int, y0: int, title: str, metric: str, path: "Path", dgrid) -> None:
-        fig, ax = plt.subplots(figsize=(8, 8))
+    def _render(
+        grid, x0: int, y0: int, title: str, metric: str, path: "Path", dgrid,
+        unconnected: list[int] | None = None,
+        agg_for_panels: "RollingHeatmapAggregator | None" = None,
+    ) -> None:
+        # unconnected/agg_for_panels are only passed for the combined-view
+        # image, so it can grow a side column of per-map thumbnails for maps
+        # the stitcher couldn't place — same purpose as the live window's
+        # side panels (_populate_unconnected_panels), just rendered once
+        # into the static PNG instead of redrawn interactively.
+        if unconnected:
+            fig = plt.figure(figsize=(11, 8))
+            gs = GridSpec(_MAX_SIDE_PANELS, 4, figure=fig, wspace=0.7, hspace=0.6)
+            ax = fig.add_subplot(gs[:, :3])
+            side_axes = [fig.add_subplot(gs[i, 3]) for i in range(_MAX_SIDE_PANELS)]
+        else:
+            fig, ax = plt.subplots(figsize=(8, 8))
+            side_axes = []
         im = ax.imshow(grid, cmap=cmap_of[metric], origin="upper")
         im.set_extent(
             (x0 - 0.5, x0 + grid.shape[1] - 0.5, y0 + grid.shape[0] - 0.5, y0 - 0.5)
@@ -1253,6 +1467,13 @@ def save_heatmap_images(
                     color="white", fontsize=6, ha="center", va="center",
                     path_effects=stroke, zorder=5,
                 )
+        if side_axes:
+            vmin, vmax = im.get_clim()
+            _populate_unconnected_panels(
+                side_axes, agg_for_panels, unconnected, metric,
+                lambda m: map_names.get(m, f"map {m}"), None,
+                cmap_of[metric], vmin, vmax,
+            )
         fig.tight_layout()
         fig.savefig(path, dpi=150)
         plt.close(fig)
@@ -1277,6 +1498,7 @@ def save_heatmap_images(
                 _render(
                     grid, x0, y0, title, metric, path,
                     dgrid=agg._direction_arrays(offsets),
+                    unconnected=unconnected, agg_for_panels=agg,
                 )
                 written.append(path)
 
