@@ -190,6 +190,10 @@ class MilestoneCallback(BaseCallback):
         self._goals_live: deque[int] = deque(maxlen=window)
         self._goals_peak: deque[int] = deque(maxlen=window)
         self._regressions: deque[int] = deque(maxlen=window)
+        # Per-episode mean of Data.map_id_visit_counts (avg dwell-steps per
+        # map touched) — how close episodes run to map_dwell_budget on
+        # average, see PokemonRedEnv._info's map_dwell_avg.
+        self._map_dwell_avgs: deque[float] = deque(maxlen=window)
         # Hits on the *currently set* goal only (cleared_stage == self.stage).
         # Reset whenever the stage changes, forward (advance) or back (demote).
         self._goal_hit_count = 0
@@ -200,6 +204,7 @@ class MilestoneCallback(BaseCallback):
         self._ep_goal_hit = None
         self._ep_regressed = None
         self._ep_goals_peak = None
+        self._ep_map_dwell_avg = None
 
     def _on_training_start(self) -> None:
         n = self.training_env.num_envs
@@ -209,6 +214,7 @@ class MilestoneCallback(BaseCallback):
         self._ep_goal_hit = [False] * n
         self._ep_regressed = [False] * n
         self._ep_goals_peak = [0] * n
+        self._ep_map_dwell_avg = [0.0] * n
         self.logger.record("pokemon/curriculum_stage_idx", self._stage_idx())
         self._reset_goal_hits()
 
@@ -366,6 +372,9 @@ class MilestoneCallback(BaseCallback):
             if peak > self._ep_goals_peak[i]:
                 self._ep_goals_peak[i] = peak
             live = int(info.get("goals_live_count", 0) or 0)
+            # Cumulative for the episode so far — just keep the latest
+            # reading, appended to the rolling window at done below.
+            self._ep_map_dwell_avg[i] = float(info.get("map_dwell_avg", 0.0) or 0.0)
 
             if done:
                 self._loops.append(1 if self._ep_loop[i] else 0)
@@ -386,6 +395,7 @@ class MilestoneCallback(BaseCallback):
                 self._goals_live.append(live)
                 self._goals_peak.append(self._ep_goals_peak[i])
                 self._regressions.append(1 if self._ep_regressed[i] else 0)
+                self._map_dwell_avgs.append(self._ep_map_dwell_avg[i])
 
                 if "episode" in info:
                     self._returns.append(float(info["episode"]["r"]))
@@ -396,6 +406,7 @@ class MilestoneCallback(BaseCallback):
                 self._ep_goal_hit[i] = False
                 self._ep_regressed[i] = False
                 self._ep_goals_peak[i] = 0
+                self._ep_map_dwell_avg[i] = 0.0
 
         if len(self._loops) >= 10 and self.n_calls % self.check_every == 0:
             loop_rate = float(np.mean(self._loops))
@@ -429,6 +440,10 @@ class MilestoneCallback(BaseCallback):
             if self._goals_peak:
                 self.logger.record(
                     "pokemon/goals_peak_mean", float(np.mean(self._goals_peak))
+                )
+            if self._map_dwell_avgs:
+                self.logger.record(
+                    "pokemon/map_dwell_avg_count", float(np.mean(self._map_dwell_avgs))
                 )
             if self._regressions:
                 self.logger.record(

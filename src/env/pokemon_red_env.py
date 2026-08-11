@@ -443,6 +443,14 @@ class PokemonRedEnv(gym.Env):
         mem = self.emu.pyboy.memory
         badges = data.badges(mem)
         live_goals = data.live_story_goals()
+        # Mean dwell-steps per map touched so far this episode (see
+        # map_id_visit_counts / Data.map_dwell_budget) — how close episodes
+        # run to the flat per-map budget on average, for the training
+        # callback's pokemon/map_dwell_avg_count metric.
+        dwell_counts = data.map_id_visit_counts
+        map_dwell_avg = (
+            sum(dwell_counts.values()) / len(dwell_counts) if dwell_counts else 0.0
+        )
         party_count: int | None = None
         party_avg_level: float | None = None
         if heatmap_run:
@@ -463,6 +471,7 @@ class PokemonRedEnv(gym.Env):
             "badges": int(sum(badges)),
             "badge_bits": badges,
             "map_id": int(data.map_id(mem)),
+            "map_dwell_avg": float(map_dwell_avg),
             "loop_flag": bool(self._episode_loop or data.loop_flag),
             "loop_causes": sorted(self._episode_loop_causes | data.loop_causes),
             "milestone": data.current_milestone(),

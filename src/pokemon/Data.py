@@ -176,6 +176,16 @@ TRUNCATE_CAUSES = (
     "max_steps",
 )
 
+# Flat per-map step allowance — the single source of truth curriculum_config's
+# get_stage_max_steps() multiplies by a goal's len(GOAL_ALLOWED_MAPS) to derive
+# that stage's episode max_steps (so an episode always gives every allowed map
+# the same per-map allowance no matter how many maps the goal covers), and the
+# normalization cap for map_id_visit_grid's dwell-time observation
+# (Data.map_visit_grid_cap). No longer backs a reward penalty — dwelling on a
+# map is informational input for the model only (see map_id_visit_grid), not
+# something it's punished for.
+MAP_DWELL_BUDGET = 256
+
 # Curriculum / episode goals (map, event flags, badges).
 GOAL_LEFT_HOUSE = "left_house"
 # Stepping onto Route 1 before getting a starter auto-triggers Oak's
@@ -427,7 +437,9 @@ _MAPS_MEWTWO = (
 )
 
 _MAPS_ALL_BADGES = _MAPS_MEWTWO  # by now every badge-path map is covered
-_MAPS_CHAMPION = _MAPS_ALL_BADGES  # Victory Road / Elite Four / Hall of Fame already covered
+_MAPS_CHAMPION = (
+    _MAPS_ALL_BADGES  # Victory Road / Elite Four / Hall of Fame already covered
+)
 
 GOAL_ALLOWED_MAPS: dict[str, frozenset[int]] = {
     GOAL_LEFT_HOUSE: _MAPS_LEFT_HOUSE,
@@ -477,9 +489,7 @@ BADGE_GOALS = (
 
 # Location goals: true only while on the map / outside the house. Leaving undoes
 # live progress unless the goal was curriculum-cleared (auto_advance).
-REGRESSABLE_GOALS = frozenset(
-    {GOAL_LEFT_HOUSE, GOAL_ROUTE_1_ENTRY, GOAL_ROUTE_1}
-)
+REGRESSABLE_GOALS = frozenset({GOAL_LEFT_HOUSE, GOAL_ROUTE_1_ENTRY, GOAL_ROUTE_1})
 
 # Ordered early→late checklist for live progress counting / regression metrics.
 STORY_GOAL_ORDER = (
@@ -596,8 +606,14 @@ class Data:
 
     # Anti-loop / anti-spam penalties (PokeRL-style). Stronger than before so
     # farming a ~17 return without the stage goal is no longer attractive.
-    visit_penalty_soft: float = -0.05  # visit count > 3
-    visit_penalty_hard: float = -0.15  # visit count > 5
+    # Thresholds below were tuned against a TensorBoard reading where
+    # loop_episode_rate sat at ~1.0 for essentially every episode across
+    # every curriculum stage: position_visit_counts is a whole-episode
+    # cumulative counter over a handful of small maps, so a doorway/
+    # chokepoint tile naturally crosses 3-5 visits on any normal multi
+    # thousand-step episode — that's foot traffic, not looping.
+    visit_penalty_soft: float = -0.05  # visit count > 10
+    visit_penalty_hard: float = -0.15  # visit count > 20
     # Wild-battle rewards (battle_won_reward, and the positive side of
     # reward_enemy_hp/reward_enemy_status) decay with repeat position_visit_
     # counts on the tile a fight started on — same counter as
@@ -611,13 +627,23 @@ class Data:
     wild_visit_decay_visits: int = 8
     action_pattern_penalty: float = -0.08
     spatial_loop_penalty: float = -0.10
+    # A *single* no-effect menu press (e.g. UP at the top of a list) used to
+    # fire this every time — nearly guaranteed at least once in any episode
+    # that opens a menu at all. Require menu_spam_streak consecutive no-ops
+    # before it counts as spam rather than incidental boundary-bumping.
     menu_spam_penalty: float = -0.05
+    menu_spam_streak_threshold: int = 3
     # Cursor oscillating between a couple of menu states (e.g. ITEM <-> CANCEL)
     # changes state every step, so it evades menu_spam_penalty's "no-change"
     # check above. Catch revisits of the same menu state instead.
     menu_loop_penalty: float = -0.10
     # START/SELECT/d-pad while a textbox is open — does not advance story text.
+    # A lone stray press mixed into otherwise-correct A/B mashing (near-
+    # certain under a stochastic policy) used to flag the whole episode as
+    # "looped". Require dialog_wrong_streak consecutive wrong presses before
+    # it counts as genuinely stuck rather than one wrong roll.
     dialog_wrong_button_penalty: float = -0.08
+    dialog_wrong_streak_threshold: int = 2
     # In-dialog waste now reuses base_reward via the same shape as
     # reward_position's step_penalty (see reward_dialog) — no separate scale.
     # Lingering on a map that cannot complete the active location goal
@@ -699,17 +725,13 @@ class Data:
     # milestone-density overlay — how much of the curriculum's critical path
     # actually lines up with where the agent spends time. Same
     # _last_heatmap_pos attribution as reward_sums/battle_outcome_counts.
-    milestone_hit_counts: dict[tuple[int, int, int], int] = field(
-        default_factory=dict
-    )
+    milestone_hit_counts: dict[tuple[int, int, int], int] = field(default_factory=dict)
     # Ticks spent in a dialog per (x, y, map_id) tile, for --heatmap's
     # dialog-recency overlay (episodes since a tile last triggered a
     # dialog). Same _last_heatmap_pos attribution as reward_sums — a dialog
     # has no world position of its own, so it's anchored on the last known
     # world tile.
-    dialog_hit_counts: dict[tuple[int, int, int], int] = field(
-        default_factory=dict
-    )
+    dialog_hit_counts: dict[tuple[int, int, int], int] = field(default_factory=dict)
     _last_heatmap_pos: tuple[int, int, int] | None = None
     # Per-(map_id, dialog_id) step counter — dialog_id is read from a single
     # byte (0-255), so this backs a 256-wide per-map histogram exposed to the
@@ -719,13 +741,23 @@ class Data:
     # Per-map_id step counter — map_id is a single byte (0-255), so this backs
     # a 256-wide episode-wide histogram exposed to the model (see
     # map_id_visit_grid): how long (in steps) the agent has spent on each map
-    # this episode, the map analogue of dialog_id_visit_counts.
+    # this episode, the map analogue of dialog_id_visit_counts. Increments
+    # every step regardless of mode (world/dialog/battle/menu) — a gym
+    # battle or a long dialog on a map is still time spent on that map.
     map_id_visit_counts: dict[int, int] = field(default_factory=dict)
     # Normalization cap for map_id_visit_grid — same "distinguish low counts,
     # saturate the tail" shape as visit_mask_grid's fixed 10, but map dwell
     # times run for whole episodes rather than single tile visits, so the cap
-    # is much larger.
-    map_visit_grid_cap: int = 500
+    # is much larger. Tied to MAP_DWELL_BUDGET instead of its own constant —
+    # this is purely informational input for the model (there is no reward
+    # penalty tied to it), so the cap just needs a sensible whole-episode
+    # scale, and MAP_DWELL_BUDGET already is one.
+    map_visit_grid_cap: int = MAP_DWELL_BUDGET
+    # Per-map step allowance used to derive curriculum_config's episode
+    # max_steps (see MAP_DWELL_BUDGET) and shown by debug_play.py/
+    # run_eval_ppo.py's dwell diagnostics — informational only, no reward
+    # penalty is tied to it.
+    map_dwell_budget: float = MAP_DWELL_BUDGET
 
     recent_actions: deque = field(default_factory=lambda: deque(maxlen=20))
     recent_positions: deque = field(default_factory=lambda: deque(maxlen=16))
@@ -733,6 +765,11 @@ class Data:
     loop_flag: bool = False
     loop_causes: set[str] = field(default_factory=set)
     loop_streak: int = 0
+    # Consecutive-occurrence counters for the two anti-loop checks that used
+    # to fire on a single incident (see menu_spam_streak_threshold /
+    # dialog_wrong_streak_threshold).
+    menu_noop_streak: int = 0
+    dialog_wrong_streak: int = 0
     # Fuse(s) that fired on the most recent truncated() call — see TRUNCATE_CAUSES.
     last_truncate_causes: frozenset[str] = frozenset()
     _milestones_hit: set[str] = field(default_factory=set)
@@ -876,6 +913,8 @@ class Data:
         self.loop_flag = False
         self.loop_causes = set()
         self.loop_streak = 0
+        self.menu_noop_streak = 0
+        self.dialog_wrong_streak = 0
         self._milestones_hit = set()
         self._milestone_payouts = {}
         self._milestones_spent = set()
@@ -1067,7 +1106,10 @@ class Data:
             )
             # Per-map byte-histogram step counter (see dialog_id_visit_grid),
             # same per-step cadence as position_visit_counts.
-            did_key = (self.map_id(self.pyboy.memory), self.dialog_id(self.pyboy.memory))
+            did_key = (
+                self.map_id(self.pyboy.memory),
+                self.dialog_id(self.pyboy.memory),
+            )
             self.dialog_id_visit_counts[did_key] = (
                 self.dialog_id_visit_counts.get(did_key, 0) + 1
             )
@@ -1147,9 +1189,7 @@ class Data:
         byte value (0-255) — how long the agent has spent on each map this
         episode, the map analogue of dialog_id_visit_grid."""
         cap = self.map_visit_grid_cap
-        return [
-            min(self.map_id_visit_counts.get(m, 0), cap) / cap for m in range(256)
-        ]
+        return [min(self.map_id_visit_counts.get(m, 0), cap) / cap for m in range(256)]
 
     def inputs(self):
         r = self.map_vision_radius
@@ -1631,10 +1671,10 @@ class Data:
         # Skip while pressing A/B in world — that is the talk-to-NPC attempt.
         if self.is_world(self.pyboy.memory) and not interacting:
             visits = self.position_visit_counts.get(self.get_position(), 0)
-            if visits > 5:
+            if visits > 20:
                 penalty += self.visit_penalty_hard
                 causes.add("visit_penalty")
-            elif visits > 3:
+            elif visits > 10:
                 penalty += self.visit_penalty_soft
                 causes.add("visit_penalty")
 
@@ -1673,6 +1713,17 @@ class Data:
                 net_stuck = True
                 if self.is_world(self.pyboy.memory) and len(self.recent_positions) >= 8:
                     net_stuck = self.recent_positions[-8] == self.get_position()
+                elif self.is_menu(self.pyboy.memory) and len(self.recent_menu_states) >= 8:
+                    # Same fix as the world branch: holding one direction to
+                    # scroll a long menu list repeats the button 8x while the
+                    # cursor keeps moving — only flag it if the menu state
+                    # actually stopped changing too.
+                    cur_menu_state = (
+                        self.menu_position_x(self.pyboy.memory),
+                        self.menu_position_y(self.pyboy.memory),
+                        self.real_current_menu_selected_item(self.pyboy.memory),
+                    )
+                    net_stuck = list(self.recent_menu_states)[-8] == cur_menu_state
                 if net_stuck:
                     penalty += self.action_pattern_penalty
                     causes.add("action_pattern")
@@ -1686,7 +1737,11 @@ class Data:
         # same penalty as any other non-interact button now, closing that gap.
         if in_dialog and action not in INTERACT_ACTIONS:
             penalty += self.dialog_wrong_button_penalty
-            causes.add("dialog_wrong_button")
+            self.dialog_wrong_streak += 1
+            if self.dialog_wrong_streak >= self.dialog_wrong_streak_threshold:
+                causes.add("dialog_wrong_button")
+        else:
+            self.dialog_wrong_streak = 0
 
         # 3) Spatial loop: same tile revisited often in recent history.
         # World + non-interact only — standing to talk is not a movement loop.
@@ -1696,14 +1751,24 @@ class Data:
             and len(self.recent_positions) >= 8
         ):
             cur = self.get_position()
-            if sum(1 for p in self.recent_positions if p == cur) >= 3:
+            # >= 3 matches within the last 16 world-steps used to catch
+            # perfectly ordinary chokepoint traffic (doorways, staircases) —
+            # >= 6 means the same tile came up in more than a third of the
+            # recent window, which is genuine pacing rather than a pass-through.
+            if sum(1 for p in self.recent_positions if p == cur) >= 6:
                 penalty += self.spatial_loop_penalty
                 causes.add("spatial_loop")
 
-        # Menu spam: no menu state change.
+        # Menu spam: no menu state change, sustained for menu_spam_streak_
+        # threshold consecutive presses — a single boundary-bump (e.g. UP at
+        # the top of a list) is not spam.
         if self.is_menu(self.pyboy.memory) and self.is_menu_illegal_move(memory):
-            penalty += self.menu_spam_penalty
-            causes.add("menu_spam")
+            self.menu_noop_streak += 1
+            if self.menu_noop_streak >= self.menu_spam_streak_threshold:
+                penalty += self.menu_spam_penalty
+                causes.add("menu_spam")
+        else:
+            self.menu_noop_streak = 0
 
         # Menu loop: cursor oscillating between a small set of states (e.g.
         # ITEM <-> CANCEL) changes state every step, so it slips past the

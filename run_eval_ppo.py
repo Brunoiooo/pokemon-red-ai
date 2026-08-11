@@ -161,6 +161,7 @@ def run(args):
         # loop_flag fired (which also covers spatial/menu loops on-path).
         off_path_steps = 0
         last_in_allowed_map: bool | None = None
+        last_over_dwell_budget: bool | None = None
         if verbose:
             print(
                 f"\n=== Episode {ep + 1}/{args.episodes} start "
@@ -232,6 +233,23 @@ def run(args):
                     f"-> {status} (off_path_steps={off_path_steps})"
                 )
             last_in_allowed_map = in_allowed_map
+
+            # -v: map-dwell budget flip (see Data.map_dwell_budget) — the
+            # "fair share" of the episode (max_steps / len(allowed_maps)) the
+            # current map has to itself. Informational only, no reward
+            # penalty is tied to it. Only meaningful on-path (allowed_maps
+            # restricts the goal); printed on flip like [goal-map] above.
+            if verbose and allowed_maps and in_allowed_map:
+                budget = data.map_dwell_budget
+                dwell = data.map_id_visit_counts.get(int(map_id), 0) if map_id is not None else 0
+                over_budget = dwell > budget
+                if over_budget != last_over_dwell_budget:
+                    print(
+                        f"  [map-dwell] step={steps:4d} map={map_id} "
+                        f"dwell={dwell}/{budget:.0f} "
+                        f"-> {'OVER BUDGET' if over_budget else 'within budget'}"
+                    )
+                last_over_dwell_budget = over_budget
 
             # -v/-vv: goal-payout bookkeeping — proves the regress/re-pay farm
             # loop is closed (paid once, then blocked on re-entry) and shows

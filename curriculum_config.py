@@ -9,12 +9,14 @@ stage whose goal is already satisfied in the live save (see ``next_stage``).
 Save directories under saves/<checkpoint>/checkpoint.state.
 If a stage save is missing, falls back to "start".
 """
+
 from __future__ import annotations
 
 import os
 from typing import Callable
 
 from pokemon.Data import (
+    GOAL_ALLOWED_MAPS,
     GOAL_ALL_BADGES,
     GOAL_ARTICUNO,
     GOAL_BADGE_1,
@@ -47,6 +49,7 @@ from pokemon.Data import (
     GOAL_SS_ANNE,
     GOAL_TOWN_MAP,
     GOAL_ZAPDOS,
+    MAP_DWELL_BUDGET,
 )
 
 # Auto-advance when this fraction of recent episodes hit the stage goal.
@@ -58,19 +61,30 @@ ADVANCE_CHECK_EVERY = 2048
 # for this many consecutive advance checks. Guards against catastrophic
 # forgetting: the policy drifts on an earlier goal while training grinds on a
 # later stage, and there is otherwise no way back down.
-DEMOTE_STALL_CHECKS = 15
+DEMOTE_STALL_CHECKS = 60
 DEMOTE_SUCCESS_CEILING = 0.05
+
+
+# Fallback for a goal with no GOAL_ALLOWED_MAPS entry — none of the stages
+# below actually hit this, it only guards _stage() against a future goal
+# added to CURRICULUM without a matching allowed-maps set.
+_DEFAULT_MAX_STEPS = 5000
 
 
 def _stage(
     goal: str,
     *,
-    max_steps: int,
     description: str,
     checkpoint: str | None = None,
     earlier: list[str] | None = None,
 ) -> dict:
     name_checkpoint = checkpoint or "start"
+    # Dynamic episode budget: every map on the goal's critical path gets the
+    # same MAP_DWELL_BUDGET step allowance, so a stage with more allowed maps
+    # to cross gets a proportionally longer episode instead of a hand-picked
+    # constant.
+    allowed = GOAL_ALLOWED_MAPS.get(goal)
+    max_steps = len(allowed) * MAP_DWELL_BUDGET * 16 if allowed else _DEFAULT_MAX_STEPS
     return {
         "checkpoint": name_checkpoint,
         "goal": goal,
@@ -118,122 +132,70 @@ STAGE_ORDER = [
 ]
 
 CURRICULUM: dict[str, dict] = {
-    "stage_left_house": _stage(
-        GOAL_LEFT_HOUSE, max_steps=2048, description="Leave Red's house"
-    ),
+    "stage_left_house": _stage(GOAL_LEFT_HOUSE, description="Leave Red's house"),
     "stage_route1_entry": _stage(
         GOAL_ROUTE_1_ENTRY,
-        max_steps=2048,
         description="Head for Route 1 — triggers Oak's intercept into the Lab",
         checkpoint="stage_route1_entry",
         earlier=["start"],
     ),
     "stage_route1": _stage(
         GOAL_ROUTE_1,
-        max_steps=4096,
         description="Reach Route 1 / tall grass",
         checkpoint="stage_route1",
         earlier=["start", "stage_route1_entry"],
     ),
     "stage_oaks_parcel": _stage(
         GOAL_OAKS_PARCEL,
-        max_steps=8192,
         description="Obtain Oak's Parcel",
         checkpoint="stage_oaks_parcel",
         earlier=["start", "stage_route1"],
     ),
     "stage_gave_parcel": _stage(
         GOAL_GAVE_PARCEL,
-        max_steps=8192,
         description="Deliver Oak's Parcel back to Oak",
         checkpoint="stage_gave_parcel",
         earlier=["start", "stage_oaks_parcel"],
     ),
     "stage_town_map": _stage(
         GOAL_TOWN_MAP,
-        max_steps=8192,
         description="Obtain the Town Map",
         checkpoint="stage_town_map",
         earlier=["start", "stage_gave_parcel"],
     ),
     "stage_fought_brock": _stage(
-        GOAL_FOUGHT_BROCK, max_steps=12288, description="Fight Brock (Pewter Gym)"
+        GOAL_FOUGHT_BROCK, description="Fight Brock (Pewter Gym)"
     ),
-    "stage_badge1": _stage(
-        GOAL_BADGE_1, max_steps=12288, description="Earn Boulder Badge"
-    ),
+    "stage_badge1": _stage(GOAL_BADGE_1, description="Earn Boulder Badge"),
     "stage_fought_misty": _stage(
-        GOAL_FOUGHT_MISTY, max_steps=16384, description="Fight Misty (Cerulean)"
+        GOAL_FOUGHT_MISTY, description="Fight Misty (Cerulean)"
     ),
-    "stage_badge2": _stage(
-        GOAL_BADGE_2, max_steps=16384, description="Earn Cascade Badge"
-    ),
-    "stage_ss_anne": _stage(
-        GOAL_SS_ANNE, max_steps=16384, description="SS Anne present / progress"
-    ),
-    "stage_fought_surge": _stage(
-        GOAL_FOUGHT_SURGE, max_steps=16384, description="Fight Lt. Surge"
-    ),
-    "stage_badge3": _stage(
-        GOAL_BADGE_3, max_steps=16384, description="Earn Thunder Badge"
-    ),
-    "stage_fought_erika": _stage(
-        GOAL_FOUGHT_ERIKA, max_steps=20480, description="Fight Erika"
-    ),
-    "stage_badge4": _stage(
-        GOAL_BADGE_4, max_steps=20480, description="Earn Rainbow Badge"
-    ),
-    "stage_fought_koga": _stage(
-        GOAL_FOUGHT_KOGA, max_steps=24576, description="Fight Koga"
-    ),
-    "stage_badge5": _stage(
-        GOAL_BADGE_5, max_steps=24576, description="Earn Soul Badge"
-    ),
-    "stage_fought_sabrina": _stage(
-        GOAL_FOUGHT_SABRINA, max_steps=24576, description="Fight Sabrina"
-    ),
-    "stage_badge6": _stage(
-        GOAL_BADGE_6, max_steps=24576, description="Earn Marsh Badge"
-    ),
-    "stage_fought_blaine": _stage(
-        GOAL_FOUGHT_BLAINE, max_steps=28672, description="Fight Blaine"
-    ),
-    "stage_badge7": _stage(
-        GOAL_BADGE_7, max_steps=28672, description="Earn Volcano Badge"
-    ),
-    "stage_fought_giovanni": _stage(
-        GOAL_FOUGHT_GIOVANNI, max_steps=32768, description="Fight Giovanni"
-    ),
-    "stage_badge8": _stage(
-        GOAL_BADGE_8, max_steps=32768, description="Earn Earth Badge"
-    ),
-    "stage_lapras": _stage(
-        GOAL_LAPRAS, max_steps=24576, description="Obtain Lapras"
-    ),
+    "stage_badge2": _stage(GOAL_BADGE_2, description="Earn Cascade Badge"),
+    "stage_ss_anne": _stage(GOAL_SS_ANNE, description="SS Anne present / progress"),
+    "stage_fought_surge": _stage(GOAL_FOUGHT_SURGE, description="Fight Lt. Surge"),
+    "stage_badge3": _stage(GOAL_BADGE_3, description="Earn Thunder Badge"),
+    "stage_fought_erika": _stage(GOAL_FOUGHT_ERIKA, description="Fight Erika"),
+    "stage_badge4": _stage(GOAL_BADGE_4, description="Earn Rainbow Badge"),
+    "stage_fought_koga": _stage(GOAL_FOUGHT_KOGA, description="Fight Koga"),
+    "stage_badge5": _stage(GOAL_BADGE_5, description="Earn Soul Badge"),
+    "stage_fought_sabrina": _stage(GOAL_FOUGHT_SABRINA, description="Fight Sabrina"),
+    "stage_badge6": _stage(GOAL_BADGE_6, description="Earn Marsh Badge"),
+    "stage_fought_blaine": _stage(GOAL_FOUGHT_BLAINE, description="Fight Blaine"),
+    "stage_badge7": _stage(GOAL_BADGE_7, description="Earn Volcano Badge"),
+    "stage_fought_giovanni": _stage(GOAL_FOUGHT_GIOVANNI, description="Fight Giovanni"),
+    "stage_badge8": _stage(GOAL_BADGE_8, description="Earn Earth Badge"),
+    "stage_lapras": _stage(GOAL_LAPRAS, description="Obtain Lapras"),
     "stage_snorlax": _stage(
-        GOAL_SNORLAX, max_steps=24576, description="Encounter Snorlax (either site)"
+        GOAL_SNORLAX, description="Encounter Snorlax (either site)"
     ),
-    "stage_articuno": _stage(
-        GOAL_ARTICUNO, max_steps=32768, description="Fight Articuno"
-    ),
-    "stage_zapdos": _stage(
-        GOAL_ZAPDOS, max_steps=32768, description="Fight Zapdos"
-    ),
-    "stage_moltres": _stage(
-        GOAL_MOLTRES, max_steps=32768, description="Fight Moltres"
-    ),
-    "stage_fossil": _stage(
-        GOAL_FOSSIL, max_steps=24576, description="Obtain a fossil"
-    ),
-    "stage_mewtwo": _stage(
-        GOAL_MEWTWO, max_steps=32768, description="Catch Mewtwo"
-    ),
-    "stage_all_badges": _stage(
-        GOAL_ALL_BADGES, max_steps=32768, description="Hold all 8 badges"
-    ),
+    "stage_articuno": _stage(GOAL_ARTICUNO, description="Fight Articuno"),
+    "stage_zapdos": _stage(GOAL_ZAPDOS, description="Fight Zapdos"),
+    "stage_moltres": _stage(GOAL_MOLTRES, description="Fight Moltres"),
+    "stage_fossil": _stage(GOAL_FOSSIL, description="Obtain a fossil"),
+    "stage_mewtwo": _stage(GOAL_MEWTWO, description="Catch Mewtwo"),
+    "stage_all_badges": _stage(GOAL_ALL_BADGES, description="Hold all 8 badges"),
     "stage_champion": _stage(
         GOAL_CHAMPION,
-        max_steps=40960,
         description="Beat the Elite Four and Champion (Hall of Fame) with all 8 badges",
     ),
 }

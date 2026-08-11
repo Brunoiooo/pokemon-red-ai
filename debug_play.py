@@ -49,7 +49,7 @@ from curriculum_config import (
     next_stage,
     stage_for_goal,
 )
-from pokemon.Data import GOAL_LEFT_HOUSE
+from pokemon.Data import GOAL_ALLOWED_MAPS, GOAL_LEFT_HOUSE
 from pokemon.Emulator import Emulator
 
 BUTTON_NAMES = ["A", "B", "Start", "Select", "Left", "Right", "Up", "Down", "None"]
@@ -189,13 +189,22 @@ def fuse_line(emu: Emulator) -> str:
     data = emu.data
     pos = data.get_position()
     tile = data.visited_positions.get(pos, 0)
-    return (
+    line = (
         f"fuses: tile={tile}/{data.max_useless_ticks} "
         f"dialog={int(data.in_dialog_ticks)}/{data.max_useless_dialog_ticks} "
         f"battle={int(data.in_battle_ticks)}/{data.max_useless_battle_ticks} "
         f"menu={int(data.in_menu_ticks)}/{data.max_useless_ticks} "
         f"loop={data.loop_streak}/{data.max_loop_streak}"
     )
+    # Per-map dwell time vs. its flat step allowance (Data.map_dwell_budget)
+    # — informational only, no reward penalty is tied to it. Only meaningful
+    # while GOAL_ALLOWED_MAPS restricts the active goal, so it's omitted (not
+    # just zeroed) otherwise.
+    if data.goal in GOAL_ALLOWED_MAPS:
+        budget = data.map_dwell_budget
+        dwell = data.map_id_visit_counts.get(data.map_id(emu.pyboy.memory), 0)
+        line += f" map={dwell}/{budget:.0f}"
+    return line
 
 
 def print_help() -> None:
