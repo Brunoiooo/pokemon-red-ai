@@ -452,7 +452,8 @@ def run(args: argparse.Namespace) -> None:
             if bag_changed:
                 marks.append("BAG")
             if emulator.data.loop_flag:
-                marks.append("LOOP")
+                causes = ",".join(sorted(emulator.data.loop_causes)) or "?"
+                marks.append(f"LOOP[{causes}]")
             # _last_regressed mixes real clawbacks with the ordinary "left a
             # map whose location goal is curriculum-cleared" case (ambiguous
             # for a human reading the log) — only _last_hard_regressed

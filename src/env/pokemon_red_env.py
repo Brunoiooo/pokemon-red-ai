@@ -42,6 +42,7 @@ _VECTOR_FLOAT_KEYS = (
     "nav",
     "inv",
     "party",
+    "dialog_id_visit_counts",
 )
 _ID_SCALAR_KEYS = (
     "map_id",
@@ -62,7 +63,9 @@ _ID_SEQ_KEYS = (
 # Base feature vector + curriculum goal one-hot.
 # player_pokemons_level now reports all 6 party slots (was 1) so the model can
 # see bench levels for the smart/coward flee comparison: +5.
-_BASE_VECTOR_DIM = 798
+# +256 for dialog_id_visit_counts: a per-map histogram over the full byte
+# range dialog_id is read from (see Data.dialog_id_visit_grid).
+_BASE_VECTOR_DIM = 798 + 256
 VECTOR_DIM = _BASE_VECTOR_DIM + N_GOALS
 VISIT_MASK_SIZE = 2 * 5 + 1  # map_vision_radius default
 
@@ -111,6 +114,7 @@ class PokemonRedEnv(gym.Env):
         self._memory: bytes | None = None
         self._step_count = 0
         self._episode_loop = False
+        self._episode_loop_causes: set[str] = set()
         # Base curriculum owned by the trainer/callback. In-episode auto_advance
         # is ephemeral — reset() restores these so workers don't permanently
         # drift to later stages and stop counting the current goal.
@@ -248,6 +252,7 @@ class PokemonRedEnv(gym.Env):
         if reset_steps:
             self._step_count = 0
             self._episode_loop = False
+            self._episode_loop_causes = set()
             if self._emu is not None:
                 self.emu.data.loop_flag = False
         if clear_visits and self._emu is not None:
@@ -338,6 +343,7 @@ class PokemonRedEnv(gym.Env):
         self._memory = memory
         self._step_count = 0
         self._episode_loop = False
+        self._episode_loop_causes = set()
         obs = self._torch_inputs_to_obs(inputs)
         info = self._info(
             terminated=False,
@@ -359,9 +365,16 @@ class PokemonRedEnv(gym.Env):
         self._step_count += 1
         if self.emu.data.loop_flag:
             self._episode_loop = True
+            self._episode_loop_causes |= self.emu.data.loop_causes
 
+        # Which fuse ended the episode (see Data.truncated / TRUNCATE_CAUSES) —
+        # "max_steps" covers running out of the step budget without any fuse
+        # firing first, the one truncation cause Data itself can't see.
+        truncate_causes = set(self.emu.data.last_truncate_causes) if truncated else set()
         if self._step_count >= self.max_steps:
             truncated = True
+            if not truncate_causes:
+                truncate_causes.add("max_steps")
 
         goal_success = False
         cleared_stage: str | None = None
@@ -410,6 +423,7 @@ class PokemonRedEnv(gym.Env):
             goal_success=goal_success,
             cleared_stage=cleared_stage,
             heatmap_run=heatmap_run,
+            truncate_causes=truncate_causes,
         )
         return obs, float(reward), bool(terminated), bool(truncated), info
 
@@ -420,6 +434,7 @@ class PokemonRedEnv(gym.Env):
         goal_success: bool = False,
         cleared_stage: str | None = None,
         heatmap_run: tuple[dict, dict, dict, dict, dict, dict, dict, int] | None = None,
+        truncate_causes: set[str] | None = None,
     ) -> dict[str, Any]:
         data: Data = self.emu.data
         mem = self.emu.pyboy.memory
@@ -446,6 +461,7 @@ class PokemonRedEnv(gym.Env):
             "badge_bits": badges,
             "map_id": int(data.map_id(mem)),
             "loop_flag": bool(self._episode_loop or data.loop_flag),
+            "loop_causes": sorted(self._episode_loop_causes | data.loop_causes),
             "milestone": data.current_milestone(),
             "milestones_hit": sorted(data._milestones_hit),
             "goals_live": live_goals,
@@ -458,6 +474,7 @@ class PokemonRedEnv(gym.Env):
             "steps": self._step_count,
             "terminated": terminated,
             "truncated": truncated,
+            "truncate_causes": sorted(truncate_causes or ()),
             "goal": data.goal,
             "stage": self.stage,
             "goal_success": bool(goal_success),

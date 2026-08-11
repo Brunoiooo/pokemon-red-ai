@@ -44,6 +44,99 @@ class HeatmapCallback(BaseCallback):
         return True
 
 
+class EntropyCoefScheduler(BaseCallback):
+    """Bump/decay ``model.ent_coef`` off the rolling action-loop rate.
+
+    Uses the same ``info["loop_flag"]`` signal as ``MilestoneCallback``'s
+    ``loop_episode_rate`` (an episode where the agent got stuck repeating a
+    short action sequence). When that rate runs hot, raise entropy to break
+    the collapse; once it's been quiet for a while, decay back toward
+    ``ent_coef_min`` so the policy isn't kept artificially noisy forever.
+    """
+
+    def __init__(
+        self,
+        ent_coef_min: float,
+        ent_coef_max: float,
+        window: int = 50,
+        check_every: int = 20_000,
+        loop_rate_high: float = 0.3,
+        loop_rate_low: float = 0.08,
+        increase_factor: float = 1.5,
+        decay_factor: float = 0.9,
+        cooldown_checks: int = 5,
+        verbose: int = 0,
+    ):
+        super().__init__(verbose)
+        self.ent_coef_min = ent_coef_min
+        self.ent_coef_max = ent_coef_max
+        self.window = window
+        self.check_every = check_every
+        self.loop_rate_high = loop_rate_high
+        self.loop_rate_low = loop_rate_low
+        self.increase_factor = increase_factor
+        self.decay_factor = decay_factor
+        self.cooldown_checks = cooldown_checks
+
+        self._loops: deque[int] = deque(maxlen=window)
+        self._ep_loop: list[bool] | None = None
+        self._check_count = 0
+        self._last_change_check = 0
+
+    def _on_training_start(self) -> None:
+        self._ep_loop = [False] * self.training_env.num_envs
+        self.model.ent_coef = float(
+            np.clip(self.model.ent_coef, self.ent_coef_min, self.ent_coef_max)
+        )
+
+    def _on_step(self) -> bool:
+        infos = self.locals.get("infos", [])
+        dones = self.locals.get("dones", [])
+
+        for i, info in enumerate(infos):
+            if not info:
+                continue
+            if info.get("loop_flag"):
+                self._ep_loop[i] = True
+            if i < len(dones) and dones[i]:
+                self._loops.append(1 if self._ep_loop[i] else 0)
+                self._ep_loop[i] = False
+
+        if len(self._loops) >= max(self.window // 2, 5) and self.n_calls % self.check_every == 0:
+            self._check_count += 1
+            loop_rate = float(np.mean(self._loops))
+            current = float(self.model.ent_coef)
+
+            if loop_rate > self.loop_rate_high:
+                new = min(self.ent_coef_max, current * self.increase_factor)
+                if new > current:
+                    self.model.ent_coef = new
+                    self._last_change_check = self._check_count
+                    if self.verbose:
+                        print(
+                            f"[entropy] loop_rate={loop_rate:.2f} > {self.loop_rate_high} "
+                            f"-> ent_coef {current:.4f} -> {new:.4f}"
+                        )
+            elif (
+                loop_rate < self.loop_rate_low
+                and current > self.ent_coef_min
+                and (self._check_count - self._last_change_check) >= self.cooldown_checks
+            ):
+                new = max(self.ent_coef_min, current * self.decay_factor)
+                self.model.ent_coef = new
+                self._last_change_check = self._check_count
+                if self.verbose:
+                    print(
+                        f"[entropy] loop_rate={loop_rate:.2f} < {self.loop_rate_low} "
+                        f"-> ent_coef {current:.4f} -> {new:.4f}"
+                    )
+
+            self.logger.record("pokemon/ent_coef", float(self.model.ent_coef))
+            self.logger.record("pokemon/action_loop_rate", loop_rate)
+
+        return True
+
+
 class MilestoneCallback(BaseCallback):
     """Track episode milestone hit-rate and loop episode rate.
 
@@ -90,6 +183,8 @@ class MilestoneCallback(BaseCallback):
 
         self._returns: deque[float] = deque(maxlen=window)
         self._loops: deque[int] = deque(maxlen=window)
+        self._loop_causes: deque[frozenset] = deque(maxlen=window)
+        self._truncate_causes: deque[frozenset] = deque(maxlen=window)
         self._successes: deque[int] = deque(maxlen=window)
         self._badges: deque[int] = deque(maxlen=window)
         self._goals_live: deque[int] = deque(maxlen=window)
@@ -100,6 +195,7 @@ class MilestoneCallback(BaseCallback):
         self._goal_hit_count = 0
         self._goal_hit_reward_sum = 0.0
         self._ep_loop = None
+        self._ep_loop_causes = None
         self._ep_milestones = None
         self._ep_goal_hit = None
         self._ep_regressed = None
@@ -108,6 +204,7 @@ class MilestoneCallback(BaseCallback):
     def _on_training_start(self) -> None:
         n = self.training_env.num_envs
         self._ep_loop = [False] * n
+        self._ep_loop_causes = [set() for _ in range(n)]
         self._ep_milestones = [set() for _ in range(n)]
         self._ep_goal_hit = [False] * n
         self._ep_regressed = [False] * n
@@ -239,6 +336,8 @@ class MilestoneCallback(BaseCallback):
                 continue
             if info.get("loop_flag"):
                 self._ep_loop[i] = True
+            for c in info.get("loop_causes", []) or []:
+                self._ep_loop_causes[i].add(c)
             for m in info.get("milestones_hit", []) or []:
                 self._ep_milestones[i].add(m)
             cur = info.get("milestone")
@@ -270,6 +369,10 @@ class MilestoneCallback(BaseCallback):
 
             if done:
                 self._loops.append(1 if self._ep_loop[i] else 0)
+                self._loop_causes.append(frozenset(self._ep_loop_causes[i]))
+                self._truncate_causes.append(
+                    frozenset(info.get("truncate_causes", []) or ())
+                )
                 # auto_advance clears terminated on the goal step, so rely on
                 # _ep_goal_hit (set when goal_success was True earlier).
                 success = bool(
@@ -288,6 +391,7 @@ class MilestoneCallback(BaseCallback):
                     self._returns.append(float(info["episode"]["r"]))
 
                 self._ep_loop[i] = False
+                self._ep_loop_causes[i] = set()
                 self._ep_milestones[i] = set()
                 self._ep_goal_hit[i] = False
                 self._ep_regressed[i] = False
@@ -296,6 +400,20 @@ class MilestoneCallback(BaseCallback):
         if len(self._loops) >= 10 and self.n_calls % self.check_every == 0:
             loop_rate = float(np.mean(self._loops))
             self.logger.record("pokemon/loop_episode_rate", loop_rate)
+            if self._loop_causes:
+                from pokemon.Data import LOOP_CAUSES
+
+                n_eps = len(self._loop_causes)
+                for cause in LOOP_CAUSES:
+                    rate = sum(1 for s in self._loop_causes if cause in s) / n_eps
+                    self.logger.record(f"pokemon/loop_cause_{cause}", rate)
+            if self._truncate_causes:
+                from pokemon.Data import TRUNCATE_CAUSES
+
+                n_eps = len(self._truncate_causes)
+                for cause in TRUNCATE_CAUSES:
+                    rate = sum(1 for s in self._truncate_causes if cause in s) / n_eps
+                    self.logger.record(f"pokemon/truncate_cause_{cause}", rate)
             if self._successes:
                 self.logger.record(
                     "pokemon/goal_success_rate", float(np.mean(self._successes))

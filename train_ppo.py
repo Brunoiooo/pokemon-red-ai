@@ -236,6 +236,16 @@ def run(args):
         from ppo.callbacks import HeatmapCallback
 
         callbacks.append(HeatmapCallback(heatmap_queue))
+    if args.auto_entropy:
+        from ppo.callbacks import EntropyCoefScheduler
+
+        callbacks.append(
+            EntropyCoefScheduler(
+                ent_coef_min=args.ent_coef_min,
+                ent_coef_max=args.ent_coef_max,
+                verbose=1,
+            )
+        )
 
     try:
         model.learn(
@@ -293,6 +303,16 @@ def build_argparser(parent=None):
     p.add_argument("--n-epochs", type=int, default=4)
     p.add_argument("--gamma", type=float, default=0.99)
     p.add_argument("--ent-coef", type=float, default=0.05)
+    p.add_argument(
+        "--auto-entropy", action="store_true",
+        help="Auto-adjust ent_coef during training based on the rolling "
+             "action-loop rate (bumps toward --ent-coef-max on collapse, "
+             "decays back toward --ent-coef-min once it clears)",
+    )
+    p.add_argument("--ent-coef-min", type=float, default=0.01,
+                   help="Floor for --auto-entropy (default: 0.01)")
+    p.add_argument("--ent-coef-max", type=float, default=0.3,
+                   help="Ceiling for --auto-entropy (default: 0.3)")
     p.add_argument("--frame-skip", type=int, default=16)
     p.add_argument("--max-steps", type=int, default=None)
     p.add_argument("--stage", default="stage_left_house",

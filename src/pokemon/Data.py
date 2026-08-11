@@ -151,6 +151,31 @@ ACTION_B = 1
 ACTION_NONE = 8
 INTERACT_ACTIONS = frozenset({ACTION_A, ACTION_B})
 
+# Named sub-triggers folded into loop_flag by reward_anti_loop — kept as a
+# fixed vocabulary so callbacks can log a per-cause breakdown instead of a
+# single opaque bool (see EntropyCoefScheduler / MilestoneCallback).
+LOOP_CAUSES = (
+    "visit_penalty",
+    "action_pattern",
+    "dialog_wrong_button",
+    "spatial_loop",
+    "menu_spam",
+    "menu_loop",
+    "off_goal_camp",
+)
+
+# Which fuse in truncated() ended the episode — "max_steps" is added by
+# PokemonRedEnv.step() itself when none of these fired first (see
+# TRUNCATE_CAUSES usage in callbacks.py's per-cause breakdown).
+TRUNCATE_CAUSES = (
+    "stuck_tile",
+    "stuck_dialog",
+    "loop_streak",
+    "stuck_battle",
+    "stuck_menu",
+    "max_steps",
+)
+
 # Curriculum / episode goals (map, event flags, badges).
 GOAL_LEFT_HOUSE = "left_house"
 # Stepping onto Route 1 before getting a starter auto-triggers Oak's
@@ -533,7 +558,7 @@ class Data:
     # necessary backtrack (e.g. retracing to a room's only exit) isn't an
     # instant cliff from full bonus to the bare step penalty.
     new_position_decay_visits: int = 4
-    new_dialog_reward: float = 0.05  # meso — first enter of a (dialog_id, map)
+    new_dialog_reward: float = 1.0  # meso — first enter of a (dialog_id, map), same as new_screen_reward
     # Mid-dialog text farming was an exploit (post-rival Oak speech): tiny
     # +0.01 per screen kept the agent camping without leaving for Route 1.
     dialog_advance_reward: float = 0.0
@@ -686,12 +711,20 @@ class Data:
         default_factory=dict
     )
     _last_heatmap_pos: tuple[int, int, int] | None = None
+    # Per-(map_id, dialog_id) step counter — dialog_id is read from a single
+    # byte (0-255), so this backs a 256-wide per-map histogram exposed to the
+    # model (see dialog_id_visit_grid), the dialog analogue of
+    # position_visit_counts/visit_mask_grid.
+    dialog_id_visit_counts: dict[tuple[int, int], int] = field(default_factory=dict)
 
     recent_actions: deque = field(default_factory=lambda: deque(maxlen=20))
     recent_positions: deque = field(default_factory=lambda: deque(maxlen=16))
     recent_menu_states: deque = field(default_factory=lambda: deque(maxlen=16))
     loop_flag: bool = False
+    loop_causes: set[str] = field(default_factory=set)
     loop_streak: int = 0
+    # Fuse(s) that fired on the most recent truncated() call — see TRUNCATE_CAUSES.
+    last_truncate_causes: frozenset[str] = frozenset()
     _milestones_hit: set[str] = field(default_factory=set)
     # Payout credited when a milestone first hit — used to claw back on regress.
     _milestone_payouts: dict[str, float] = field(default_factory=dict)
@@ -820,6 +853,7 @@ class Data:
         self.map_transitions = {}
         self.reward_sums = {}
         self.dialog_hit_counts = {}
+        self.dialog_id_visit_counts = {}
         self.battle_outcome_counts = {}
         self.milestone_hit_counts = {}
         self._last_heatmap_pos = None
@@ -829,6 +863,7 @@ class Data:
         self.recent_positions.clear()
         self.recent_menu_states.clear()
         self.loop_flag = False
+        self.loop_causes = set()
         self.loop_streak = 0
         self._milestones_hit = set()
         self._milestone_payouts = {}
@@ -1019,6 +1054,12 @@ class Data:
             self.visited_dialogs[dialog] = (
                 self.visited_dialogs.get(dialog, 0) + duration
             )
+            # Per-map byte-histogram step counter (see dialog_id_visit_grid),
+            # same per-step cadence as position_visit_counts.
+            did_key = (self.map_id(self.pyboy.memory), self.dialog_id(self.pyboy.memory))
+            self.dialog_id_visit_counts[did_key] = (
+                self.dialog_id_visit_counts.get(did_key, 0) + 1
+            )
             # --heatmap dialog-recency overlay: same _last_heatmap_pos
             # attribution as reward_sums (a dialog can be mid-cutscene, off
             # is_world(), so it's anchored on the last known world tile).
@@ -1079,6 +1120,15 @@ class Data:
             grid.append(row)
         return grid
 
+    def dialog_id_visit_grid(self) -> list[float]:
+        """Per-map histogram of step counts for every possible dialog_id byte
+        value (0-255), the dialog analogue of visit_mask_grid."""
+        map_id = self.map_id(self.pyboy.memory)
+        return [
+            min(self.dialog_id_visit_counts.get((map_id, d), 0), 10) / 10.0
+            for d in range(256)
+        ]
+
     def inputs(self):
         r = self.map_vision_radius
         return {
@@ -1113,6 +1163,9 @@ class Data:
             "map_id": torch.tensor(self.map_id(self.pyboy.memory), dtype=torch.long),
             "dialog_id": torch.tensor(
                 self.dialog_id(self.pyboy.memory), dtype=torch.long
+            ),
+            "dialog_id_visit_counts": torch.tensor(
+                self.dialog_id_visit_grid(), dtype=torch.float32
             ),
             "index_of_current_pokemon_send_out": torch.tensor(
                 self.index_of_current_pokemon_send_out(self.pyboy.memory),
@@ -1217,6 +1270,7 @@ class Data:
         step = 0.0
         # Per-step signal; env accumulates into _episode_loop for episode stats.
         self.loop_flag = False
+        self.loop_causes = set()
         self._just_blacked_out = self._detect_blackout(memory)
         if self._just_blacked_out:
             # HandlePlayerBlackOut force-warps to the last Pokemon Center —
@@ -1542,7 +1596,7 @@ class Data:
     def reward_anti_loop(self, action: int, memory: bytes) -> float:
         """Three-layer anti-loop + menu-spam penalties (PokeRL-style)."""
         penalty = 0.0
-        triggered = False
+        causes: set[str] = set()
         action = int(action)
         in_dialog = self.is_dialog(self.pyboy.memory)
         in_battle = self.is_battle(self.pyboy.memory)
@@ -1554,16 +1608,25 @@ class Data:
             visits = self.position_visit_counts.get(self.get_position(), 0)
             if visits > 5:
                 penalty += self.visit_penalty_hard
-                triggered = True
+                causes.add("visit_penalty")
             elif visits > 3:
                 penalty += self.visit_penalty_soft
-                triggered = True
+                causes.add("visit_penalty")
 
         # 2) Action pattern detection (sliding window).
         # Noop / movement loops always count. Prolonged A/B on the same tile
         # without an open dialog/battle is camping (Oak lab idle), not
         # "talking" — battle text (attack/effect/faint/EXP messages) forces
         # the same repeated A presses as dialog, so it gets the same pass.
+        # In the overworld, a repeated button *pattern* only means "stuck" if
+        # it didn't actually go anywhere: a Down,Left,Down,Left staircase (or
+        # walking Right for 8 straight tiles down a corridor) repeats the same
+        # button(s) while still making net progress, unlike a real
+        # Left,Right,Left,Right ping-pong or bumping into a wall. Verified via
+        # debug-play: efficient human navigation tripped this rule purely from
+        # ordinary zigzag/straight-line movement. Position is meaningless
+        # outside the world (battle/menu cursor navigation), so fall back to
+        # the pure button-pattern check there.
         actions = list(self.recent_actions) + [action]
         if len(actions) >= 4:
             a, b, c, d = actions[-4], actions[-3], actions[-2], actions[-1]
@@ -1574,12 +1637,20 @@ class Data:
                 and a not in INTERACT_ACTIONS
                 and b not in INTERACT_ACTIONS
             ):
-                penalty += self.action_pattern_penalty
-                triggered = True
+                net_stuck = True
+                if self.is_world(self.pyboy.memory) and len(self.recent_positions) >= 2:
+                    net_stuck = self.recent_positions[-2] == self.get_position()
+                if net_stuck:
+                    penalty += self.action_pattern_penalty
+                    causes.add("action_pattern")
         if len(actions) >= 8 and len(set(actions[-8:])) == 1:
             if not interacting or not (in_dialog or in_battle):
-                penalty += self.action_pattern_penalty
-                triggered = True
+                net_stuck = True
+                if self.is_world(self.pyboy.memory) and len(self.recent_positions) >= 8:
+                    net_stuck = self.recent_positions[-8] == self.get_position()
+                if net_stuck:
+                    penalty += self.action_pattern_penalty
+                    causes.add("action_pattern")
 
         # Idle / wrong buttons in dialog — only A/B advances story text. NONE
         # used to be discounted to menu_spam_penalty (-0.05 vs -0.08), which
@@ -1590,7 +1661,7 @@ class Data:
         # same penalty as any other non-interact button now, closing that gap.
         if in_dialog and action not in INTERACT_ACTIONS:
             penalty += self.dialog_wrong_button_penalty
-            triggered = True
+            causes.add("dialog_wrong_button")
 
         # 3) Spatial loop: same tile revisited often in recent history.
         # World + non-interact only — standing to talk is not a movement loop.
@@ -1602,12 +1673,12 @@ class Data:
             cur = self.get_position()
             if sum(1 for p in self.recent_positions if p == cur) >= 3:
                 penalty += self.spatial_loop_penalty
-                triggered = True
+                causes.add("spatial_loop")
 
         # Menu spam: no menu state change.
         if self.is_menu(self.pyboy.memory) and self.is_menu_illegal_move(memory):
             penalty += self.menu_spam_penalty
-            triggered = True
+            causes.add("menu_spam")
 
         # Menu loop: cursor oscillating between a small set of states (e.g.
         # ITEM <-> CANCEL) changes state every step, so it slips past the
@@ -1621,7 +1692,7 @@ class Data:
             )
             if sum(1 for s in self.recent_menu_states if s == cur_menu_state) >= 3:
                 penalty += self.menu_loop_penalty
-                triggered = True
+                causes.add("menu_loop")
 
         # 4) Off-goal map camping — rivals' house etc. while targeting lab/route.
         allowed = GOAL_ALLOWED_MAPS.get(self.goal)
@@ -1635,9 +1706,10 @@ class Data:
             # Punish dwell / A-B mash off the critical path; brief walk-through OK.
             if visits > 2 or (interacting and not in_dialog):
                 penalty += self.off_goal_camp_penalty
-                triggered = True
+                causes.add("off_goal_camp")
 
-        if triggered:
+        self.loop_causes = causes
+        if causes:
             self.loop_flag = True
             self.loop_streak += 1
         elif not in_battle:
@@ -2043,15 +2115,24 @@ class Data:
         # count() and applied in reward()), so a fresh/undertrained policy
         # gets pushed back toward the PC's room rather than losing the
         # episode the instant it steps out.
-        return (
-            True
-            if stuck_tile
-            or stuck_dialog
-            or self.loop_streak >= self.max_loop_streak
-            or self.max_useless_battle_ticks <= self.in_battle_ticks
-            or self.max_useless_ticks <= self.in_menu_ticks
-            else False
-        )
+        stuck_loop = self.loop_streak >= self.max_loop_streak
+        stuck_battle = self.max_useless_battle_ticks <= self.in_battle_ticks
+        stuck_menu = self.max_useless_ticks <= self.in_menu_ticks
+
+        causes: set[str] = set()
+        if stuck_tile:
+            causes.add("stuck_tile")
+        if stuck_dialog:
+            causes.add("stuck_dialog")
+        if stuck_loop:
+            causes.add("loop_streak")
+        if stuck_battle:
+            causes.add("stuck_battle")
+        if stuck_menu:
+            causes.add("stuck_menu")
+        self.last_truncate_causes = frozenset(causes)
+
+        return bool(causes)
 
     def current_milestone(self) -> str:
         # Furthest known goal that is currently satisfied (order-independent).

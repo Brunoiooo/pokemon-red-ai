@@ -1,22 +1,26 @@
 """Weight-surgery helper for resuming PPO training after the observation
-vector's goal one-hot block changes size (see curriculum_config.GOAL_ORDER).
+vector's shape changes: either the goal one-hot block (see
+curriculum_config.GOAL_ORDER) or a named feature block inserted elsewhere
+in the flat "vector" observation (see NEW_BASE_BLOCKS_SINCE below).
 
 SB3's PPO.load() requires an exact match between a checkpoint's saved tensors
-and the live policy's parameter shapes. Growing or shrinking GOAL_ORDER (a
-curriculum goal added or removed) breaks that for exactly one input dimension
-of the *_features_extractor.vector_mlp.0 layer — the goal one-hot is appended
-last to the flat "vector" observation (see env.pokemon_red_env
-._torch_inputs_to_obs), so every feature before it keeps its old column
-index; only the goal block's width and the positions of goals inside it
-change.
+and the live policy's parameter shapes. Two things can break that for the
+*_features_extractor.vector_mlp.0 layer's input dimension:
+
+1. GOAL_ORDER growing or shrinking (a curriculum goal added/removed) — the
+   goal one-hot is always appended last to the vector (see
+   env.pokemon_red_env._torch_inputs_to_obs), so only the tail shifts.
+2. A new named feature block spliced into the *base* (pre-goal) portion of
+   the vector, e.g. Data.dialog_id_visit_grid's per-map histogram — this
+   shifts every column after its insertion point.
 
 migrate_state_dict() copies every parameter whose shape is unchanged as-is,
-and remaps just that one layer's goal columns by *name* (not position), so
-where a goal was inserted into (or dropped from) GOAL_ORDER doesn't matter.
-Columns for goals that did not exist in the checkpoint keep the
-freshly-initialized model's random init — the policy has to learn those from
-scratch, same as any brand-new goal always would. Columns for goals the
-checkpoint has but the live curriculum no longer does are simply discarded.
+and remaps just that one layer's columns by *name* (not raw position), so
+neither where a goal sits in GOAL_ORDER nor where a base block was spliced in
+matters. Columns for goals/blocks that did not exist in the checkpoint keep
+the freshly-initialized model's random init — the policy has to learn those
+from scratch, same as any brand-new feature always would. Columns for goals
+the checkpoint has but the live curriculum no longer does are discarded.
 """
 from __future__ import annotations
 
@@ -69,6 +73,36 @@ _VECTOR_MLP_IN_KEYS = (
     "vf_features_extractor.vector_mlp.0.weight",
 )
 
+# Fixed-width feature blocks spliced into the *base* (pre-goal) portion of
+# the flat "vector" observation since older checkpoints were trained. Extend
+# this (never remove past entries) whenever env.pokemon_red_env's
+# _VECTOR_FLOAT_KEYS/_ID_SCALAR_KEYS/_ID_SEQ_KEYS gains a new entry that
+# isn't just appended after everything else.
+#
+# "offset" is this block's insertion point measured in *skeleton* columns —
+# i.e. the width of every _VECTOR_FLOAT_KEYS/_ID_SCALAR_KEYS/_ID_SEQ_KEYS
+# entry that existed before any block in this list was ever added (798 as of
+# 2026-08-10, matching env.pokemon_red_env's old _BASE_VECTOR_DIM). Blocks do
+# not consume skeleton columns, so later blocks' offsets are also measured
+# against that same fixed skeleton, not against each other's shifted output
+# position — see _skeleton_abs_start/_block_abs_start.
+#
+# A checkpoint may or may not already have any given entry — same "may or
+# may not have it" combinatorics as NEW_GOALS_SINCE below, resolved the same
+# way (try every subset, keep whichever reproduces the checkpoint's actual
+# tensor width).
+NEW_BASE_BLOCKS_SINCE: list[dict] = [
+    {
+        "name": "dialog_id_visit_counts",
+        "width": 256,
+        "offset": 733,  # end of the "party" block, right before "map_id"
+        "note": (
+            "2026-08-10: per-map dialog_id byte-histogram added to the "
+            "observation (see Data.dialog_id_visit_grid)."
+        ),
+    },
+]
+
 
 def _old_goal_order_candidates(goal_order: list[str]) -> list[list[str]]:
     """Every plausible reconstruction of an older checkpoint's goal order.
@@ -106,60 +140,141 @@ def _old_goal_order_candidates(goal_order: list[str]) -> list[list[str]]:
     return candidates
 
 
-def _resolve_old_goal_order(
+def _base_block_subsets() -> list[list[dict]]:
+    """Every subset of NEW_BASE_BLOCKS_SINCE a checkpoint might already have."""
+    blocks = NEW_BASE_BLOCKS_SINCE
+    return [
+        [b for b, keep in zip(blocks, mask) if keep]
+        for mask in itertools.product([True, False], repeat=len(blocks))
+    ]
+
+
+def _skeleton_abs_start(skel_pos: int, blocks: list[dict]) -> int:
+    """Absolute column where skeleton coordinate `skel_pos` lands once
+    `blocks` are spliced in — counts every block at or before this point,
+    since a skeleton run resuming at `skel_pos` comes after them."""
+    return skel_pos + sum(b["width"] for b in blocks if b["offset"] <= skel_pos)
+
+
+def _block_abs_start(block: dict, blocks: list[dict]) -> int:
+    """Absolute start column of `block` itself once `blocks` are spliced in —
+    counts only strictly-earlier blocks (by offset, then declaration order),
+    not `block` or same-offset blocks declared after it."""
+    idx = NEW_BASE_BLOCKS_SINCE.index(block)
+    extra = sum(
+        b["width"]
+        for b in blocks
+        if b is not block
+        and (
+            b["offset"] < block["offset"]
+            or (
+                b["offset"] == block["offset"]
+                and NEW_BASE_BLOCKS_SINCE.index(b) < idx
+            )
+        )
+    )
+    return block["offset"] + extra
+
+
+def _resolve_old_layout(
     old_dim: int, new_dim: int, goal_order: list[str], goal_index: dict[str, int]
-) -> list[str]:
-    """Pick the candidate old goal order whose width matches this checkpoint.
+) -> tuple[list[str], list[dict]]:
+    """Pick the candidate old goal order + base-block set matching this checkpoint.
 
     Raises loudly (rather than silently mis-mapping columns) if no candidate
-    reproduces the checkpoint's actual non-goal feature width, which means
-    NEW_GOALS_SINCE / REMOVED_GOALS_SINCE don't fully account for it.
+    reproduces the checkpoint's actual tensor width, which means
+    NEW_GOALS_SINCE / REMOVED_GOALS_SINCE / NEW_BASE_BLOCKS_SINCE don't fully
+    account for it.
     """
-    base_new = new_dim - len(goal_index)
-    matches = [
-        cand
-        for cand in _old_goal_order_candidates(goal_order)
-        if old_dim - len(cand) == base_new
-    ]
+    skeleton_width = (
+        new_dim - len(goal_index) - sum(b["width"] for b in NEW_BASE_BLOCKS_SINCE)
+    )
+    matches = []
+    for goal_cand in _old_goal_order_candidates(goal_order):
+        for block_cand in _base_block_subsets():
+            base_old = skeleton_width + sum(b["width"] for b in block_cand)
+            if base_old + len(goal_cand) == old_dim:
+                matches.append((goal_cand, block_cand))
     if not matches:
         raise ValueError(
-            f"Non-goal feature width doesn't line up for any reconstruction "
-            f"of this checkpoint's goal order (old_dim={old_dim}, expected "
-            f"non-goal width={base_new}) — NEW_GOALS_SINCE / "
-            f"REMOVED_GOALS_SINCE in ppo/migrate.py probably don't fully "
+            f"Feature width doesn't line up for any reconstruction of this "
+            f"checkpoint's layout (old_dim={old_dim}, skeleton width="
+            f"{skeleton_width}) — NEW_GOALS_SINCE / REMOVED_GOALS_SINCE / "
+            f"NEW_BASE_BLOCKS_SINCE in ppo/migrate.py probably don't fully "
             f"account for this checkpoint's vintage, or the mismatch isn't "
-            f"just the goal one-hot changing."
+            f"just those known changes."
         )
-    if len({tuple(m) for m in matches}) > 1:
+    distinct = {
+        (tuple(g), tuple(b["name"] for b in blk)) for g, blk in matches
+    }
+    if len(distinct) > 1:
         print(
-            f"  (goal-order reconstruction is ambiguous — {len(matches)} "
+            f"  (layout reconstruction is ambiguous — {len(matches)} "
             f"distinct candidates match this checkpoint's width; using "
             f"{matches[0]})"
         )
     return matches[0]
 
 
-def _remap_goal_columns(
+def _remap_vector_mlp_columns(
     old_weight: torch.Tensor,
     new_weight: torch.Tensor,
     old_goal_order: list[str],
+    old_base_blocks: list[dict],
     goal_index: dict[str, int],
 ) -> torch.Tensor:
-    old_dim = old_weight.shape[1]
-    new_dim = new_weight.shape[1]
-    base_old = old_dim - len(old_goal_order)
-    base_new = new_dim - len(goal_index)
+    skeleton_width = (
+        new_weight.shape[1]
+        - len(goal_index)
+        - sum(b["width"] for b in NEW_BASE_BLOCKS_SINCE)
+    )
     out = new_weight.clone()
-    out[:, :base_new] = old_weight[:, :base_old]
-    dropped = []
+
+    # Skeleton columns (every _VECTOR_FLOAT_KEYS/_ID_SCALAR_KEYS/_ID_SEQ_KEYS
+    # entry that predates NEW_BASE_BLOCKS_SINCE) copy straight across, split
+    # only at points where a base block was spliced in.
+    boundaries = sorted(
+        {0, skeleton_width} | {b["offset"] for b in NEW_BASE_BLOCKS_SINCE}
+    )
+    for s0, s1 in zip(boundaries, boundaries[1:]):
+        old_start = _skeleton_abs_start(s0, old_base_blocks)
+        new_start = _skeleton_abs_start(s0, NEW_BASE_BLOCKS_SINCE)
+        width = s1 - s0
+        out[:, new_start : new_start + width] = old_weight[
+            :, old_start : old_start + width
+        ]
+
+    # Base blocks the checkpoint already had copy across too; ones it
+    # predates are left at the freshly-initialized model's random values.
+    dropped_blocks = []
+    for block in NEW_BASE_BLOCKS_SINCE:
+        new_start = _block_abs_start(block, NEW_BASE_BLOCKS_SINCE)
+        if block in old_base_blocks:
+            old_start = _block_abs_start(block, old_base_blocks)
+            out[:, new_start : new_start + block["width"]] = old_weight[
+                :, old_start : old_start + block["width"]
+            ]
+        else:
+            dropped_blocks.append(block["name"])
+    if dropped_blocks:
+        print(
+            f"  (base feature(s) new to this checkpoint, left at fresh init: "
+            f"{dropped_blocks})"
+        )
+
+    # Goal one-hot tail — same by-name remap as before, just at the
+    # (possibly base-block-shifted) tail offset.
+    base_old = skeleton_width + sum(b["width"] for b in old_base_blocks)
+    base_new = skeleton_width + sum(b["width"] for b in NEW_BASE_BLOCKS_SINCE)
+    dropped_goals = []
     for i, goal_name in enumerate(old_goal_order):
         j = goal_index.get(goal_name)
         if j is None:
-            dropped.append(goal_name)
+            dropped_goals.append(goal_name)
             continue
         out[:, base_new + j] = old_weight[:, base_old + i]
-    if dropped:
-        print(f"  (goal(s) no longer in curriculum, weights discarded: {dropped})")
+    if dropped_goals:
+        print(f"  (goal(s) no longer in curriculum, weights discarded: {dropped_goals})")
     return out
 
 
@@ -173,14 +288,16 @@ def migrate_state_dict(
 
     Returns a new dict shaped like ``new_sd``; unmatched / brand-new params
     keep new_sd's (freshly-initialized) values. Raises on any shape mismatch
-    this module doesn't know how to reconcile (i.e. not the goal one-hot).
+    this module doesn't know how to reconcile (i.e. not a known goal or base
+    block change — see NEW_GOALS_SINCE / REMOVED_GOALS_SINCE /
+    NEW_BASE_BLOCKS_SINCE).
     """
     merged = dict(new_sd)
     copied = 0
     remapped = 0
     skipped_new = 0
     skipped_shape: list[str] = []
-    old_goal_order: list[str] | None = None
+    old_layout: tuple[list[str], list[dict]] | None = None
 
     for key, new_tensor in new_sd.items():
         if key not in old_sd:
@@ -191,12 +308,13 @@ def migrate_state_dict(
             merged[key] = old_tensor.clone()
             copied += 1
         elif key in _VECTOR_MLP_IN_KEYS:
-            if old_goal_order is None:
-                old_goal_order = _resolve_old_goal_order(
+            if old_layout is None:
+                old_layout = _resolve_old_layout(
                     old_tensor.shape[1], new_tensor.shape[1], goal_order, goal_index
                 )
-            merged[key] = _remap_goal_columns(
-                old_tensor, new_tensor, old_goal_order, goal_index
+            old_goal_order, old_base_blocks = old_layout
+            merged[key] = _remap_vector_mlp_columns(
+                old_tensor, new_tensor, old_goal_order, old_base_blocks, goal_index
             )
             remapped += 1
         else:

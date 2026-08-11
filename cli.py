@@ -60,6 +60,16 @@ p_train.add_argument(
     "--ent-coef", type=float, default=0.05,
     help="PPO entropy bonus (default 0.05; higher fights action-sequence collapse)",
 )
+p_train.add_argument(
+    "--auto-entropy", action="store_true",
+    help="Auto-adjust ent_coef during training based on the rolling "
+         "action-loop rate (bumps toward --ent-coef-max on collapse, "
+         "decays back toward --ent-coef-min once it clears)",
+)
+p_train.add_argument("--ent-coef-min", type=float, default=0.01,
+                     help="Floor for --auto-entropy (default: 0.01)")
+p_train.add_argument("--ent-coef-max", type=float, default=0.3,
+                     help="Ceiling for --auto-entropy (default: 0.3)")
 p_train.add_argument("--frame-skip", type=int, default=16)
 p_train.add_argument("--max-steps", type=int, default=None)
 p_train.add_argument("--stage", default="stage_left_house",
