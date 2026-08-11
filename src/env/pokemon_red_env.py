@@ -43,6 +43,7 @@ _VECTOR_FLOAT_KEYS = (
     "inv",
     "party",
     "dialog_id_visit_counts",
+    "map_id_visit_counts",
 )
 _ID_SCALAR_KEYS = (
     "map_id",
@@ -65,7 +66,9 @@ _ID_SEQ_KEYS = (
 # see bench levels for the smart/coward flee comparison: +5.
 # +256 for dialog_id_visit_counts: a per-map histogram over the full byte
 # range dialog_id is read from (see Data.dialog_id_visit_grid).
-_BASE_VECTOR_DIM = 798 + 256
+# +256 for map_id_visit_counts: an episode-wide histogram over the full byte
+# range map_id is read from (see Data.map_id_visit_grid).
+_BASE_VECTOR_DIM = 798 + 256 + 256
 VECTOR_DIM = _BASE_VECTOR_DIM + N_GOALS
 VISIT_MASK_SIZE = 2 * 5 + 1  # map_vision_radius default
 

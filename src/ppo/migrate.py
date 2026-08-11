@@ -101,6 +101,18 @@ NEW_BASE_BLOCKS_SINCE: list[dict] = [
             "observation (see Data.dialog_id_visit_grid)."
         ),
     },
+    {
+        "name": "map_id_visit_counts",
+        "width": 256,
+        # Same skeleton offset as dialog_id_visit_counts (both splice in
+        # right before "map_id"); declared after it in this list so the
+        # offset tie-break in _block_abs_start orders it right after.
+        "offset": 733,
+        "note": (
+            "2026-08-11: episode-wide map_id byte-histogram added to the "
+            "observation (see Data.map_id_visit_grid)."
+        ),
+    },
 ]
 
 

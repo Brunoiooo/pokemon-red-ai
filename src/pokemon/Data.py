@@ -716,6 +716,16 @@ class Data:
     # model (see dialog_id_visit_grid), the dialog analogue of
     # position_visit_counts/visit_mask_grid.
     dialog_id_visit_counts: dict[tuple[int, int], int] = field(default_factory=dict)
+    # Per-map_id step counter — map_id is a single byte (0-255), so this backs
+    # a 256-wide episode-wide histogram exposed to the model (see
+    # map_id_visit_grid): how long (in steps) the agent has spent on each map
+    # this episode, the map analogue of dialog_id_visit_counts.
+    map_id_visit_counts: dict[int, int] = field(default_factory=dict)
+    # Normalization cap for map_id_visit_grid — same "distinguish low counts,
+    # saturate the tail" shape as visit_mask_grid's fixed 10, but map dwell
+    # times run for whole episodes rather than single tile visits, so the cap
+    # is much larger.
+    map_visit_grid_cap: int = 500
 
     recent_actions: deque = field(default_factory=lambda: deque(maxlen=20))
     recent_positions: deque = field(default_factory=lambda: deque(maxlen=16))
@@ -854,6 +864,7 @@ class Data:
         self.reward_sums = {}
         self.dialog_hit_counts = {}
         self.dialog_id_visit_counts = {}
+        self.map_id_visit_counts = {}
         self.battle_outcome_counts = {}
         self.milestone_hit_counts = {}
         self._last_heatmap_pos = None
@@ -1079,7 +1090,9 @@ class Data:
             self.in_dialog_ticks = 0
             self._dialog_screens_seen = set()
 
-        self.visited_maps.add(self.map_id(self.pyboy.memory))
+        mid = self.map_id(self.pyboy.memory)
+        self.visited_maps.add(mid)
+        self.map_id_visit_counts[mid] = self.map_id_visit_counts.get(mid, 0) + 1
 
     def get_dialog(self, memory: bytes | None = None):
         if memory is None:
@@ -1129,6 +1142,15 @@ class Data:
             for d in range(256)
         ]
 
+    def map_id_visit_grid(self) -> list[float]:
+        """Episode-wide histogram of step counts for every possible map_id
+        byte value (0-255) — how long the agent has spent on each map this
+        episode, the map analogue of dialog_id_visit_grid."""
+        cap = self.map_visit_grid_cap
+        return [
+            min(self.map_id_visit_counts.get(m, 0), cap) / cap for m in range(256)
+        ]
+
     def inputs(self):
         r = self.map_vision_radius
         return {
@@ -1166,6 +1188,9 @@ class Data:
             ),
             "dialog_id_visit_counts": torch.tensor(
                 self.dialog_id_visit_grid(), dtype=torch.float32
+            ),
+            "map_id_visit_counts": torch.tensor(
+                self.map_id_visit_grid(), dtype=torch.float32
             ),
             "index_of_current_pokemon_send_out": torch.tensor(
                 self.index_of_current_pokemon_send_out(self.pyboy.memory),
