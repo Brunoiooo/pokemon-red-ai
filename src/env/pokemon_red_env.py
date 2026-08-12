@@ -26,7 +26,7 @@ from curriculum_config import (
     pick_new_goal,
     stage_for_goal,
 )
-from pokemon.Data import BADGE_GOALS, Data
+from pokemon.Data import BADGE_GOALS, REWARD_COMPONENT_NAMES, Data
 from pokemon.Emulator import N_ACTIONS, Emulator
 
 # Flattened float feature groups from Data.inputs() (excluding images / raw ids).
@@ -41,6 +41,7 @@ _VECTOR_FLOAT_KEYS = (
     "party",
     "dialog_id_visit_counts",
     "map_id_visit_counts",
+    "reward_component_sums",
 )
 _ID_SCALAR_KEYS = (
     "map_id",
@@ -65,7 +66,10 @@ _ID_SEQ_KEYS = (
 # range dialog_id is read from (see Data.dialog_id_visit_grid).
 # +256 for map_id_visit_counts: an episode-wide histogram over the full byte
 # range map_id is read from (see Data.map_id_visit_grid).
-_BASE_VECTOR_DIM = 798 + 256 + 256
+# +len(REWARD_COMPONENT_NAMES) for reward_component_sums: cumulative
+# per-episode sum of each named reward sub-component, incl. "total" (see
+# Data.reward_component_vector / REWARD_COMPONENT_NAMES).
+_BASE_VECTOR_DIM = 798 + 256 + 256 + len(REWARD_COMPONENT_NAMES)
 VECTOR_DIM = _BASE_VECTOR_DIM + N_GOALS
 VISIT_MASK_SIZE = 2 * 5 + 1  # map_vision_radius default
 
@@ -271,6 +275,7 @@ class PokemonRedEnv(gym.Env):
             data.direction_counts.clear()
             data.map_transitions.clear()
             data.reward_sums.clear()
+            data.reward_component_sums.clear()
             data.battle_outcome_counts.clear()
             data.milestone_hit_counts.clear()
             data.dialog_hit_counts.clear()

@@ -20,8 +20,12 @@ a *correct* one: (1) GOAL_ORDER/GOAL_INDEX's one-hot indexing for the
 policy's goal observation, and (2) cosmetic listings (--list-stages,
 create_stage_save.py --list). Nothing picks "the next goal" by walking
 STAGE_ORDER anymore -- see pick_new_goal(), which is a random, order-free
-pick instead. Badges (no bit index of their own) are still anchored next to
-their corresponding "beat gym leader" event purely for STAGE_ORDER's list
+pick instead, optionally biased by pick_new_goal's ``weights`` arg (see
+MilestoneCallback._goal_hit_counts) so goals the policy rarely lands on get
+sampled more than ones it already clears constantly -- a practice order that
+emerges from what's been learned, still with no fixed sequence behind it.
+Badges (no bit index of their own) are still anchored next to their
+corresponding "beat gym leader" event purely for STAGE_ORDER's list
 position; that anchoring has no bearing on pick_new_goal().
 
 Save directories under saves/<goal_name>/checkpoint.state, written
@@ -37,6 +41,7 @@ import os
 import random
 
 from pokemon import event_constants as _event_constants
+from pokemon import event_graph as _event_graph
 from pokemon.Data import BADGE_GOALS, GOAL_CANDIDATES
 
 # Reassign the training goal when this fraction of recent episodes hit
@@ -72,6 +77,37 @@ def _order_key(goal: str) -> tuple[int, int]:
         # Sort a badge immediately after the event it's anchored to.
         return (_event_constants.EVENTS.get(anchor, 0), 1)
     return (_event_constants.EVENTS.get(goal, 0), 0)
+
+
+def _graph_key(goal: str) -> str:
+    """EVENT_GRAPH lookup key for ``goal`` -- badges have no entry of their
+    own (event_graph.py only knows about wEventFlags bits), so they borrow
+    their anchor event's (see _BADGE_ANCHOR_EVENT / _order_key)."""
+    return _BADGE_ANCHOR_EVENT.get(goal, goal)
+
+
+def _goal_map_id(goal: str) -> int | None:
+    """Map a goal is set on, per event_graph.py's static analysis -- None if
+    ``goal`` (or its badge anchor) has no EVENT_GRAPH entry at all."""
+    info = _event_graph.EVENT_GRAPH.get(_graph_key(goal))
+    return info["map_id"] if info else None
+
+
+def _parents_satisfied(goal: str) -> bool:
+    """Whether every EVENT_GRAPH parent of ``goal`` that's itself a tracked
+    GOAL_CANDIDATE has already been reached by some episode this training
+    run (i.e. has its own saves/<parent>/checkpoint.state -- see
+    _save_exists). Parents outside GOAL_CANDIDATES (blacklisted/dead/cyclic,
+    see event_graph.AUTO_BLACKLIST_EVENTS) can't be checked this way and are
+    treated as satisfied, same as goals with no EVENT_GRAPH entry (badges
+    with no anchor, or events event_graph never saw) -- there's nothing to
+    gate on. A goal with no parents at all (event_graph ROOT_EVENTS) is
+    trivially satisfied too.
+    """
+    info = _event_graph.EVENT_GRAPH.get(_graph_key(goal))
+    if info is None:
+        return True
+    return all(_save_exists(p) for p in info["parents"] if p in GOAL_CANDIDATES)
 
 
 def _description(goal: str) -> str:
@@ -154,6 +190,21 @@ def resolve_checkpoint(name: str) -> str:
     return "start"
 
 
+def goal_status(goal: str) -> str:
+    """"mastered" (has its own saves/<goal>/checkpoint.state), "practicable"
+    (no checkpoint yet, but every EVENT_GRAPH parent that's a goal candidate
+    already is mastered -- the same eligibility prefer_discovered/
+    _parents_satisfied grants a goal even at 0 hits), or "locked" (neither --
+    pick_new_goal won't hand this one out yet). Used by the --heatmap side
+    panel (PositionHeatmap.py's goal saturation tree) to mark each goal with
+    a green/yellow dot."""
+    if _save_exists(goal):
+        return "mastered"
+    if _parents_satisfied(goal):
+        return "practicable"
+    return "locked"
+
+
 def get_goal_for_stage(stage: str) -> str:
     stage = resolve_stage_name(stage)
     cfg = CURRICULUM.get(stage, CURRICULUM[STAGE_ORDER[0]])
@@ -200,6 +251,8 @@ def pick_new_goal(
     *,
     is_satisfied=None,
     prefer_discovered: bool = True,
+    visited_maps: set[int] | None = None,
+    weights: dict[str, float] | None = None,
     rng: random.Random | None = None,
 ) -> str | None:
     """Random, order-free pick of a goal to work toward next.
@@ -212,13 +265,36 @@ def pick_new_goal(
     (e.g. MilestoneCallback picking a base goal across many independent
     parallel workers).
 
-    When ``prefer_discovered`` is True (default) and at least one candidate
-    already has its own saves/<goal>/checkpoint.state -- i.e. some episode
-    has actually reached it before, see
-    PokemonRedEnv._save_milestone_checkpoints -- the pick is restricted to
-    those, so training isn't handed a goal with no known path to it yet.
-    Falls back to the full candidate pool otherwise (e.g. very early on,
-    before anything's been discovered).
+    ``visited_maps`` optionally restricts candidates to goals whose home map
+    (event_graph.py's per-event map_id, or a badge's anchor event's -- see
+    _goal_map_id) is in the set -- e.g. MilestoneCallback passes every map_id
+    any episode has ever touched this training run, so the pick doesn't hand
+    out a goal on a map nothing has reached yet. Falls back to the
+    unrestricted pool if that would leave nothing (e.g. the set is still
+    empty very early on).
+
+    When ``prefer_discovered`` is True (default), candidates are further
+    restricted to goals that are either already discovered -- i.e. have
+    their own saves/<goal>/checkpoint.state, meaning some episode has
+    actually reached it before, see
+    PokemonRedEnv._save_milestone_checkpoints -- or whose EVENT_GRAPH
+    parents are all already discovered (see _parents_satisfied), meaning
+    whatever leads up to this goal has already happened at least once even
+    if the goal itself hasn't been hit yet. This keeps training from being
+    handed a goal with no known path to it (or into it) yet. Falls back to
+    the (map-filtered) candidate pool otherwise (e.g. very early on, before
+    anything's been discovered).
+
+    ``weights`` optionally biases the pick within the (already-filtered)
+    candidate pool -- e.g. MilestoneCallback passes a per-goal
+    inverse-hit-count so goals the policy rarely lands on (still hard / not
+    yet mastered) get sampled more often than ones it clears constantly.
+    This is what lets a practice order emerge from what the model has
+    actually learned, instead of every not-yet-satisfied goal being equally
+    likely forever. A candidate missing from ``weights`` (never seen yet)
+    defaults to weight 1.0, same as an already-seen-once goal, so novel
+    goals aren't starved relative to ones with one recorded hit. Omit for a
+    plain uniform pick.
     """
     rng = rng or random
     candidates = [
@@ -229,10 +305,20 @@ def pick_new_goal(
     ]
     if not candidates:
         return None
+    if visited_maps is not None:
+        on_visited_map = [g for g in candidates if _goal_map_id(g) in visited_maps]
+        if on_visited_map:
+            candidates = on_visited_map
     if prefer_discovered:
-        discovered = [g for g in candidates if _save_exists(g)]
-        if discovered:
-            candidates = discovered
+        eligible = [
+            g for g in candidates if _save_exists(g) or _parents_satisfied(g)
+        ]
+        if eligible:
+            candidates = eligible
+    if weights:
+        w = [weights.get(g, 1.0) for g in candidates]
+        if sum(w) > 0:
+            return rng.choices(candidates, weights=w, k=1)[0]
     return rng.choice(candidates)
 
 

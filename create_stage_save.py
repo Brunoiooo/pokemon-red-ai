@@ -26,6 +26,7 @@ import sys
 sys.path.insert(0, "src")
 
 import argparse
+import json
 import queue
 import time
 from multiprocessing import RLock
@@ -35,6 +36,7 @@ import keyboard
 
 from curriculum_config import CURRICULUM, STAGE_ORDER
 from pokemon.Emulator import DURATION_BINS, Emulator
+from ppo.callbacks import GOAL_HIT_COUNTS_PATH
 
 BUTTON_NAMES = ["A", "B", "Start", "Select", "Left", "Right", "Up", "Down", "None"]
 BIN_16_IDX = 0
@@ -61,9 +63,24 @@ def print_sep(char: str = "=", width: int = 60) -> None:
     print(char * width)
 
 
+def _load_goal_hit_counts() -> dict[str, int]:
+    """Cumulative per-goal practice counts written by MilestoneCallback
+    (see GOAL_HIT_COUNTS_PATH) -- how many completed training episodes have
+    touched each goal so far. Empty if training hasn't run / hasn't
+    persisted a snapshot yet."""
+    if not GOAL_HIT_COUNTS_PATH.is_file():
+        return {}
+    try:
+        with open(GOAL_HIT_COUNTS_PATH, encoding="utf-8") as f:
+            return {k: int(v) for k, v in json.load(f).items()}
+    except (OSError, ValueError):
+        return {}
+
+
 def list_stages() -> None:
+    counts = _load_goal_hit_counts()
     print_sep()
-    print("  Curriculum stages (save path → goal)")
+    print("  Curriculum stages (save path → goal, practice count)")
     print_sep()
     for name in STAGE_ORDER:
         cfg = CURRICULUM.get(name, {})
@@ -71,10 +88,19 @@ def list_stages() -> None:
         mark = "✓" if path.is_file() else "·"
         goal = cfg.get("goal", "?")
         desc = cfg.get("description", "")
-        print(f"  {mark} {name:<24} goal={goal:<16} {desc}")
+        hits = counts.get(goal, 0)
+        print(f"  {mark} {name:<24} goal={goal:<16} hits={hits:<6} {desc}")
     print_sep()
     print("  ✓ = saves/<stage>/checkpoint.state exists")
     print("  Train uses that file when the stage is active (else falls back to start).")
+    if counts:
+        n = len(STAGE_ORDER)
+        print(
+            f"  hits = completed training episodes that reached that goal "
+            f"({len(counts)}/{n} goals reached at least once so far)"
+        )
+    else:
+        print(f"  hits = 0 for all -- no {GOAL_HIT_COUNTS_PATH} yet (run training first)")
 
 
 def _status_line(emulator: Emulator) -> str:

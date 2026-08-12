@@ -83,7 +83,7 @@ Configured in [`curriculum_config.py`](curriculum_config.py) (~30 stages):
 - Each gym: `fought_*` flag then corresponding badge bit (1–8)  
 - Side / late: SS Anne, Lapras, Snorlax, birds, fossil, Mewtwo, all badges  
 
-`STAGE_ORDER` is **not** a progression order — it only backs the goal one-hot's indexing and cosmetic listings (`--list-stages`). Which goal gets assigned next (in training, eval, and debug-play) is a random, order-free pick among not-yet-satisfied goals (`curriculum_config.pick_new_goal`), preferring ones that already have a `saves/<goal>/checkpoint.state` written.
+`STAGE_ORDER` is **not** a progression order — it only backs the goal one-hot's indexing and cosmetic listings (`--list-stages`). Which goal gets assigned next (in training, eval, and debug-play) is a random, order-free pick among not-yet-satisfied goals (`curriculum_config.pick_new_goal`), restricted to goals that either already have a `saves/<goal>/checkpoint.state` written or whose `event_graph.py` parent events all do (i.e. whatever leads up to it has already happened once). In training, the pick is further restricted to goals on a map some episode has actually visited this run (`MilestoneCallback._visited_maps`, persisted to `saves/visited_maps.json` and reused for the rest of the run).
 
 `saves/<goal_name>/checkpoint.state` gets written automatically the moment any episode reaches that goal (see `--save-checkpoints`, on by default); missing saves fall back to `start`.
 

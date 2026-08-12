@@ -1,11 +1,30 @@
 """Training callbacks: milestone / loop-rate logging + auto curriculum."""
 from __future__ import annotations
 
-from collections import deque
+import json
+import os
+from collections import Counter, deque
+from pathlib import Path
 
 import numpy as np
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.vec_env import VecEnv
+
+# Cumulative per-goal hit counts (see MilestoneCallback._goal_hit_counts),
+# persisted here so it survives resumed training runs and is readable
+# outside the training process -- e.g. create_stage_save.py --list shows it
+# alongside each goal's checkpoint status. Lives under saves/ (not the
+# per-session logs/ dir) because, like saves/<goal>/checkpoint.state, it's
+# global "what has this project learned so far" state, not one run's logs.
+GOAL_HIT_COUNTS_PATH = Path("saves") / "goal_hit_counts.json"
+
+# Every map_id any episode has ever set foot on this training run (see
+# MilestoneCallback._visited_maps), persisted the same way and for the same
+# reason as GOAL_HIT_COUNTS_PATH -- fed into curriculum_config.pick_new_goal
+# as ``visited_maps`` so the free pick in _try_reassign never hands out a
+# goal on a map training hasn't reached yet. Recorded once and reused for
+# the rest of the run instead of recomputed live, since it only ever grows.
+VISITED_MAPS_PATH = Path("saves") / "visited_maps.json"
 
 
 class HeatmapCallback(BaseCallback):
@@ -195,6 +214,19 @@ class MilestoneCallback(BaseCallback):
         # map touched) — how close episodes run to map_dwell_budget on
         # average, see PokemonRedEnv._info's map_dwell_avg.
         self._map_dwell_avgs: deque[float] = deque(maxlen=window)
+        # Cumulative (whole run, not windowed) count of completed episodes
+        # that touched each goal at least once -- see info["milestones_hit"]
+        # below. Doubles as a per-goal mastery signal: fed into
+        # pick_new_goal's ``weights`` in _try_reassign so the next base goal
+        # is biased toward whatever the policy has practiced least, letting
+        # a de facto goal order emerge from what it's actually learned
+        # rather than a fixed sequence.
+        self._goal_hit_counts: Counter[str] = Counter()
+        # Every map_id any episode has touched this run, whole-run cumulative
+        # like _goal_hit_counts -- fed into pick_new_goal's ``visited_maps``
+        # in _try_reassign so the free pick only ever lands on a goal whose
+        # home map training has actually reached, not one still unseen.
+        self._visited_maps: set[int] = set()
         # Every goal_success hit this window, whichever goal it was --
         # cleared_stage no longer needs to equal self.stage: goals clear
         # order-free now (see PokemonRedEnv._advance_after_goal), there is
@@ -221,6 +253,50 @@ class MilestoneCallback(BaseCallback):
         self._ep_map_dwell_avg = [0.0] * n
         self.logger.record("pokemon/curriculum_stage_idx", self._stage_idx())
         self._reset_goal_hits()
+        self._load_goal_hit_counts()
+        self._load_visited_maps()
+
+    def _on_training_end(self) -> None:
+        self._save_goal_hit_counts()
+        self._save_visited_maps()
+
+    def _load_goal_hit_counts(self) -> None:
+        """Seed cumulative per-goal counts from a prior run, if any, so
+        resuming training doesn't reset the saturation picture to zero."""
+        if not GOAL_HIT_COUNTS_PATH.is_file():
+            return
+        try:
+            with open(GOAL_HIT_COUNTS_PATH, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            return
+        self._goal_hit_counts = Counter({k: int(v) for k, v in data.items()})
+
+    def _save_goal_hit_counts(self) -> None:
+        GOAL_HIT_COUNTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = GOAL_HIT_COUNTS_PATH.with_suffix(".json.tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(dict(self._goal_hit_counts), f, indent=2, sort_keys=True)
+        os.replace(tmp, GOAL_HIT_COUNTS_PATH)
+
+    def _load_visited_maps(self) -> None:
+        """Seed the cumulative visited-map set from a prior run, if any --
+        same resume story as _load_goal_hit_counts."""
+        if not VISITED_MAPS_PATH.is_file():
+            return
+        try:
+            with open(VISITED_MAPS_PATH, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            return
+        self._visited_maps = {int(m) for m in data}
+
+    def _save_visited_maps(self) -> None:
+        VISITED_MAPS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = VISITED_MAPS_PATH.with_suffix(".json.tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(sorted(self._visited_maps), f)
+        os.replace(tmp, VISITED_MAPS_PATH)
 
     def _reset_goal_hits(self) -> None:
         self._goal_hit_count = 0
@@ -272,7 +348,12 @@ class MilestoneCallback(BaseCallback):
 
         from curriculum_config import get_goal_for_stage, get_stage_max_steps, pick_new_goal
 
-        nxt = pick_new_goal()
+        # Inverse-hit-count weighting: a goal no completed episode has ever
+        # touched (count 0) gets weight 1.0, same as one seen exactly once,
+        # so brand-new discoveries aren't favored purely for being unseen --
+        # weight only decays as a goal accumulates *practiced* hits.
+        weights = {g: 1.0 / (1.0 + c) for g, c in self._goal_hit_counts.items()}
+        nxt = pick_new_goal(weights=weights, visited_maps=self._visited_maps)
         if nxt is None or nxt == self.stage:
             return
 
@@ -289,8 +370,10 @@ class MilestoneCallback(BaseCallback):
 
         goal = get_goal_for_stage(nxt)
         max_steps = get_stage_max_steps(nxt)
+        nxt_hits = self._goal_hit_counts.get(nxt, 0)
         msg = (
-            f"[curriculum] {old} -> {nxt} (order-free pick) "
+            f"[curriculum] {old} -> {nxt} (order-free pick, "
+            f"practiced {nxt_hits}x so far) "
             f"(goal={goal}, max_steps={max_steps}, "
             f"success_rate={rate:.2f} >= {self.success_threshold:.2f})"
         )
@@ -298,6 +381,7 @@ class MilestoneCallback(BaseCallback):
         print(f"\n{msg}\n")
         self.logger.record("pokemon/curriculum_stage_idx", self._stage_idx())
         self.logger.record("pokemon/goal_success_rate", 0.0)
+        self.logger.record("pokemon/goal_practice_count", float(nxt_hits))
 
     def _on_step(self) -> bool:
         infos = self.locals.get("infos", [])
@@ -307,6 +391,9 @@ class MilestoneCallback(BaseCallback):
         for i, info in enumerate(infos):
             if not info:
                 continue
+            map_id = info.get("map_id")
+            if map_id is not None:
+                self._visited_maps.add(int(map_id))
             if info.get("loop_flag"):
                 self._ep_loop[i] = True
             for c in info.get("loop_causes", []) or []:
@@ -364,6 +451,8 @@ class MilestoneCallback(BaseCallback):
                 self._goals_peak.append(self._ep_goals_peak[i])
                 self._regressions.append(1 if self._ep_regressed[i] else 0)
                 self._map_dwell_avgs.append(self._ep_map_dwell_avg[i])
+                for name in self._ep_milestones[i]:
+                    self._goal_hit_counts[name] += 1
 
                 if "episode" in info:
                     self._returns.append(float(info["episode"]["r"]))
@@ -430,6 +519,26 @@ class MilestoneCallback(BaseCallback):
                     self._goal_hit_reward_sum / self._goal_hit_count,
                 )
             self.logger.record("pokemon/curriculum_stage_idx", self._stage_idx())
+            if self._goal_hit_counts:
+                from curriculum_config import N_GOALS
+
+                counts = list(self._goal_hit_counts.values())
+                self.logger.record(
+                    "pokemon/goal_saturation_coverage",
+                    len(self._goal_hit_counts) / N_GOALS,
+                )
+                self.logger.record(
+                    "pokemon/goal_saturation_mean", float(np.mean(counts))
+                )
+                self.logger.record(
+                    "pokemon/goal_saturation_max", float(np.max(counts))
+                )
+            if self._visited_maps:
+                self.logger.record(
+                    "pokemon/maps_visited_count", float(len(self._visited_maps))
+                )
+            self._save_goal_hit_counts()
+            self._save_visited_maps()
             self._try_reassign()
 
         return True

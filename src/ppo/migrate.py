@@ -113,6 +113,25 @@ NEW_BASE_BLOCKS_SINCE: list[dict] = [
             "observation (see Data.map_id_visit_grid)."
         ),
     },
+    {
+        "name": "reward_component_sums",
+        # Fixed width matching len(Data.REWARD_COMPONENT_NAMES) as of
+        # 2026-08-13. Hardcoded rather than imported: this must stay pinned
+        # to the width this block actually had in checkpoints from that date,
+        # not track future changes to REWARD_COMPONENT_NAMES (a further
+        # change there needs its own new NEW_BASE_BLOCKS_SINCE entry, same as
+        # any other block here).
+        "width": 18,
+        # Same skeleton offset as dialog_id_visit_counts/map_id_visit_counts
+        # (all three splice in right before "map_id"); declared last so the
+        # offset tie-break orders it after both.
+        "offset": 733,
+        "note": (
+            "2026-08-13: cumulative per-episode sum of each named reward "
+            "sub-component (incl. total) added to the observation (see "
+            "Data.reward_component_vector / REWARD_COMPONENT_NAMES)."
+        ),
+    },
 ]
 
 

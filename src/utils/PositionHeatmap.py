@@ -90,6 +90,19 @@ pans. Both views auto-fit to the currently-discovered extent on every redraw
 map/stage/mode re-fits) until the user scrolls or drags, at which point the
 manual viewport sticks — even as new tiles are discovered elsewhere — until
 they switch context again or press '0' to reset the view.
+
+Goal saturation side panel: a scrollable table, embedded next to the stage
+dropdown, listing curriculum goals -- restricted to the ones pick_new_goal
+could actually hand out right now (parents satisfied and home map already
+visited by some episode this run -- see _refresh_goal_saturation; a fully
+"locked" goal, or one on a map never reached yet, is left off entirely) --
+and how many completed training episodes have hit each so far
+(most-practiced first, zero-hit goals greyed out). Reads
+saves/goal_hit_counts.json and saves/visited_maps.json directly off disk on
+a timer instead of through the queue -- those are MilestoneCallback's
+whole-run state (see ppo/callbacks.py), not a per-episode heatmap snapshot,
+so this panel stays live even when HeatmapCallback itself has nothing new
+to push.
 """
 from __future__ import annotations
 
@@ -733,6 +746,36 @@ def _map_name_lookup() -> dict[int, str]:
 _ALL_STAGES = "All"
 
 
+# Goal saturation panel status dots -- see curriculum_config.goal_status.
+# "locked" gets no dot at all (nothing to flag: pick_new_goal won't hand it
+# out yet either way).
+_GOAL_STATUS_DOT = {"mastered": "\U0001F7E2 ", "practicable": "\U0001F7E1 "}
+# Second-tier sort key for the goal saturation panel (see
+# _refresh_goal_saturation): among goals tied on hit count, rank by how
+# "active" a possibility the goal currently is -- mastered (already
+# reachable and cleared) and practicable (reachable, just not yet hit) sort
+# above locked (pick_new_goal can't hand it out at all yet).
+_GOAL_STATUS_RANK = {"mastered": 0, "practicable": 1, "locked": 2}
+
+
+def _goal_status(goal: str) -> str:
+    try:
+        from curriculum_config import goal_status
+
+        return goal_status(goal)
+    except Exception:
+        return "locked"
+
+
+def _goal_home_map(goal: str) -> int | None:
+    try:
+        from curriculum_config import _goal_map_id
+
+        return _goal_map_id(goal)
+    except Exception:
+        return None
+
+
 def _stage_order_lookup() -> list[str]:
     """Canonical curriculum stage order, used only to sort the dropdown —
     stages actually seen in the data are shown regardless of whether they're
@@ -783,7 +826,9 @@ def _allowed_maps_lookup() -> dict[str, frozenset[int] | None]:
 
 
 def _run_window(q: "Queue", window_frames: int, title: str) -> None:
+    import json
     import matplotlib
+    from pathlib import Path
 
     try:
         matplotlib.use("TkAgg")
@@ -979,6 +1024,7 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
 
     # Stage dropdown, embedded directly in the TkAgg window above the canvas.
     stage_combo = None
+    goal_tree = None
     try:
         import tkinter as tk
         from tkinter import ttk
@@ -1006,8 +1052,50 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
                 redraw()
 
             stage_combo.bind("<<ComboboxSelected>>", _on_stage_selected)
+
+            # Goal saturation panel: cumulative per-goal hit counts across
+            # the whole training run (see MilestoneCallback._goal_hit_counts
+            # / GOAL_HIT_COUNTS_PATH in ppo/callbacks.py, which persists the
+            # exact file this reads). Read straight off disk on a timer
+            # rather than piped through the queue like the map data --
+            # it's whole-run state, not a per-episode snapshot, and this
+            # keeps the panel decoupled from HeatmapCallback entirely (it
+            # still populates even if that feed is idle). Most-practiced
+            # goals sort to the top -- zero-hit ones (greyed out) sink to
+            # the bottom, so scrolling down surfaces what pick_new_goal's
+            # weights are currently favoring least.
+            sat_frame = tk.Frame(root)
+            sat_frame.pack(side=tk.RIGHT, fill=tk.Y, before=canvas_widget)
+            tk.Label(sat_frame, text="Goal saturation (most-practiced first)").pack(
+                side=tk.TOP, pady=(4, 0)
+            )
+            tk.Label(
+                sat_frame,
+                text="\U0001F7E2 mastered   \U0001F7E1 practicable (0 hits ok)\n"
+                "visited maps only, locked goals hidden",
+                fg="#666666",
+            ).pack(side=tk.TOP, pady=(0, 4))
+            tree_frame = tk.Frame(sat_frame)
+            tree_frame.pack(side=tk.TOP, fill=tk.Y, expand=True, padx=4, pady=4)
+            goal_scroll = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL)
+            goal_tree = ttk.Treeview(
+                tree_frame,
+                columns=("hits",),
+                show="tree headings",
+                height=32,
+                yscrollcommand=goal_scroll.set,
+            )
+            goal_tree.heading("#0", text="Goal")
+            goal_tree.heading("hits", text="Hits")
+            goal_tree.column("#0", width=220, anchor=tk.W, stretch=False)
+            goal_tree.column("hits", width=50, anchor=tk.E, stretch=False)
+            goal_tree.tag_configure("zero", foreground="#999999")
+            goal_scroll.config(command=goal_tree.yview)
+            goal_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+            goal_tree.pack(side=tk.LEFT, fill=tk.Y, expand=True)
     except Exception:
         stage_combo = None
+        goal_tree = None
 
     def _refresh_stage_dropdown() -> None:
         """Rebuild the dropdown's option list from stages seen so far."""
@@ -1016,6 +1104,71 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
         values = [_ALL_STAGES] + sorted(stage_aggs.keys(), key=_stage_sort_key)
         if list(stage_combo["values"]) != values:
             stage_combo["values"] = values
+
+    goal_hit_counts_path = Path("saves") / "goal_hit_counts.json"
+    visited_maps_path = Path("saves") / "visited_maps.json"
+    _goal_panel_state = {"mtime": None}
+
+    def _refresh_goal_saturation() -> None:
+        """Reload saves/goal_hit_counts.json and saves/visited_maps.json
+        (see MilestoneCallback._visited_maps in ppo/callbacks.py, fed into
+        pick_new_goal's own ``visited_maps`` arg) when either changes, and
+        repaint the side panel.
+
+        Only goals pick_new_goal could actually hand out right now are
+        listed: status "locked" (parents not yet satisfied -- see
+        curriculum_config.goal_status) is dropped entirely, and so is any
+        "mastered"/"practicable" goal whose home map (event_graph.py's
+        map_id -- see _goal_home_map) hasn't been visited by any episode
+        this run. A goal with no resolvable home map (e.g. a badge with no
+        EVENT_GRAPH anchor) can't be checked this way and is kept, same as
+        goal_status treats missing EVENT_GRAPH info as trivially satisfied.
+
+        Sorted most-practiced goal first (primary key: hit count,
+        descending) with ties -- overwhelmingly the pile of zero-hit goals
+        -- broken by _goal_status's own "possible activity" ordering
+        (mastered, then practicable: see _GOAL_STATUS_RANK) so a
+        not-yet-hit-but-currently-pickable goal surfaces above a mastered
+        one, instead of both sinking to the same arbitrary STAGE_ORDER
+        position."""
+        if goal_tree is None:
+            return
+        try:
+            mtime = goal_hit_counts_path.stat().st_mtime
+            visited_mtime = visited_maps_path.stat().st_mtime
+        except OSError:
+            return
+        combined_mtime = (mtime, visited_mtime)
+        if combined_mtime == _goal_panel_state["mtime"]:
+            return
+        try:
+            with open(goal_hit_counts_path, encoding="utf-8") as f:
+                counts = json.load(f)
+            with open(visited_maps_path, encoding="utf-8") as f:
+                visited_maps = {int(m) for m in json.load(f)}
+        except (OSError, ValueError):
+            return
+        _goal_panel_state["mtime"] = combined_mtime
+        names = stage_order or sorted(counts)
+        statuses = {name: _goal_status(name) for name in names}
+        home_maps = {name: _goal_home_map(name) for name in names}
+        names = [
+            name
+            for name in names
+            if statuses[name] != "locked"
+            and (home_maps[name] is None or home_maps[name] in visited_maps)
+        ]
+        rows = sorted(
+            ((name, int(counts.get(name, 0))) for name in names),
+            key=lambda kv: (-kv[1], _GOAL_STATUS_RANK.get(statuses[kv[0]], 99)),
+        )
+        goal_tree.delete(*goal_tree.get_children())
+        for name, hits in rows:
+            label = f"{_GOAL_STATUS_DOT.get(statuses[name], '')}{name}"
+            goal_tree.insert(
+                "", tk.END, text=label, values=(hits,),
+                tags=("zero",) if hits == 0 else (),
+            )
 
     def _clear_overlays() -> None:
         if quiv["artist"] is not None:
@@ -1308,6 +1461,7 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
             pass
         if got_any:
             redraw()
+        _refresh_goal_saturation()
         plt.pause(0.5)
 
 

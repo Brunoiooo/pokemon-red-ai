@@ -1,5 +1,4 @@
 import hashlib
-import math
 from collections import deque
 from multiprocessing.synchronize import RLock
 import pickle
@@ -60,8 +59,8 @@ TRUNCATE_CAUSES = (
 
 # Normalization cap for map_id_visit_grid's dwell-time observation (see
 # Data.map_visit_grid_cap). Purely informational input for the model — the
-# live reward-affecting per-map budget is size-scaled (see map_step_budget /
-# map_budget_steps_per_sqrt_block), not this flat constant.
+# live reward-affecting per-map budget is size-scaled (see map_step_budget),
+# not this flat constant.
 MAP_DWELL_BUDGET = 256
 
 # Item / Pokédex IDs needed for goal checks below (constants/item_constants.asm
@@ -105,6 +104,32 @@ EVENT_GOAL_CANDIDATES: frozenset[str] = frozenset(
     and name not in GOAL_MANUAL_BLACKLIST
 )
 GOAL_CANDIDATES: frozenset[str] = EVENT_GOAL_CANDIDATES | frozenset(BADGE_GOALS)
+
+# Named reward sub-components tracked as cumulative per-episode sums and
+# exposed to the model (see Data.reward_component_vector / _accum_reward).
+# Each entry mirrors one addend inside Data.reward(); "total" is the running
+# sum of every component, i.e. cumulative episode return so far. Fixed order
+# so the observation vector's dimension/layout is stable.
+REWARD_COMPONENT_NAMES: tuple[str, ...] = (
+    "core",
+    "generic_progress",
+    "battle_exit",
+    "battle",
+    "dialog_exit",
+    "position",
+    "dialog_milestone",
+    "dialog_step",
+    "menu_useless",
+    "battle_useless_milestone",
+    "battle_useless_step",
+    "anti_loop",
+    "dialog_reopen",
+    "map_budget",
+    "active_map_presence",
+    "new_dialog_presence",
+    "new_map_presence",
+    "total",
+)
 
 
 @dataclass
@@ -271,6 +296,11 @@ class Data:
     # dialog/menu is on screen, so e.g. a battle-won reward triggered by
     # walking onto a grass tile lands on that tile, not nowhere.
     reward_sums: dict[tuple[int, int, int], float] = field(default_factory=dict)
+    # Cumulative per-episode sum for each REWARD_COMPONENT_NAMES entry (incl.
+    # "total" = sum of every other entry) -- the model-facing "how much of
+    # each reward type have I earned so far this episode" observation. See
+    # _accum_reward / reward_component_vector.
+    reward_component_sums: dict[str, float] = field(default_factory=dict)
     # Battle outcomes per (x, y, map_id): {"win"/"loss"/"smart"/"coward": n},
     # for --heatmap's win-rate (win vs loss) and flee-rate (smart vs coward)
     # overlays. Attributed to the same last-known-world tile as reward_sums
@@ -320,20 +350,14 @@ class Data:
     # penalty is tied to it.
     map_dwell_budget: float = MAP_DWELL_BUDGET
 
-    # Size-scaled per-map step budget: steps allowed on one map this episode,
-    # scaled by that map's own width*height (map_constants.py, generated from
-    # pret/pokered's map_const macro) instead of the flat MAP_DWELL_BUDGET
-    # above. Only fills while is_world() (see _tick_map_budget) — dialog/
-    # battle/menu time on a map doesn't consume it — but once exceeded, the
-    # penalty applies every step regardless of mode (see map_budget_exceeded/
-    # reward_map_budget), so ducking into a menu can't dodge it.
-    # sqrt(area), not area, so the budget compresses the spread between tiny
-    # rooms and huge routes instead of scaling linearly with it (a linear
-    # model made a 4x4 room ~21x stingier than the old flat-256-per-map
-    # system while barely touching city-sized maps -- see map_step_budget).
-    # 340 calibrated so Pallet Town (~90 blocks) lands close to the old flat
-    # per-map allowance (4096); tune empirically after a real training run.
-    map_budget_steps_per_sqrt_block: float = 340.0
+    # Size-scaled per-map step budget: steps allowed on one map this episode
+    # is that map's own width*height in blocks (map_constants.py, generated
+    # from pret/pokered's map_const macro) — no extra multiplier, so the
+    # budget is literally the map's block area. Only fills while is_world()
+    # (see _tick_map_budget) — dialog/battle/menu time on a map doesn't
+    # consume it — but once exceeded, the penalty applies every step
+    # regardless of mode (see map_budget_exceeded/reward_map_budget), so
+    # ducking into a menu can't dodge it.
     world_map_step_counts: dict[int, int] = field(default_factory=dict)
     map_budget_penalty: float = -0.02
 
@@ -487,6 +511,7 @@ class Data:
         self.direction_counts = {}
         self.map_transitions = {}
         self.reward_sums = {}
+        self.reward_component_sums = {}
         self.dialog_hit_counts = {}
         self.dialog_id_visit_counts = {}
         self.map_id_visit_counts = {}
@@ -845,6 +870,9 @@ class Data:
             "map_id_visit_counts": torch.tensor(
                 self.map_id_visit_grid(), dtype=torch.float32
             ),
+            "reward_component_sums": torch.tensor(
+                self.reward_component_vector(), dtype=torch.float32
+            ),
             "index_of_current_pokemon_send_out": torch.tensor(
                 self.index_of_current_pokemon_send_out(self.pyboy.memory),
                 dtype=torch.long,
@@ -943,6 +971,19 @@ class Data:
         left_battle = self.is_battle(memory) and not self.is_battle(self.pyboy.memory)
         return left_battle and self.type_of_battle(memory) == 0xFF
 
+    def _accum_reward(self, name: str, value: float) -> float:
+        """Add ``value`` to this episode's running total for ``name`` (see
+        REWARD_COMPONENT_NAMES / reward_component_sums) and pass it through
+        unchanged, so call sites can wrap an addend in place."""
+        self.reward_component_sums[name] = self.reward_component_sums.get(name, 0.0) + value
+        return value
+
+    def reward_component_vector(self) -> list[float]:
+        """Cumulative per-episode sum of each REWARD_COMPONENT_NAMES entry —
+        the model-facing "how much of each reward type have I earned so far
+        this episode" observation (see reward() / _accum_reward)."""
+        return [self.reward_component_sums.get(name, 0.0) for name in REWARD_COMPONENT_NAMES]
+
     def reward(self, memory: bytes, action: int) -> tuple[float, float]:
         milestone = 0.0
         step = 0.0
@@ -952,7 +993,7 @@ class Data:
         self.last_milestone_payouts = []
         self._just_blacked_out = self._detect_blackout(memory)
 
-        milestone += self.reward_core(memory)
+        milestone += self._accum_reward("core", self.reward_core(memory))
         # One-shot payout for any newly-satisfied GOAL_CANDIDATES event/badge
         # + regression penalty for any that un-satisfy (see
         # reward_generic_progress). Replaces the old named-goal
@@ -961,51 +1002,67 @@ class Data:
         # since every surviving candidate is a permanent event bit (the auto
         # blacklist already excludes map-presence-style resettable checks),
         # not a "currently on this map" location goal that a warp could undo.
-        milestone += self.reward_generic_progress(memory)
+        milestone += self._accum_reward("generic_progress", self.reward_generic_progress(memory))
         # Battle→overworld (or dialog) transition — win/lose/flee uses prev memory.
-        milestone += self.reward_battle_exit(memory)
+        milestone += self._accum_reward("battle_exit", self.reward_battle_exit(memory))
 
         if self.is_battle(self.pyboy.memory):
-            milestone += self.reward_battle(memory)
+            milestone += self._accum_reward("battle", self.reward_battle(memory))
 
         if self.is_cutscene_locked(self.pyboy.memory):
             # No step reward/penalty — actions cannot affect the game. Story
             # milestones above still apply when flags/maps change mid-cutscene.
-            if self.is_dialog(memory):
-                milestone += self.dialog_exit_reward
+            if self._is_fresh_dialog_exit(memory):
+                milestone += self._accum_reward("dialog_exit", self.dialog_exit_reward)
         elif self.is_world(self.pyboy.memory):
-            step += self.reward_position()
+            step += self._accum_reward("position", self.reward_position())
             # Completing a dialog is progress; without this, reading text is pure cost.
-            if self.is_dialog(memory):
-                milestone += self.dialog_exit_reward
+            if self._is_fresh_dialog_exit(memory):
+                milestone += self._accum_reward("dialog_exit", self.dialog_exit_reward)
         elif self.is_dialog(self.pyboy.memory):
             m, s = self.reward_dialog(memory, action=action)
-            milestone += m
-            step += s
+            milestone += self._accum_reward("dialog_milestone", m)
+            step += self._accum_reward("dialog_step", s)
         elif self.is_menu(self.pyboy.memory):
-            step += self.in_menu_ticks / self.max_useless_ticks * self.base_reward
-            if self.is_dialog(memory):
-                milestone += self.dialog_exit_reward
+            step += self._accum_reward(
+                "menu_useless", self.in_menu_ticks / self.max_useless_ticks * self.base_reward
+            )
+            if self._is_fresh_dialog_exit(memory):
+                milestone += self._accum_reward("dialog_exit", self.dialog_exit_reward)
         elif self.is_battle(self.pyboy.memory):
             m, s = self.reward_battle_useless_count(memory)
-            milestone += m
-            step += s
+            milestone += self._accum_reward("battle_useless_milestone", m)
+            step += self._accum_reward("battle_useless_step", s)
 
         if not self.is_cutscene_locked(self.pyboy.memory):
-            step += self.reward_anti_loop(action=action, memory=memory)
+            step += self._accum_reward("anti_loop", self.reward_anti_loop(action=action, memory=memory))
         # Always track dialog enter/exit — cutscenes often follow textboxes.
-        step += self.reward_dialog_reopen(memory)
+        step += self._accum_reward("dialog_reopen", self.reward_dialog_reopen(memory))
         # Map-size step budget: applies in every mode (world/dialog/battle/
         # menu), not just is_world() — see map_budget_exceeded.
-        step += self.reward_map_budget(self.pyboy.memory)
+        step += self._accum_reward("map_budget", self.reward_map_budget(self.pyboy.memory))
         # Nudge toward maps with unfinished reachable progress (world-mode only).
-        step += self.reward_active_map_presence(self.pyboy.memory)
+        step += self._accum_reward(
+            "active_map_presence", self.reward_active_map_presence(self.pyboy.memory)
+        )
         # Same decay curve/magnitude, nudging toward fresh dialog (dialog-mode
         # only) and fresh maps (world-mode only) instead of active events.
-        step += self.reward_new_dialog_presence(self.pyboy.memory)
-        step += self.reward_new_map_presence(self.pyboy.memory)
+        step += self._accum_reward(
+            "new_dialog_presence", self.reward_new_dialog_presence(self.pyboy.memory)
+        )
+        step += self._accum_reward("new_map_presence", self.reward_new_map_presence(self.pyboy.memory))
 
+        self._accum_reward("total", milestone + step)
         return milestone, step
+
+    def _is_fresh_dialog_exit(self, memory: bytes) -> bool:
+        """True when exiting a dialog that has never been completed before.
+
+        Guards dialog_exit_reward against the reopen/exit farm: reward_dialog_reopen
+        only adds to _completed_dialogs on exit, so a dialog already in that set here
+        means this is a repeat exit of a previously-finished conversation, not progress.
+        """
+        return self.is_dialog(memory) and self.get_dialog(memory) not in self._completed_dialogs
 
     def reward_dialog_reopen(self, memory: bytes) -> float:
         """After exiting a dialog, reopening the same (dialog_id, map_id) is a loop.
@@ -1576,16 +1633,13 @@ class Data:
         return bool(memory[addr] & (1 << bit))
 
     def map_step_budget(self, map_id: int) -> int:
-        """Size-scaled world-step allowance for one map this episode.
-
-        Scales with sqrt(width*height), not the raw area, so the spread
-        between a tiny 4x4 room and a huge multi-screen route stays
-        compressed instead of linear (see map_budget_steps_per_sqrt_block).
-        Floor of 64 so a degenerate/UNUSED_MAP entry (width=height=0 in
-        map_constants.py) still gets a usable budget.
+        """Size-scaled world-step allowance for one map this episode: the
+        map's own width*height in blocks, no multiplier. Floor of 64 so a
+        degenerate/UNUSED_MAP entry (width=height=0 in map_constants.py)
+        still gets a usable budget.
         """
         area = _map_constants.map_area_blocks(map_id)
-        return max(64, int(math.sqrt(area) * self.map_budget_steps_per_sqrt_block))
+        return max(64, area)
 
     def _tick_map_budget(self, memory: PyBoyMemoryView | bytes) -> None:
         """Advance the current map's world-step counter. Called once per step
