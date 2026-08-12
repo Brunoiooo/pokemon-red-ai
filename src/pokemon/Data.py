@@ -1608,16 +1608,28 @@ class Data:
         progress and away from maps with none — see active_map_event_reward/
         inactive_map_event_penalty. World-mode only: presence doesn't mean
         much mid-dialog/battle, and reward_position already covers movement
-        shaping there."""
+        shaping there.
+
+        active_map_event_reward decays with the same per-tile visit curve as
+        reward_position's exploration_reward (new_position_decay_visits) —
+        without this it was a flat per-tick bonus with no cap, and
+        reward_anti_loop's visit_penalty (the thing that would normally
+        punish camping one tile) explicitly exempts A/B ("that is the
+        talk-to-NPC attempt" — see its comment), so holding B in place on
+        any map with an unsatisfied event paid out forever, completely
+        immune to the anti-loop camping penalty. inactive_map_event_penalty
+        is left flat: it is a penalty, not a payout, so there is nothing to
+        farm by camping on a map with no active event.
+        """
         if memory is None:
             memory = self.pyboy.memory
         if not self.is_world(memory):
             return 0.0
-        return (
-            self.active_map_event_reward
-            if self.has_active_map_event(memory)
-            else self.inactive_map_event_penalty
-        )
+        if not self.has_active_map_event(memory):
+            return self.inactive_map_event_penalty
+        visit_count = self.position_visit_counts.get(self.get_position(), 0)
+        decay = max(0.0, 1.0 - visit_count / self.new_position_decay_visits)
+        return self.active_map_event_reward * decay
 
 
     def goal_reached(self) -> bool:
