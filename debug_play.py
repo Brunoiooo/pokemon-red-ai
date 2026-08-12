@@ -118,6 +118,15 @@ def _mode_flags(emu: Emulator) -> str:
     return "+".join(flags) or "?"
 
 
+def legal_actions_str(emu: Emulator) -> str:
+    """Human-readable Data.legal_action_mask() -- same mask MaskablePPO gets
+    from PokemonRedEnv.action_masks() before it picks an action, so a human
+    can see live which buttons the policy is even allowed to press."""
+    mask = emu.data.legal_action_mask(emu.pyboy.memory)
+    allowed = [BUTTON_NAMES[i] for i, ok in enumerate(mask) if ok]
+    return ",".join(allowed) if allowed else "(none)"
+
+
 def status_line(emu: Emulator) -> str:
     mem = emu.pyboy.memory
     mid = emu.data.map_id(mem)
@@ -126,7 +135,7 @@ def status_line(emu: Emulator) -> str:
     did = emu.data.dialog_id(mem)
     return (
         f"map={mid} pos=({x},{y}) mode={_mode_flags(emu)} "
-        f"dialog_id={did} goal={emu.data.goal}"
+        f"dialog_id={did} goal={emu.data.goal} legal=[{legal_actions_str(emu)}]"
     )
 
 
@@ -215,6 +224,13 @@ def print_help() -> None:
     print("  R                              — reload --from")
     print("  H                              — this help + status")
     print("  ESC / Q                        — quit")
+    print("  status line 'legal=[...]'      — Data.legal_action_mask() right now:")
+    print("    the buttons MaskablePPO is allowed to sample this tick (see")
+    print("    PokemonRedEnv.action_masks). Dialog -> A/B only; battle/menu ->")
+    print("    everything but NONE; world -> everything. Pressing a button")
+    print("    outside that set prints a 'MASKED(btn)' tag on that step -- it")
+    print("    still executes here (this is human play, nothing is enforced),")
+    print("    it's just what the trained policy could never have picked.")
     print_sep("-")
 
 
@@ -410,6 +426,14 @@ def run(args: argparse.Namespace) -> None:
             print(f"  {bag_line(emulator)}")
             continue
 
+        # Mask as computed *before* the tick -- the same point in time
+        # MaskablePPO reads it at (action_masks() is called on the
+        # pre-action observation, see PokemonRedEnv.action_masks). Only
+        # meaningful for real button presses (label is a KEY_MAP entry, i.e.
+        # action is one of 0-8) -- SAVE/RELOAD/HELP never reach here.
+        pre_mask = emulator.data.legal_action_mask(emulator.pyboy.memory)
+        was_masked = action is not None and not pre_mask[action]
+
         # Match PPO hold length, but pace frame-by-frame at 1x (human speed).
         memory, _, reward, terminated, truncated = emulator.step_discrete(
             memory=memory,
@@ -446,6 +470,7 @@ def run(args: argparse.Namespace) -> None:
             or advanced
             or terminated
             or truncated
+            or was_masked
         )
 
         if args.all_steps or interesting:
@@ -453,6 +478,11 @@ def run(args: argparse.Namespace) -> None:
             milestone = getattr(emulator, "last_milestone", 0.0)
             step_r = getattr(emulator, "last_step", 0.0)
             marks = []
+            if was_masked:
+                # This is the exact button MaskablePPO could never sample here
+                # (Data.legal_action_mask) -- e.g. NONE in dialog/battle/menu,
+                # or any non-A/B button while a dialog textbox is open.
+                marks.append(f"MASKED({btn})")
             if mode_changed:
                 marks.append(f"{prev_mode}->{mode}")
             if dialog_changed:

@@ -353,6 +353,19 @@ class PokemonRedEnv(gym.Env):
         )
         return obs, info
 
+    def action_masks(self) -> np.ndarray:
+        """Legal-action mask for sb3-contrib MaskablePPO (see get_action_masks).
+
+        Called by the trainer right before predicting the *next* action, so
+        it must reflect live emulator state, same as the reward/mode checks
+        in Emulator.step_discrete -- not the stale pre-step self._memory
+        snapshot.
+        """
+        assert self._emu is not None, "Call reset() before action_masks()"
+        return np.asarray(
+            self.emu.data.legal_action_mask(self.emu.pyboy.memory), dtype=bool
+        )
+
     def step(self, action: int):
         assert self._memory is not None, "Call reset() before step()"
         memory, inputs, reward, terminated, truncated = self.emu.step_discrete(

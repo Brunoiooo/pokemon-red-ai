@@ -67,7 +67,7 @@ def _mon_line(label, lv, hp, maxhp, atk, dfn, spd, spc):
 
 
 def run(args):
-    from stable_baselines3 import PPO
+    from sb3_contrib import MaskablePPO
     from stable_baselines3.common.monitor import Monitor
 
     from curriculum_config import (
@@ -125,7 +125,7 @@ def run(args):
     print(f"Auto curriculum: {'ON' if auto else 'OFF'}")
     print(f"Save checkpoints on goal success: {'ON' if args.save_checkpoints else 'OFF'}")
     print(f"Start stage: {stage}  goal={goal}  max_steps={max_steps}")
-    model = PPO.load(str(model_path), device="cpu" if args.cpu else "auto")
+    model = MaskablePPO.load(str(model_path), device="cpu" if args.cpu else "auto")
     data = raw.emu.data
 
     verbose = int(getattr(args, "verbose", 0) or 0)
@@ -169,7 +169,11 @@ def run(args):
             )
 
         while not done:
-            action, _ = model.predict(obs, deterministic=not args.stochastic)
+            action, _ = model.predict(
+                obs,
+                action_masks=raw.action_masks(),
+                deterministic=not args.stochastic,
+            )
             action_i = int(action)
             obs, reward, terminated, truncated, info = env.step(action_i)
             total += float(reward)
@@ -417,7 +421,8 @@ def run_batch(args):
     """
     set_start_method("spawn", force=True)
 
-    from stable_baselines3 import PPO
+    from sb3_contrib import MaskablePPO
+    from sb3_contrib.common.maskable.utils import get_action_masks
     from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 
     from curriculum_config import (
@@ -495,7 +500,7 @@ def run_batch(args):
     else:
         vec_env = SubprocVecEnv([_make(i) for i in range(n_workers)], start_method="spawn")
 
-    model = PPO.load(str(model_path), device="cpu" if args.cpu else "auto")
+    model = MaskablePPO.load(str(model_path), device="cpu" if args.cpu else "auto")
 
     agg_all = RollingHeatmapAggregator(window_frames=None)
     stage_aggs: dict[str, RollingHeatmapAggregator] = {}
@@ -533,7 +538,10 @@ def run_batch(args):
     pbar = tqdm(total=target_runs, unit="run", desc="batch eval")
     try:
         while runs_done < target_runs:
-            actions, _ = model.predict(obs, deterministic=not args.stochastic)
+            action_masks = get_action_masks(vec_env)
+            actions, _ = model.predict(
+                obs, action_masks=action_masks, deterministic=not args.stochastic
+            )
             obs, rewards, dones, infos = vec_env.step(actions)
             before = runs_done
             for info in infos:

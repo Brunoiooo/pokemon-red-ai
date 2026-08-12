@@ -21,9 +21,15 @@ RAM = _ram_constants.RAM
 # https://datacrystal.tcrf.net/wiki/Pokémon_Red_and_Blue/RAM_map
 
 
-# Emulator button indices — A/B must be mashable to start and advance dialogs.
+# Emulator button indices — see Emulator.buttons for the canonical list.
 ACTION_A = 0
 ACTION_B = 1
+ACTION_START = 2
+ACTION_SELECT = 3
+ACTION_LEFT = 4
+ACTION_RIGHT = 5
+ACTION_UP = 6
+ACTION_DOWN = 7
 ACTION_NONE = 8
 INTERACT_ACTIONS = frozenset({ACTION_A, ACTION_B})
 
@@ -390,6 +396,16 @@ class Data:
     # Distinct dialog screen hashes seen for the current dialog_id. Blink frames
     # revisit old hashes; only a *new* hash counts as text progress.
     _dialog_screens_seen: set[str] = field(default_factory=set)
+    # wMaxMenuItem snapshotted the instant the current dialog_id started (see
+    # count()'s _dialog_id_changed branch) -- pret/pokered does NOT reset
+    # wMaxMenuItem when a plain textbox opens, it just keeps whatever value
+    # was left over from the last real menu (e.g. 5 after browsing a 6-item
+    # START menu), so a raw "!= 0" check reads that stale leftover as a live
+    # choice for the rest of the conversation. dialog_has_live_choice()
+    # instead treats it as live only once wMaxMenuItem *changes* away from
+    # this per-conversation baseline, which only happens when a real
+    # HandleMenuInput-backed choice (YesNoChoice etc.) actually runs.
+    _dialog_choice_baseline: int | None = None
     # Dialogs cleanly exited this episode → reopen tracking (penalty per reopen).
     _completed_dialogs: set[tuple[int, int]] = field(default_factory=set)
     _dialog_reopen_counts: dict[tuple[int, int], int] = field(default_factory=dict)
@@ -506,6 +522,7 @@ class Data:
         self.last_milestone_payouts = []
         self.last_regressed = []
         self._dialog_screens_seen = set()
+        self._dialog_choice_baseline = None
         self._completed_dialogs = set()
         self._dialog_reopen_counts = {}
         # Seed from the just-loaded save rather than always False: a
@@ -659,6 +676,19 @@ class Data:
 
         if self.is_menu(self.pyboy.memory):
             self.in_menu_ticks += duration
+        else:
+            self.in_menu_ticks = max(0, self.in_menu_ticks - 0.25 * duration)
+
+        # Battle's FIGHT/PKMN/ITEM/RUN and move-select menus reuse the same
+        # wCurrentMenuItem/wTopMenuItemX/Y cursor registers as every other
+        # menu in the game (see pret/pokered home/window.asm PlaceMenuCursor,
+        # shared code for all menus). Track cursor history there too, not
+        # just under is_menu() — otherwise this deque stays permanently empty
+        # during battle (is_menu() is defined as "blocked and not is_battle")
+        # and reward_anti_loop's net_stuck/menu_loop checks below can never
+        # tell "cursor actually stuck" from "cursor moving every step", so
+        # they default to flagging ordinary battle-menu navigation as a loop.
+        if self.is_menu(self.pyboy.memory) or self.is_battle(self.pyboy.memory):
             self.recent_menu_states.append(
                 (
                     self.menu_position_x(self.pyboy.memory),
@@ -667,7 +697,6 @@ class Data:
                 )
             )
         else:
-            self.in_menu_ticks = max(0, self.in_menu_ticks - 0.25 * duration)
             self.recent_menu_states.clear()
 
         if self.is_battle(self.pyboy.memory):
@@ -707,12 +736,20 @@ class Data:
             if self._dialog_id_changed(memory):
                 self._dialog_screens_seen = set()
                 self.in_dialog_ticks = 0
+                # New conversation/topic -- re-baseline dialog_has_live_choice
+                # against whatever wMaxMenuItem happens to be right now
+                # (stale or not; only a *change* from here reads as a live
+                # choice, see the field comment).
+                self._dialog_choice_baseline = int(
+                    self.pyboy.memory[RAM.wMaxMenuItem]
+                )
             else:
                 self.in_dialog_ticks += duration
             self._dialog_screen_is_new()
         else:
             self.in_dialog_ticks = 0
             self._dialog_screens_seen = set()
+            self._dialog_choice_baseline = None
 
         mid = self.map_id(self.pyboy.memory)
         self.visited_maps.add(mid)
@@ -1120,11 +1157,16 @@ class Data:
                 net_stuck = True
                 if self.is_world(self.pyboy.memory) and len(self.recent_positions) >= 8:
                     net_stuck = self.recent_positions[-8] == self.get_position()
-                elif self.is_menu(self.pyboy.memory) and len(self.recent_menu_states) >= 8:
+                elif (
+                    self.is_menu(self.pyboy.memory) or in_battle
+                ) and len(self.recent_menu_states) >= 8:
                     # Same fix as the world branch: holding one direction to
-                    # scroll a long menu list repeats the button 8x while the
+                    # scroll a long menu list (or a battle FIGHT/PKMN/ITEM/RUN
+                    # / move-select menu) repeats the button 8x while the
                     # cursor keeps moving — only flag it if the menu state
-                    # actually stopped changing too.
+                    # actually stopped changing too. in_battle included here
+                    # since is_menu() is defined as "not in battle" but battle
+                    # menus share the exact same cursor registers.
                     cur_menu_state = (
                         self.menu_position_x(self.pyboy.memory),
                         self.menu_position_y(self.pyboy.memory),
@@ -1142,7 +1184,20 @@ class Data:
         # multi-page Oak's-lab dialog, with argmax landing on NONE and idling
         # until the stuck-dialog fuse truncated the episode. NONE gets the
         # same penalty as any other non-interact button now, closing that gap.
-        if in_dialog and action not in INTERACT_ACTIONS:
+        # Arrows are exempted while dialog_has_live_choice (a Yes/No inside
+        # dialog_id != 0, e.g. OaksLab's starter picker) -- legal_action_mask
+        # unmasks them there for exactly the same reason, and punishing a
+        # legal, sometimes-mandatory action (there is no other way to answer
+        # NO) would fight the mask instead of agreeing with it.
+        dialog_wrong = (
+            in_dialog
+            and action not in INTERACT_ACTIONS
+            and not (
+                self.dialog_has_live_choice(self.pyboy.memory)
+                and action in (ACTION_LEFT, ACTION_RIGHT, ACTION_UP, ACTION_DOWN)
+            )
+        )
+        if dialog_wrong:
             penalty += self.dialog_wrong_button_penalty
             self.dialog_wrong_streak += 1
             if self.dialog_wrong_streak >= self.dialog_wrong_streak_threshold:
@@ -1178,10 +1233,14 @@ class Data:
             self.menu_noop_streak = 0
 
         # Menu loop: cursor oscillating between a small set of states (e.g.
-        # ITEM <-> CANCEL) changes state every step, so it slips past the
-        # no-change check above. Catch revisits of the same menu state instead
-        # (mirrors the spatial_loop_penalty check for the overworld).
-        if self.is_menu(self.pyboy.memory) and len(self.recent_menu_states) >= 6:
+        # ITEM <-> CANCEL, or FIGHT <-> PKMN in a battle menu) changes state
+        # every step, so it slips past the no-change check above. Catch
+        # revisits of the same menu state instead (mirrors the
+        # spatial_loop_penalty check for the overworld). in_battle included
+        # for the same reason as the net_stuck refinement above.
+        if (
+            self.is_menu(self.pyboy.memory) or in_battle
+        ) and len(self.recent_menu_states) >= 6:
             cur_menu_state = (
                 self.menu_position_x(self.pyboy.memory),
                 self.menu_position_y(self.pyboy.memory),
@@ -1887,6 +1946,59 @@ class Data:
     def type_of_battle(self, memory: PyBoyMemoryView | bytes):
         return memory[RAM.wIsInBattle]
 
+    # pret/pokered constants/menu_constants.asm MESSAGE_BOX ($01) -- the
+    # wTextBoxID value PrintText (home/window.asm) writes before every
+    # single message it prints, battle included.
+    _MESSAGE_BOX_ID = 1
+
+    def is_battle_message(self, memory: PyBoyMemoryView | bytes) -> bool:
+        """True while a plain battle message ("X used TACKLE!", "It's super
+        effective!", "Wild RATTATA fainted!", ...) is on screen with no
+        real menu open -- the battle-mode analog of is_dialog().
+
+        is_dialog()/is_menu() key off wFontLoaded (is_blocked()), but that
+        register is never touched by battle's message path: PrintText's
+        MESSAGE_BOX case draws its box via TextBoxBorder directly (see
+        pret/pokered engine/menus/text_box.asm's .coordTableMatch branch),
+        never through DisplayTextIDInit (the overworld-only routine that
+        actually sets wFontLoaded) -- so is_blocked() can't distinguish
+        anything during battle and is_dialog()/is_menu() correctly exclude
+        it entirely rather than guess wrong.
+
+        wTextBoxID can, and doesn't have wMaxMenuItem's staleness problem
+        either: PrintText unconditionally writes MESSAGE_BOX to it before
+        every message (home/window.asm), and every battle menu writes its
+        own distinct template constant to that *same* register right
+        before opening -- BATTLE_MENU_TEMPLATE for FIGHT/PKMN/ITEM/RUN,
+        TWO_OPTION_MENU for the run-away Yes/No prompt,
+        SWITCH_STATS_CANCEL_MENU_TEMPLATE for the party-switch menu (all in
+        pret/pokered engine/battle/core.asm). So unlike wMaxMenuItem, which
+        pokered never resets and which would misread a message straight
+        after a closed menu as "still live," wTextBoxID is refreshed on
+        every single textbox/menu draw -- message or not -- and can't go
+        stale between them.
+
+        One known gap: for the handful of frames after wIsInBattle first
+        flips before the battle's first PrintText call actually runs,
+        wTextBoxID still holds whatever it was left at pre-battle (e.g. the
+        last overworld dialog), so this can misread briefly right at battle
+        start. Self-corrects the instant the "wild X appeared" /
+        trainer-intro message prints, which is essentially immediate.
+        """
+        return (
+            self.is_battle(memory)
+            and int(memory[RAM.wTextBoxID]) == self._MESSAGE_BOX_ID
+        )
+
+    def is_battle_menu(self, memory: PyBoyMemoryView | bytes) -> bool:
+        """True while a real battle menu/list is reading input --
+        FIGHT/PKMN/ITEM/RUN, move select, party switch, the run-away Yes/No
+        prompt, ... -- the battle-mode analog of a live dialog choice (see
+        dialog_has_live_choice). See is_battle_message for why wTextBoxID,
+        not wFontLoaded/wMaxMenuItem, is the signal used here.
+        """
+        return self.is_battle(memory) and not self.is_battle_message(memory)
+
     def is_world(self, memory: PyBoyMemoryView | bytes):
         # Cutscene lock looks like overworld on screen but is not agent-controlled.
         # Mode flags become all-zero — distinct obs signal without changing VECTOR_DIM.
@@ -1898,6 +2010,91 @@ class Data:
             and not self.is_script_locked(memory)
             else False
         )
+
+    def legal_action_mask(self, memory: PyBoyMemoryView | bytes) -> list[bool]:
+        """Which of the N_ACTIONS buttons can actually change the game this tick.
+
+        Hardens two invariants reward_anti_loop already proves out via
+        reward shaping (dialog_wrong_button_penalty, menu_spam_penalty) into
+        a hard constraint for action-masked PPO (see sb3-contrib MaskablePPO
+        / PokemonRedEnv.action_masks):
+
+        - Dialog only advances on A/B (INTERACT_ACTIONS) — pret/pokered's
+          text engine ignores every other button while a textbox with
+          dialog_id != 0 is open, so anything else (including NONE) is a
+          wasted tick by construction, not just empirically. EXCEPT: a Yes/No
+          (or other list) choice can appear *while dialog_id stays nonzero*
+          — e.g. OaksLab.asm's starter picker calls YesNoChoice right after
+          PrintText without any wSpriteIndex reset in between (dialog_id is
+          set from the interacted object's sprite, not by PrintText, and
+          nothing clears it for the Yes/No). is_dialog() alone can't tell
+          "plain text page" from "a live cursor choice" apart, so it would
+          otherwise mask out the arrows the player needs to ever answer NO.
+          wMaxMenuItem is pokered's own live item-count for whichever
+          cursor list is currently reading input (PlaceMenuCursor /
+          HandleMenuInput, shared by every menu including YesNoChoice) —
+          nonzero only while such a list is genuinely active, so it doubles
+          as the "a choice beyond A/B is live" signal. It can still read
+          stale-nonzero for one tick right as a plain textbox opens (leftover
+          from whatever menu was open before), which would wrongly leave
+          arrows legal for that one tick — harmless (an unused legal action,
+          not a forbidden necessary one), so this deliberately errs toward
+          over- rather than under-including arrows.
+        - NONE has no legitimate use outside is_world. Standing still on a
+          world tile is a real decision; "doing nothing" in a menu or battle
+          never changes menu/turn state, so it's structurally the same as
+          the illegal-move case is_menu_illegal_move already penalizes, just
+          guaranteed on every tick instead of only after a streak.
+        - A plain battle message ("X used TACKLE!", "It's super effective!")
+          is the battle-mode analog of plain dialog text: only A/B do
+          anything (see is_battle_message), everything else -- including
+          NONE -- is wasted the same way it is mid-conversation.
+
+        Cutscene-lock ticks are not special-cased here: Emulator._press_action
+        already discards every action during is_cutscene_locked, so whatever
+        this returns for that window is moot -- left all-True rather than
+        adding a distinction with no observable effect.
+        """
+        mask = [True] * (ACTION_NONE + 1)
+        if self.is_dialog(memory):
+            mask = [False] * (ACTION_NONE + 1)
+            mask[ACTION_A] = True
+            mask[ACTION_B] = True
+            if self.dialog_has_live_choice(memory):
+                mask[ACTION_LEFT] = True
+                mask[ACTION_RIGHT] = True
+                mask[ACTION_UP] = True
+                mask[ACTION_DOWN] = True
+        elif self.is_battle(memory):
+            if self.is_battle_message(memory):
+                mask = [False] * (ACTION_NONE + 1)
+                mask[ACTION_A] = True
+                mask[ACTION_B] = True
+            else:
+                mask[ACTION_NONE] = False
+        elif self.is_menu(memory):
+            mask[ACTION_NONE] = False
+        return mask
+
+    def dialog_has_live_choice(self, memory: PyBoyMemoryView | bytes) -> bool:
+        """True while a Yes/No (or other list) cursor is actually reading
+        input during a dialog — see legal_action_mask's docstring for why
+        is_dialog() alone can't tell this apart from a plain text page.
+
+        Compares against _dialog_choice_baseline (wMaxMenuItem snapshotted
+        the instant the current dialog_id started, see count()) instead of
+        checking wMaxMenuItem != 0 directly: pret/pokered never resets
+        wMaxMenuItem when a plain textbox opens, it just leaves whatever a
+        previous, unrelated menu (e.g. a 6-item START menu) last wrote there
+        -- a raw nonzero check reads that leftover as "a choice is live" for
+        the rest of the conversation, permanently hiding the arrows from
+        legal_action_mask. Only an actual *change* away from the baseline --
+        which only a real HandleMenuInput-backed choice (YesNoChoice etc.)
+        produces -- counts.
+        """
+        if self._dialog_choice_baseline is None:
+            return False
+        return int(memory[RAM.wMaxMenuItem]) != self._dialog_choice_baseline
 
     def position_x(self, memory: PyBoyMemoryView | bytes):
         return memory[RAM.wXCoord]

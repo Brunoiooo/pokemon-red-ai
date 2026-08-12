@@ -17,12 +17,9 @@ def run(args):
     set_start_method("spawn", force=True)
 
     import torch
-    from stable_baselines3 import PPO
-    from stable_baselines3.common.callbacks import (
-        CallbackList,
-        CheckpointCallback,
-        EvalCallback,
-    )
+    from sb3_contrib import MaskablePPO
+    from sb3_contrib.common.maskable.callbacks import MaskableEvalCallback
+    from stable_baselines3.common.callbacks import CallbackList, CheckpointCallback
     from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecMonitor
 
     from curriculum_config import (
@@ -160,12 +157,18 @@ def run(args):
         resume_arg = None if args.resume in ("", "AUTO") else args.resume
         resume_path = resolve_model_path(resume_arg, prefer_latest=True)
         print(f"Resuming from {resume_path}")
-        model = PPO.load(str(resume_path), env=train_env, device=device)
+        # A checkpoint saved before the switch to MaskablePPO (plain PPO /
+        # MultiInputActorCriticPolicy) will not load here -- the action
+        # distribution class changed (MaskableCategoricalDistribution), not
+        # just weight shapes. Use --migrate for those (transplants
+        # shape-matching weights by name into a fresh MaskablePPO instead of
+        # deserializing the old policy class directly).
+        model = MaskablePPO.load(str(resume_path), env=train_env, device=device)
         # Override frozen checkpoint hyperparams (e.g. raise entropy after collapse).
         model.ent_coef = float(args.ent_coef)
         print(f"ent_coef override: {model.ent_coef}")
     else:
-        model = PPO(
+        model = MaskablePPO(
             policy="MultiInputPolicy",
             env=train_env,
             learning_rate=args.lr,
@@ -214,7 +217,7 @@ def run(args):
         save_replay_buffer=False,
         save_vecnormalize=False,
     )
-    eval_cb = EvalCallback(
+    eval_cb = MaskableEvalCallback(
         eval_env,
         best_model_save_path=str(model_dir / "best"),
         log_path=str(log_dir / "eval"),
