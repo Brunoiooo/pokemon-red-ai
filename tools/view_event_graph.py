@@ -1,11 +1,15 @@
 #!/usr/bin/env python
 """CLI viewer for the pret/pokered event dependency graph.
 
-Renders a layered parent -> (map, event) -> child dependency tree with
-matplotlib -- no networkx/graphviz dependency, matching this project's
-existing plotting stack (see src/utils/PositionHeatmap.py). Data comes from
-src/pokemon/event_graph.py (see tools/gen_event_graph.py for how it's built
-and why edges are a static-analysis heuristic, not proven causality).
+Renders a layered parent -> (map, event) -> child dependency tree. Per-map
+and per-event views (--map/--event) use matplotlib, matching this project's
+existing plotting stack (see src/utils/PositionHeatmap.py). The whole-graph
+view (--full --out foo.html) instead emits a self-contained HTML page built
+on Cytoscape.js + its dagre layout extension (vendored under tools/vendor/,
+MIT-licensed) -- an actual graph-layout library handles positioning/overlap
+avoidance/pan-zoom there, rather than hand-rolled layout math. Data comes
+from src/pokemon/event_graph.py (see tools/gen_event_graph.py for how it's
+built and why edges are a static-analysis heuristic, not proven causality).
 
 Usage:
   python tools/view_event_graph.py --list-maps
@@ -14,7 +18,7 @@ Usage:
   python tools/view_event_graph.py --event EVENT_BEAT_BROCK
   python tools/view_event_graph.py --dead
   python tools/view_event_graph.py --map PEWTER_GYM --out pewter_gym.png
-  python tools/view_event_graph.py --full --out event_graph.html   # interactive SVG: pan/zoom/search/click-for-detail
+  python tools/view_event_graph.py --full --out event_graph.html   # interactive Cytoscape.js/dagre viewer: pan/zoom/search/click-for-detail
 """
 from __future__ import annotations
 
@@ -673,8 +677,9 @@ def main() -> None:
     parser.add_argument(
         "--out",
         help="zapisz do pliku zamiast/obok pokazania okna -- PNG normalnie, "
-             "a dla --full rozszerzenie .html daje interaktywny wykres SVG "
-             "(pan/zoom/szukaj/klik-po-szczegoly) zamiast statycznego PNG",
+             "a dla --full rozszerzenie .html daje interaktywny widok "
+             "(Cytoscape.js + layout dagre: pan/zoom/szukaj/klik-po-szczegoly) "
+             "zamiast statycznego PNG",
     )
     parser.add_argument("--show", action="store_true", help="wymus pokazanie okna nawet z --out")
     args = parser.parse_args()
