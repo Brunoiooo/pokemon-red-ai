@@ -140,8 +140,14 @@ class EntropyCoefScheduler(BaseCallback):
 class MilestoneCallback(BaseCallback):
     """Track episode milestone hit-rate and loop episode rate.
 
-    When ``auto_curriculum`` is True, advances stage (goal / max_steps / saves)
-    once the rolling success rate on the *current* goal exceeds the threshold.
+    When ``auto_curriculum`` is True, periodically hands training a fresh,
+    randomly-picked goal (see curriculum_config.pick_new_goal) once the
+    rolling success rate -- did each recent episode clear *some* goal, not
+    a specific one -- clears the threshold. There is no story order to walk:
+    whichever goal(s) an episode actually reaches already get their own
+    saves/<goal>/checkpoint.state (see
+    PokemonRedEnv._save_milestone_checkpoints); this just keeps refreshing
+    what new resets aim for instead of grinding the same goal forever.
     """
 
     def __init__(
@@ -168,8 +174,6 @@ class MilestoneCallback(BaseCallback):
             ADVANCE_CHECK_EVERY,
             ADVANCE_MIN_EPISODES,
             ADVANCE_SUCCESS_THRESHOLD,
-            DEMOTE_STALL_CHECKS,
-            DEMOTE_SUCCESS_CEILING,
         )
 
         self.success_threshold = (
@@ -177,9 +181,6 @@ class MilestoneCallback(BaseCallback):
         )
         self.min_episodes = ADVANCE_MIN_EPISODES if min_episodes is None else min_episodes
         self.check_every = ADVANCE_CHECK_EVERY if check_every is None else check_every
-        self.demote_stall_checks = DEMOTE_STALL_CHECKS
-        self.demote_success_ceiling = DEMOTE_SUCCESS_CEILING
-        self._stall_checks = 0
 
         self._returns: deque[float] = deque(maxlen=window)
         self._loops: deque[int] = deque(maxlen=window)
@@ -194,8 +195,11 @@ class MilestoneCallback(BaseCallback):
         # map touched) — how close episodes run to map_dwell_budget on
         # average, see PokemonRedEnv._info's map_dwell_avg.
         self._map_dwell_avgs: deque[float] = deque(maxlen=window)
-        # Hits on the *currently set* goal only (cleared_stage == self.stage).
-        # Reset whenever the stage changes, forward (advance) or back (demote).
+        # Every goal_success hit this window, whichever goal it was --
+        # cleared_stage no longer needs to equal self.stage: goals clear
+        # order-free now (see PokemonRedEnv._advance_after_goal), there is
+        # no single "current goal" to match against. Reset whenever the
+        # base goal is reassigned (see _try_reassign).
         self._goal_hit_count = 0
         self._goal_hit_reward_sum = 0.0
         self._ep_loop = None
@@ -221,10 +225,12 @@ class MilestoneCallback(BaseCallback):
     def _reset_goal_hits(self) -> None:
         self._goal_hit_count = 0
         self._goal_hit_reward_sum = 0.0
-        self.logger.record("pokemon/goal_hits_current_stage", 0.0)
+        self.logger.record("pokemon/goal_hits", 0.0)
         self.logger.record("pokemon/goal_hit_avg_reward", 0.0)
 
     def _stage_idx(self) -> int:
+        """STAGE_ORDER position of self.stage -- informational TensorBoard
+        gauge only, not used to pick what comes next (see pick_new_goal)."""
         from curriculum_config import stage_index
 
         return float(stage_index(self.stage))
@@ -246,7 +252,14 @@ class MilestoneCallback(BaseCallback):
             clear_visits=True,
         )
 
-    def _try_advance(self) -> None:
+    def _try_reassign(self) -> None:
+        """Periodically hand training a fresh, order-free goal pick.
+
+        No demote counterpart anymore: there's no single "current stage" to
+        fall back from, and a stall just means the next random pick (which
+        can land on an easier goal as readily as a harder one) gets tried
+        once enough episodes confirm the current one is going nowhere.
+        """
         if not self.auto_curriculum:
             return
         if len(self._successes) < self.min_episodes:
@@ -255,14 +268,12 @@ class MilestoneCallback(BaseCallback):
         rate = float(np.mean(self._successes))
         self.logger.record("pokemon/goal_success_rate", rate)
         if rate < self.success_threshold:
-            self._try_demote(rate)
             return
 
-        self._stall_checks = 0
-        from curriculum_config import get_goal_for_stage, get_stage_max_steps, next_stage
+        from curriculum_config import get_goal_for_stage, get_stage_max_steps, pick_new_goal
 
-        nxt = next_stage(self.stage)
-        if nxt is None:
+        nxt = pick_new_goal()
+        if nxt is None or nxt == self.stage:
             return
 
         old = self.stage
@@ -279,55 +290,11 @@ class MilestoneCallback(BaseCallback):
         goal = get_goal_for_stage(nxt)
         max_steps = get_stage_max_steps(nxt)
         msg = (
-            f"[curriculum] Advanced {old} -> {nxt} "
+            f"[curriculum] {old} -> {nxt} (order-free pick) "
             f"(goal={goal}, max_steps={max_steps}, "
             f"success_rate={rate:.2f} >= {self.success_threshold:.2f})"
         )
         # ASCII only: Windows cp1250 + PowerShell redirect crashes on arrows.
-        print(f"\n{msg}\n")
-        self.logger.record("pokemon/curriculum_stage_idx", self._stage_idx())
-        self.logger.record("pokemon/goal_success_rate", 0.0)
-
-    def _try_demote(self, rate: float) -> None:
-        """Step back one stage after a long, near-total stall.
-
-        Forward advance has no counterpart: once the current stage grinds to
-        a halt (e.g. policy drift on an earlier sub-goal it no longer
-        rehearses), ``curriculum_stage_idx`` would otherwise sit on a stage
-        the agent can no longer actually clear, forever.
-        """
-        if rate > self.demote_success_ceiling:
-            self._stall_checks = 0
-            return
-
-        self._stall_checks += 1
-        if self._stall_checks < self.demote_stall_checks:
-            return
-
-        from curriculum_config import get_goal_for_stage, get_stage_max_steps, prev_stage
-
-        prv = prev_stage(self.stage)
-        self._stall_checks = 0
-        if prv is None:
-            return
-
-        old = self.stage
-        self.stage = prv
-        self._apply_stage_to_env(self.training_env, prv)
-        if self.eval_env is not None:
-            self._apply_stage_to_env(self.eval_env, prv)
-
-        self._successes.clear()
-        self._returns.clear()
-        self._reset_goal_hits()
-
-        goal = get_goal_for_stage(prv)
-        max_steps = get_stage_max_steps(prv)
-        msg = (
-            f"[curriculum] Stalled on {old} (success_rate<={self.demote_success_ceiling:.2f} "
-            f"for {self.demote_stall_checks} checks) -> demoting to {prv} "
-            f"(goal={goal}, max_steps={max_steps})"
-        )
         print(f"\n{msg}\n")
         self.logger.record("pokemon/curriculum_stage_idx", self._stage_idx())
         self.logger.record("pokemon/goal_success_rate", 0.0)
@@ -351,12 +318,13 @@ class MilestoneCallback(BaseCallback):
                 self._ep_milestones[i].add(cur)
 
             done = bool(dones[i]) if i < len(dones) else False
-            if info.get("goal_success") or info.get("cleared_stage"):
+            cleared_stage = info.get("cleared_stage")
+            if info.get("goal_success") or cleared_stage:
                 self._ep_goal_hit[i] = True
-            # Only count a hit toward the *currently set* goal — envs can
-            # auto-advance in-place past the callback's stage within one
-            # episode, and those later hits belong to a different goal.
-            if info.get("goal_success") and info.get("cleared_stage") == self.stage:
+            # Every hit counts, whichever goal it was -- envs advance
+            # order-free now (see PokemonRedEnv._advance_after_goal), there
+            # is no single "current goal" to match against anymore.
+            if info.get("goal_success"):
                 self._goal_hit_count += 1
                 if i < len(rewards):
                     self._goal_hit_reward_sum += float(rewards[i])
@@ -454,7 +422,7 @@ class MilestoneCallback(BaseCallback):
                     "pokemon/ep_return_mean", float(np.mean(self._returns))
                 )
             self.logger.record(
-                "pokemon/goal_hits_current_stage", float(self._goal_hit_count)
+                "pokemon/goal_hits", float(self._goal_hit_count)
             )
             if self._goal_hit_count:
                 self.logger.record(
@@ -462,6 +430,6 @@ class MilestoneCallback(BaseCallback):
                     self._goal_hit_reward_sum / self._goal_hit_count,
                 )
             self.logger.record("pokemon/curriculum_stage_idx", self._stage_idx())
-            self._try_advance()
+            self._try_reassign()
 
         return True

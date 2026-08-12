@@ -103,9 +103,9 @@ def run_mock_cases() -> None:
     )
     assert flee == data.flee_coward_penalty, f"expected {data.flee_coward_penalty}, got {flee}"
     assert flee == -1.0
-    # Blank fake overworld still pays new_screen_reward (+0.1) via reward_map.
-    assert abs(milestone - flee - data.new_screen_reward) < 1e-6, (
-        f"milestone {milestone} expected flee {flee} + new_screen {data.new_screen_reward}"
+    # No more one-time new-map bonus (reward_map is gone) — milestone is just flee.
+    assert abs(milestone - flee) < 1e-6, (
+        f"milestone {milestone} expected flee {flee}"
     )
 
     # Smart: enemy > max party
@@ -119,7 +119,7 @@ def run_mock_cases() -> None:
     )
     assert flee == data.flee_smart_reward
     assert flee == 0.4
-    assert abs(milestone - flee - data.new_screen_reward) < 1e-6
+    assert abs(milestone - flee) < 1e-6
 
     # Equal levels → coward (enemy <= party)
     prev = build_prev(in_battle=True, enemy_level=8, party_levels=[8])

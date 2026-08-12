@@ -113,8 +113,6 @@ class Data:
     files_lock: RLock
 
     visited_screens: list[bytes] = field(default_factory=list)
-    visited_maps: set[int] = field(default_factory=set)
-    visited_dialogs: dict[tuple[int, int], int] = field(default_factory=dict)
 
     # Hierarchical rewards: macro >> meso >> micro (PokeRL / Whidden style).
     # badge_reward/event_reward are the only two payout amounts left —
@@ -122,14 +120,12 @@ class Data:
     # once per episode, no per-goal hand-tuned amount or active-goal scaling.
     badge_reward: float = 10.0  # macro
     event_reward: float = 2.0  # macro
-    new_screen_reward: float = 1.0  # meso (new map)
-    # Separate from new_screen_reward — this pays reward_battle_useless_count's
-    # per-turn-changed credit. Was accidentally sharing new_screen_reward, so
-    # bumping the map reward silently 10x'd this too and made stalling
-    # trainer battles with non-damaging stat-down moves (Growl/Tail Whip/…)
-    # farm free reward every turn, since trainer battles get no wild-encounter
-    # decay. Kept at the old shared value (0.1) so this payout is unaffected
-    # by future new_screen_reward tuning.
+    # One-shot new-map/new-dialog payouts (formerly new_screen_reward /
+    # new_dialog_reward) are gone — reward_new_map_presence / reward_new_dialog_presence
+    # (see reward()) now cover that ground with the same decaying-by-visits
+    # shape as reward_active_map_presence, instead of a flat one-time bonus.
+    # battle_turn_reward is kept at its old value (0.1) on purpose, not tied
+    # to either of those — see reward_battle_useless_count.
     battle_turn_reward: float = 0.1  # micro (turn progressed in battle)
     new_position_reward: float = 0.008  # micro (slightly lower to curb tile farming)
     # Revisit taper: full credit stays a one-shot, but the drop to 0 no longer
@@ -137,7 +133,6 @@ class Data:
     # necessary backtrack (e.g. retracing to a room's only exit) isn't an
     # instant cliff from full bonus to the bare step penalty.
     new_position_decay_visits: int = 4
-    new_dialog_reward: float = 1.0  # meso — first enter of a (dialog_id, map), same as new_screen_reward
     # Mid-dialog text farming was an exploit (post-rival Oak speech): tiny
     # +0.01 per screen kept the agent camping without leaving for Route 1.
     dialog_advance_reward: float = 0.0
@@ -471,10 +466,6 @@ class Data:
                 pickle.dump(self.__visited_pokedex_seen, f)
             with open(f"{path}/visited_positions.pkl", "wb") as f:
                 pickle.dump(self.visited_positions, f)
-            with open(f"{path}/visited_maps.pkl", "wb") as f:
-                pickle.dump(self.visited_maps, f)
-            with open(f"{path}/visited_dialogs.pkl", "wb") as f:
-                pickle.dump(self.visited_dialogs, f)
 
     def load(self, path: str):
         with self.files_lock:
@@ -484,10 +475,6 @@ class Data:
                 self.__visited_pokedex_seen = pickle.load(f)
             with open(f"{path}/visited_positions.pkl", "rb") as f:
                 self.visited_positions = pickle.load(f)
-            with open(f"{path}/visited_maps.pkl", "rb") as f:
-                self.visited_maps = pickle.load(f)
-            with open(f"{path}/visited_dialogs.pkl", "rb") as f:
-                self.visited_dialogs = pickle.load(f)
 
     def clean(self):
         self.__visited_pokedex_own = None
@@ -508,8 +495,6 @@ class Data:
         self.battle_outcome_counts = {}
         self.milestone_hit_counts = {}
         self._last_heatmap_pos = None
-        self.visited_maps = set()
-        self.visited_dialogs = {}
         self.recent_actions.clear()
         self.recent_positions.clear()
         self.recent_menu_states.clear()
@@ -597,15 +582,18 @@ class Data:
             # Stuck-fuse time always accumulates — including A/B mash. Otherwise
             # the policy can stand in Oak's lab spamming A forever: sprite does
             # not move, NPCs animate, and truncated() never fires until max_steps.
-            # Soft visit *penalties* still skip A/B so a normal talk can open.
             self.visited_positions[pos] = self.visited_positions.get(pos, 0) + duration
+            # position_visit_counts always advances too, even on a stationary
+            # A/B mash — it drives the decay in reward_position's
+            # exploration_reward and reward_active_map_presence, and freezing
+            # it while "talking" let both pay out a flat per-tick bonus
+            # forever instead of decaying to zero (reward_anti_loop's own
+            # visit-penalty check has its own independent `not interacting`
+            # gate below, so it does not need this counter frozen to spare a
+            # normal talk).
+            self.position_visit_counts[pos] = self.position_visit_counts.get(pos, 0) + 1
             if not (stayed and interacting):
-                self.position_visit_counts[pos] = (
-                    self.position_visit_counts.get(pos, 0) + 1
-                )
                 self.recent_positions.append(pos)
-            elif pos not in self.position_visit_counts:
-                self.position_visit_counts[pos] = 1
 
             # --heatmap direction overlay: which way the agent actually moved
             # (position delta), not the raw action — a bumped-into-wall A/B
@@ -688,7 +676,14 @@ class Data:
         # and reward_anti_loop's net_stuck/menu_loop checks below can never
         # tell "cursor actually stuck" from "cursor moving every step", so
         # they default to flagging ordinary battle-menu navigation as a loop.
-        if self.is_menu(self.pyboy.memory) or self.is_battle(self.pyboy.memory):
+        # is_battle_menu(), not is_battle(): a plain battle message ("X used
+        # TACKLE!") has no real menu open, so these registers just sit at
+        # whatever they were last drawn to — appending them here filled this
+        # deque with runs of identical "stale" tuples for every multi-message
+        # turn (every ordinary battle has several), which made menu_loop
+        # below fire almost continuously through normal message-advancing,
+        # not actual cursor loops.
+        if self.is_menu(self.pyboy.memory) or self.is_battle_menu(self.pyboy.memory):
             self.recent_menu_states.append(
                 (
                     self.menu_position_x(self.pyboy.memory),
@@ -696,7 +691,10 @@ class Data:
                     self.real_current_menu_selected_item(self.pyboy.memory),
                 )
             )
-        else:
+        elif not self.is_battle(self.pyboy.memory):
+            # Mid-battle-message: leave prior real menu-state history intact
+            # instead of clearing it, so the loop detector's memory survives
+            # the message pause between menu appearances.
             self.recent_menu_states.clear()
 
         if self.is_battle(self.pyboy.memory):
@@ -711,10 +709,6 @@ class Data:
             self.in_battle_ticks = 0
 
         if self.is_dialog(self.pyboy.memory):
-            dialog = self.get_dialog()
-            self.visited_dialogs[dialog] = (
-                self.visited_dialogs.get(dialog, 0) + duration
-            )
             # Per-map byte-histogram step counter (see dialog_id_visit_grid),
             # same per-step cadence as position_visit_counts.
             did_key = (
@@ -752,7 +746,6 @@ class Data:
             self._dialog_choice_baseline = None
 
         mid = self.map_id(self.pyboy.memory)
-        self.visited_maps.add(mid)
         self.map_id_visit_counts[mid] = self.map_id_visit_counts.get(mid, 0) + 1
         self._tick_map_budget(self.pyboy.memory)
 
@@ -1007,6 +1000,10 @@ class Data:
         step += self.reward_map_budget(self.pyboy.memory)
         # Nudge toward maps with unfinished reachable progress (world-mode only).
         step += self.reward_active_map_presence(self.pyboy.memory)
+        # Same decay curve/magnitude, nudging toward fresh dialog (dialog-mode
+        # only) and fresh maps (world-mode only) instead of active events.
+        step += self.reward_new_dialog_presence(self.pyboy.memory)
+        step += self.reward_new_map_presence(self.pyboy.memory)
 
         return milestone, step
 
@@ -1236,10 +1233,13 @@ class Data:
         # ITEM <-> CANCEL, or FIGHT <-> PKMN in a battle menu) changes state
         # every step, so it slips past the no-change check above. Catch
         # revisits of the same menu state instead (mirrors the
-        # spatial_loop_penalty check for the overworld). in_battle included
-        # for the same reason as the net_stuck refinement above.
+        # spatial_loop_penalty check for the overworld). is_battle_menu(),
+        # not in_battle: a plain battle message has no real menu/cursor to
+        # loop on (see the matching fix in count()'s recent_menu_states
+        # append) -- gating on in_battle here fired this on every ordinary
+        # multi-message battle turn instead of an actual stuck cursor.
         if (
-            self.is_menu(self.pyboy.memory) or in_battle
+            self.is_menu(self.pyboy.memory) or self.is_battle_menu(self.pyboy.memory)
         ) and len(self.recent_menu_states) >= 6:
             cur_menu_state = (
                 self.menu_position_x(self.pyboy.memory),
@@ -1303,16 +1303,13 @@ class Data:
 
     def reward_dialog(self, memory: bytes, action: int) -> tuple[float, float]:
         dialog_changed = self.dialog_id(memory) != self.dialog_id(self.pyboy.memory)
-        current_dialog = self.get_dialog()
-        is_new_dialog = current_dialog not in self.visited_dialogs
-        # Pay for opening a new conversation and (optionally) dialog_id flips.
-        # Do NOT pay for tilemap text frames — that was the post-rival exploit.
-        if is_new_dialog:
-            dialog_reward = self.new_dialog_reward
-        elif dialog_changed:
-            dialog_reward = self.dialog_advance_reward
-        else:
-            dialog_reward = 0.0
+        # Pay for dialog_id flips (dialog_advance_reward). Do NOT pay for
+        # tilemap text frames — that was the post-rival exploit. The old
+        # one-time "first time ever seeing this (dialog_id, map)" bonus is
+        # gone — reward_new_dialog_presence (see reward()) now covers fresh
+        # conversations with the same decaying-by-visits shape as
+        # reward_active_map_presence instead of a flat one-shot payout.
+        dialog_reward = self.dialog_advance_reward if dialog_changed else 0.0
         # Same per-tick waste shape AND same ramp tempo as reward_position's
         # step_penalty (base_reward scaled up to 10x at saturation over
         # max_useless_ticks) — idling in dialog now costs exactly what idling on
@@ -1364,7 +1361,6 @@ class Data:
         reward += self.reward_player_pokemons_attacks(memory)
         reward += self.reward_player_pokemons_defenses(memory)
         reward += self.reward_player_pokemons_speeds(memory)
-        reward += self.reward_map()
         reward += self.reward_player_items(memory)
         reward += self.reward_stored_items(memory)
 
@@ -1393,17 +1389,6 @@ class Data:
             * self.new_item_reward
             * 0.5
         )
-
-    def reward_map(self):
-        if self.map_id(self.pyboy.memory) in self.visited_maps:
-            return 0.0
-        # First-visit credit used to be withheld off the active goal's
-        # hand-curated GOAL_ALLOWED_MAPS path. That gating is gone — the
-        # generic active_map_events()-driven reward_active_map_presence (see
-        # reward()) now separately shapes toward/away from maps with
-        # reachable progress, so plain exploration credit here no longer
-        # needs its own goal awareness.
-        return self.new_screen_reward
 
     def reward_player_pokemons_current_hps(self, memory: bytes):
         reward = 0.0
@@ -1565,7 +1550,7 @@ class Data:
         wObtainedBadges — see badges()) or a raw EVENT_* name from
         event_constants.py, read generically by is_event_satisfied(). Used by
         curriculum to skip goals already true in the live save (see
-        curriculum_config.next_stage's is_satisfied callback).
+        curriculum_config.pick_new_goal's is_satisfied callback).
         """
         if goal in BADGE_GOALS:
             badges = self.badges(self.pyboy.memory)
@@ -1690,12 +1675,62 @@ class Data:
         decay = max(0.0, 1.0 - visit_count / self.new_position_decay_visits)
         return self.active_map_event_reward * decay
 
+    def reward_new_dialog_presence(
+        self, memory: PyBoyMemoryView | bytes | None = None
+    ) -> float:
+        """Same decay shaping as reward_active_map_presence, but keyed by
+        (map_id, dialog_id) instead of active-event-map presence: a fresh
+        conversation pays active_map_event_reward, decaying to 0 by
+        new_position_decay_visits dialog-steps in, same as a tile on a map
+        with an active event. Reuses both constants rather than its own so
+        the two mechanisms can't drift apart in length or value.
+        """
+        if memory is None:
+            memory = self.pyboy.memory
+        if not self.is_dialog(memory):
+            return 0.0
+        did_key = (self.map_id(memory), self.dialog_id(memory))
+        visit_count = self.dialog_id_visit_counts.get(did_key, 0)
+        decay = max(0.0, 1.0 - visit_count / self.new_position_decay_visits)
+        return self.active_map_event_reward * decay
+
+    def reward_new_map_presence(
+        self, memory: PyBoyMemoryView | bytes | None = None
+    ) -> float:
+        """Same decay shaping as reward_active_map_presence, but keyed by
+        map_id_visit_counts instead of position_visit_counts: first setting
+        foot on a map not visited (much) yet this episode pays
+        active_map_event_reward, decaying to 0 by new_position_decay_visits
+        steps in, same as a tile on a map with an active event.
+        """
+        if memory is None:
+            memory = self.pyboy.memory
+        if not self.is_world(memory):
+            return 0.0
+        mid = self.map_id(memory)
+        visit_count = self.map_id_visit_counts.get(mid, 0)
+        decay = max(0.0, 1.0 - visit_count / self.new_position_decay_visits)
+        return self.active_map_event_reward * decay
 
     def goal_reached(self) -> bool:
         return self.is_goal_satisfied(self.goal)
 
     def terminated(self, memory: bytes):
-        return self.goal_reached()
+        """Episode/curriculum-leg end signal.
+
+        True when the specifically-assigned self.goal is satisfied, OR when
+        ANY other GOAL_CANDIDATES event/badge was newly satisfied this exact
+        step (see reward_generic_progress -- last_milestone_payouts, already
+        computed by the time this runs since reward() calls it first). In-
+        game event order does not reliably match STAGE_ORDER's heuristic
+        sort (see curriculum_config.py's module docstring) -- whichever
+        goal actually lands first should end this leg and hand training a
+        fresh, still-unsatisfied goal, not just the one curriculum happened
+        to assign. self.goal is itself always a GOAL_CANDIDATES member, so
+        goal_reached() is normally already covered by last_milestone_payouts;
+        it's kept as a fallback for a custom/off-list --goal.
+        """
+        return self.goal_reached() or bool(self.last_milestone_payouts)
 
     def truncated(self, memory: bytes):
         # Stuck fuse uses in_dialog_ticks (resets on dialog_id change / leave),

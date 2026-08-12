@@ -79,6 +79,13 @@ p_train.add_argument("--list-stages", action="store_true",
 p_train.add_argument("--goal", default=None)
 p_train.add_argument("--auto-curriculum", action=argparse.BooleanOptionalAction, default=True,
                      help="Auto-advance stages when success rate is high (default: on)")
+p_train.add_argument(
+    "--save-checkpoints", action=argparse.BooleanOptionalAction, default=True,
+    help="On every GOAL_CANDIDATES event/badge newly satisfied, overwrite "
+         "saves/<name>/checkpoint.state with the reached state -- whichever "
+         "goal an episode clears first, regardless of curriculum order "
+         "(default: on; pass --no-save-checkpoints to disable)",
+)
 p_train.add_argument("--curriculum-mix", type=float, default=0.3)
 p_train.add_argument("--seed", type=int, default=0)
 p_train.add_argument(
@@ -145,10 +152,10 @@ p_eval.add_argument(
 p_eval.add_argument("--stochastic", action="store_true")
 p_eval.add_argument(
     "--save-checkpoints",
-    action="store_true",
-    default=False,
+    action=argparse.BooleanOptionalAction,
+    default=True,
     help="On goal success, overwrite saves/<new_stage>/checkpoint.state with "
-         "the reached state (opt-in; off by default)",
+         "the reached state (default: on; pass --no-save-checkpoints to disable)",
 )
 p_eval.add_argument(
     "--heatmap", action="store_true",

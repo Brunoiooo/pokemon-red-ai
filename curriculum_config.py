@@ -8,46 +8,42 @@ resettable) or one of BADGE_GOALS ("badge1".."badge8", read off
 wObtainedBadges). There is no more hand-picked STAGE_ORDER/CURRICULUM dict
 distinct from the goal list.
 
-STAGE_ORDER sorts GOAL_CANDIDATES by each event's wEventFlags bit index as a
-rough story-progression proxy: event_constants.asm declares events roughly
-city-by-city in game order (see tools/gen_event_constants.py), so bit index
-correlates with progression more often than not. Badges (no bit index of
-their own) are anchored next to their corresponding "beat gym leader" event.
-This is a static approximation, not hand-verified game knowledge — e.g.
-Viridian Gym/Giovanni's events sit early in bit-index space because
-Viridian is a very early city, even though badge8 is earned last in normal
-play. next_stage()'s is_satisfied skip-ahead and the advance/demote
-threshold logic in callbacks.py both tolerate an imperfect order (a
-goal already true just gets skipped); a wrong position mostly costs
-early-training sample efficiency, not correctness.
+STAGE_ORDER sorts GOAL_CANDIDATES by each event's wEventFlags bit index --
+originally a rough story-progression proxy, since event_constants.asm
+declares events roughly city-by-city in game order (see
+tools/gen_event_constants.py). That turned out not to hold reliably: in-game
+event order does not actually follow STAGE_ORDER's heuristic sort, and goal
+completion should not be order-dependent anyway (an episode may legitimately
+reach a "later" goal before an "earlier" one). STAGE_ORDER is therefore kept
+ONLY as a stable enumeration for two purposes that need *a* fixed order, not
+a *correct* one: (1) GOAL_ORDER/GOAL_INDEX's one-hot indexing for the
+policy's goal observation, and (2) cosmetic listings (--list-stages,
+create_stage_save.py --list). Nothing picks "the next goal" by walking
+STAGE_ORDER anymore -- see pick_new_goal(), which is a random, order-free
+pick instead. Badges (no bit index of their own) are still anchored next to
+their corresponding "beat gym leader" event purely for STAGE_ORDER's list
+position; that anchoring has no bearing on pick_new_goal().
 
-Save directories under saves/<goal_name>/checkpoint.state. If a stage save
-is missing, falls back to "start" (see resolve_checkpoint) — as of this
-writing only saves/start exists; create per-goal checkpoints with
-create_stage_save.py as training progresses (the checkpoint dir name is
-just the goal name, so this works for any goal, not a fixed hand-picked
-set).
+Save directories under saves/<goal_name>/checkpoint.state, written
+dynamically as episodes reach them (see
+PokemonRedEnv._save_milestone_checkpoints) -- whichever goal an episode
+actually clears first gets a checkpoint, regardless of order. If a goal has
+no checkpoint of its own yet, falls back to "start" (see resolve_checkpoint).
 """
 
 from __future__ import annotations
 
 import os
-from typing import Callable
+import random
 
 from pokemon import event_constants as _event_constants
 from pokemon.Data import BADGE_GOALS, GOAL_CANDIDATES
 
-# Auto-advance when this fraction of recent episodes hit the stage goal.
+# Reassign the training goal when this fraction of recent episodes hit
+# *some* goal (any goal -- see pick_new_goal).
 ADVANCE_SUCCESS_THRESHOLD = 0.70
 ADVANCE_MIN_EPISODES = 40
 ADVANCE_CHECK_EVERY = 2048
-
-# Auto-demote one stage back if the agent is fully stalled (near-zero success)
-# for this many consecutive advance checks. Guards against catastrophic
-# forgetting: the policy drifts on an earlier goal while training grinds on a
-# later stage, and there is otherwise no way back down.
-DEMOTE_STALL_CHECKS = 60
-DEMOTE_SUCCESS_CEILING = 0.05
 
 # Generous flat safety-net ceiling on top of Data.py's live, size-scaled
 # per-map budget (map_step_budget) — that budget grows as new maps are
@@ -96,8 +92,9 @@ def _stage(goal: str) -> dict:
     }
 
 
-# Recommended soft order — see module docstring on how it's derived and its
-# known imprecision. Goals already true are skipped at advance time.
+# Stable enumeration only -- see module docstring. Not used to decide what
+# goal comes next (see pick_new_goal); only for one-hot indexing (GOAL_ORDER)
+# and cosmetic listings.
 STAGE_ORDER: list[str] = sorted(GOAL_CANDIDATES, key=_order_key)
 
 CURRICULUM: dict[str, dict] = {goal: _stage(goal) for goal in STAGE_ORDER}
@@ -189,47 +186,9 @@ def get_curriculum_saves(stage: str) -> list[str]:
     return out or ["start"]
 
 
-def next_stage(
-    stage: str,
-    *,
-    is_satisfied: Callable[[str], bool] | None = None,
-) -> str | None:
-    """Next enabled stage after ``stage``.
-
-    If ``is_satisfied(goal)`` is provided, skip stages whose goals are already
-    true (handles out-of-order event flags during in-place eval).
-    """
-    stage = resolve_stage_name(stage)
-    try:
-        idx = STAGE_ORDER.index(stage)
-    except ValueError:
-        return None
-    for name in STAGE_ORDER[idx + 1 :]:
-        cfg = CURRICULUM.get(name)
-        if not cfg or not cfg.get("enabled", True):
-            continue
-        if is_satisfied is not None and is_satisfied(cfg["goal"]):
-            continue
-        return name
-    return None
-
-
-def prev_stage(stage: str) -> str | None:
-    """Nearest enabled stage before ``stage`` (for stall demotion)."""
-    stage = resolve_stage_name(stage)
-    try:
-        idx = STAGE_ORDER.index(stage)
-    except ValueError:
-        return None
-    for name in reversed(STAGE_ORDER[:idx]):
-        cfg = CURRICULUM.get(name)
-        if not cfg or not cfg.get("enabled", True):
-            continue
-        return name
-    return None
-
-
 def stage_index(stage: str) -> int:
+    """STAGE_ORDER position -- informational only (TensorBoard's
+    curriculum_stage_idx), not used to pick what comes next anymore."""
     stage = resolve_stage_name(stage)
     try:
         return STAGE_ORDER.index(stage)
@@ -237,31 +196,44 @@ def stage_index(stage: str) -> int:
         return 0
 
 
-def get_checkpoint_for_episode(total_steps: int) -> str | None:
-    """Legacy step-range curriculum for Rainbow DQN workers."""
-    chunk = 500_000
-    for i, stage_name in enumerate(STAGE_ORDER):
-        cfg = CURRICULUM.get(stage_name)
-        if not cfg or not cfg.get("enabled"):
-            continue
-        lo = i * chunk
-        hi = (i + 1) * chunk if i < len(STAGE_ORDER) - 1 else 50_000_000
-        if lo <= total_steps < hi:
-            return resolve_checkpoint(cfg["checkpoint"])
-    return None
+def pick_new_goal(
+    *,
+    is_satisfied=None,
+    prefer_discovered: bool = True,
+    rng: random.Random | None = None,
+) -> str | None:
+    """Random, order-free pick of a goal to work toward next.
 
+    Replaces the old next_stage()/prev_stage() STAGE_ORDER walk: there is no
+    "next" goal, only "some goal not yet satisfied". If ``is_satisfied`` is
+    given (a live, single-playthrough check -- e.g.
+    Data.is_goal_satisfied), candidates it reports as already true are
+    excluded; omit it when there's no single live state to check against
+    (e.g. MilestoneCallback picking a base goal across many independent
+    parallel workers).
 
-def get_current_stage(total_steps: int) -> str | None:
-    chunk = 500_000
-    for i, stage_name in enumerate(STAGE_ORDER):
-        cfg = CURRICULUM.get(stage_name)
-        if not cfg or not cfg.get("enabled"):
-            continue
-        lo = i * chunk
-        hi = (i + 1) * chunk if i < len(STAGE_ORDER) - 1 else 50_000_000
-        if lo <= total_steps < hi:
-            return stage_name
-    return None
+    When ``prefer_discovered`` is True (default) and at least one candidate
+    already has its own saves/<goal>/checkpoint.state -- i.e. some episode
+    has actually reached it before, see
+    PokemonRedEnv._save_milestone_checkpoints -- the pick is restricted to
+    those, so training isn't handed a goal with no known path to it yet.
+    Falls back to the full candidate pool otherwise (e.g. very early on,
+    before anything's been discovered).
+    """
+    rng = rng or random
+    candidates = [
+        g
+        for g in STAGE_ORDER
+        if CURRICULUM.get(g, {}).get("enabled", True)
+        and (is_satisfied is None or not is_satisfied(g))
+    ]
+    if not candidates:
+        return None
+    if prefer_discovered:
+        discovered = [g for g in candidates if _save_exists(g)]
+        if discovered:
+            candidates = discovered
+    return rng.choice(candidates)
 
 
 def stage_for_goal(goal: str) -> str:

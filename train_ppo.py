@@ -91,6 +91,7 @@ def run(args):
     print(f"Total steps:{args.timesteps:,}")
     print(f"GUI:        {'ON' if args.gui else 'OFF'}")
     print(f"Auto curr.: {'ON' if args.auto_curriculum else 'OFF'}")
+    print(f"Save ckpts: {'ON' if args.save_checkpoints else 'OFF'}")
     print(f"Heatmap:    {'ON (' + format(args.heatmap_frames, ',') + ' frame window)' if args.heatmap else 'OFF'}")
     print("=" * 70)
 
@@ -115,6 +116,7 @@ def run(args):
                 worker_rank=rank,
                 n_workers=args.workers,
                 collect_heatmap=args.heatmap,
+                save_checkpoints=args.save_checkpoints,
             )
             env.reset(seed=args.seed + rank)
             return env
@@ -141,6 +143,11 @@ def run(args):
                 curriculum_saves=curriculum_saves[-1:],
                 render_mode=None,
                 auto_advance=args.auto_curriculum,
+                # Eval episodes are deterministic rollouts run purely to
+                # score the policy -- letting them write saves/<goal>/
+                # checkpoint.state would race with (and can clobber) the
+                # real training workers' checkpoints for no benefit.
+                save_checkpoints=False,
             )
         ]
     )
@@ -326,6 +333,14 @@ def build_argparser(parent=None):
                    help="Override goal (auto-curriculum still advances stages)")
     p.add_argument("--auto-curriculum", action=argparse.BooleanOptionalAction, default=True,
                    help="Auto-advance through STAGE_ORDER when goal success rate is high (default: on)")
+    p.add_argument(
+        "--save-checkpoints", action=argparse.BooleanOptionalAction, default=True,
+        help="On every GOAL_CANDIDATES event/badge newly satisfied, overwrite "
+             "saves/<name>/checkpoint.state with the reached state -- whichever "
+             "goal an episode clears first, not just the currently-assigned "
+             "curriculum goal or STAGE_ORDER's heuristic order (default: on; "
+             "pass --no-save-checkpoints to disable)",
+    )
     p.add_argument("--curriculum-mix", type=float, default=0.3,
                    help="Probability of resetting to an earlier curriculum save")
     p.add_argument("--seed", type=int, default=0)

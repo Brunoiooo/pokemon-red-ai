@@ -46,7 +46,7 @@ from curriculum_config import (
     CURRICULUM,
     GOAL_ORDER,
     get_goal_for_stage,
-    next_stage,
+    pick_new_goal,
     stage_for_goal,
 )
 from pokemon.Emulator import Emulator
@@ -286,8 +286,12 @@ def _clear_visits(data) -> None:
 
 
 def _advance_after_goal(emu: Emulator, stage: str, goal: str) -> tuple[bool, str, str]:
-    """In-place curriculum advance — mirrors PokemonRedEnv._advance_after_goal."""
-    nxt = next_stage(stage, is_satisfied=emu.data.is_goal_satisfied)
+    """In-place curriculum advance — mirrors PokemonRedEnv._advance_after_goal.
+
+    Order-free: whichever goal just fired, the next one is a random pick
+    among what's still unsatisfied (see curriculum_config.pick_new_goal).
+    """
+    nxt = pick_new_goal(is_satisfied=emu.data.is_goal_satisfied)
     if nxt is None:
         return False, stage, goal
     emu.data.mark_goal_cleared(goal)

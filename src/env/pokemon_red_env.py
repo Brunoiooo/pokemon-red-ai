@@ -1,7 +1,9 @@
 """Gymnasium environment wrapping PyBoy + Data for PPO training."""
 from __future__ import annotations
 
+import os
 import sys
+import time
 from pathlib import Path
 from threading import RLock
 from typing import Any
@@ -21,7 +23,7 @@ from curriculum_config import (
     get_curriculum_saves,
     get_goal_for_stage,
     get_stage_max_steps,
-    next_stage,
+    pick_new_goal,
     stage_for_goal,
 )
 from pokemon.Data import BADGE_GOALS, Data
@@ -87,6 +89,7 @@ class PokemonRedEnv(gym.Env):
         worker_rank: int = 0,
         n_workers: int = 1,
         collect_heatmap: bool = False,
+        save_checkpoints: bool = False,
     ):
         super().__init__()
         self.save_state = save_state
@@ -106,6 +109,12 @@ class PokemonRedEnv(gym.Env):
         # clear) for the --heatmap live visualizer. Off by default: it copies
         # a dict every boundary, which is wasted work when nothing reads it.
         self.collect_heatmap = bool(collect_heatmap)
+        # When True, on every step that newly satisfies one or more
+        # GOAL_CANDIDATES events (see Data.reward_generic_progress), write
+        # saves/<name>/checkpoint.state for each -- whatever event it is,
+        # regardless of the curriculum's currently-assigned goal or
+        # STAGE_ORDER's heuristic position for it. See _save_milestone_checkpoints.
+        self.save_checkpoints = bool(save_checkpoints)
 
         self._lock = RLock()
         self._emu: Emulator | None = None
@@ -290,19 +299,26 @@ class PokemonRedEnv(gym.Env):
         """Advance curriculum in-place. Returns (advanced, cleared_stage).
 
         Ephemeral: does not change the base stage, so ``reset()`` returns to
-        the trainer-assigned curriculum until MilestoneCallback advances it.
+        the trainer-assigned curriculum until MilestoneCallback reassigns it.
+
+        Not gated on the specifically-assigned self.goal: Data.terminated()
+        fires on ANY GOAL_CANDIDATES event/badge newly satisfied this step
+        (see last_milestone_payouts). Whichever goal(s) actually landed this
+        step count as "cleared"; the next goal is a random, order-free pick
+        among what's still unsatisfied (see curriculum_config.pick_new_goal)
+        -- there is no "next" goal, only "some goal not yet reached". It
+        doesn't matter which goal fired first or which one comes next; what
+        matters is that *something* keeps happening.
         """
-        cleared = self.stage
-        cleared_goal = self.goal
-        nxt = next_stage(
-            self.stage,
-            is_satisfied=self.emu.data.is_goal_satisfied,
-        )
-        if nxt is None:
-            return False, cleared
+        hits = [name for name, _ in self.emu.data.last_milestone_payouts]
+        cleared = hits[0] if hits else self.stage
         # Mark before leaving the map so location clawback does not undo a
         # legitimately cleared curriculum beat (lab → Route 1).
-        self.emu.data.mark_goal_cleared(cleared_goal)
+        for name in hits:
+            self.emu.data.mark_goal_cleared(name)
+        nxt = pick_new_goal(is_satisfied=self.emu.data.is_goal_satisfied)
+        if nxt is None:
+            return False, cleared
         self.set_curriculum(
             stage=nxt,
             goal=get_goal_for_stage(nxt),
@@ -366,6 +382,58 @@ class PokemonRedEnv(gym.Env):
             self.emu.data.legal_action_mask(self.emu.pyboy.memory), dtype=bool
         )
 
+    def _save_milestone_checkpoints(self) -> None:
+        """Dynamic, order-free checkpoint capture.
+
+        Every GOAL_CANDIDATES event/badge newly satisfied this step (see
+        Data.reward_generic_progress -- self.emu.data.last_milestone_payouts)
+        gets its own saves/<name>/checkpoint.state, whichever event it
+        happens to be and regardless of whether it's the curriculum's
+        currently-assigned goal or where STAGE_ORDER's heuristic sort
+        happens to place it. In-game event order is not guaranteed to match
+        STAGE_ORDER (see curriculum_config.py's module docstring), so tying
+        saves to the single assigned goal meant a run could clear several
+        other goals along the way and never save any of them -- whichever
+        goal actually lands first is the good checkpoint, not whichever one
+        STAGE_ORDER says should be next.
+        """
+        for name, _payout in self.emu.data.last_milestone_payouts:
+            out_dir = Path("saves") / name
+            out_dir.mkdir(parents=True, exist_ok=True)
+            out_path = out_dir / "checkpoint.state"
+            # Training runs several PokemonRedEnv workers as separate
+            # SubprocVecEnv processes -- two of them can clear the same
+            # goal in the same wall-clock window and race to write this
+            # exact path. self.emu.files_lock only guards this one
+            # process, so write to a per-process temp file and os.replace()
+            # into place (atomic on POSIX and Windows on the same volume):
+            # the file a later reset() loads is always one complete
+            # writer's state, never an interleaved/corrupt mix of two.
+            tmp_path = out_dir / f".checkpoint.state.tmp.{os.getpid()}"
+            with self.emu.files_lock:
+                with open(tmp_path, "wb") as f:
+                    self.emu.pyboy.save_state(f)
+                # os.replace can transiently raise WinError 5 (access
+                # denied) on Windows when another process -- another
+                # worker's os.replace into this same path, or the AV's
+                # real-time scanner -- briefly holds the destination file
+                # without FILE_SHARE_DELETE. Retry instead of crashing the
+                # whole SubprocVecEnv worker over a checkpoint write.
+                for attempt in range(5):
+                    try:
+                        os.replace(tmp_path, out_path)
+                        break
+                    except PermissionError:
+                        if attempt == 4:
+                            print(
+                                f"Warning: giving up replacing {out_path} "
+                                f"after repeated PermissionError; leaving "
+                                f"existing checkpoint in place."
+                            )
+                            tmp_path.unlink(missing_ok=True)
+                        else:
+                            time.sleep(0.05 * (2**attempt))
+
     def step(self, action: int):
         assert self._memory is not None, "Call reset() before step()"
         memory, inputs, reward, terminated, truncated = self.emu.step_discrete(
@@ -376,6 +444,8 @@ class PokemonRedEnv(gym.Env):
         )
         self._memory = memory
         self._step_count += 1
+        if self.save_checkpoints and self.emu.data.last_milestone_payouts:
+            self._save_milestone_checkpoints()
         if self.emu.data.loop_flag:
             self._episode_loop = True
             self._episode_loop_causes |= self.emu.data.loop_causes
@@ -542,6 +612,7 @@ def make_pokemon_env(
     render_mode: str | None = None,
     n_workers: int = 1,
     collect_heatmap: bool = False,
+    save_checkpoints: bool = False,
 ):
     """Factory for SubprocVecEnv workers."""
 
@@ -559,6 +630,7 @@ def make_pokemon_env(
             worker_rank=rank,
             n_workers=n_workers,
             collect_heatmap=collect_heatmap,
+            save_checkpoints=save_checkpoints,
         )
         env.reset(seed=seed + rank)
         return env

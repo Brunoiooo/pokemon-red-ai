@@ -99,7 +99,8 @@ def run_mock_cases() -> None:
     milestone, step = data.reward(bytes(prev), action=0)
     print(f"COWARD flee enemy=5 party_max=8: exit={exit_r} milestone={milestone}")
     assert exit_r == data.flee_coward_penalty == -1.0
-    assert abs(milestone - exit_r - data.new_screen_reward) < 1e-6
+    # No more one-time new-map bonus (reward_map is gone) — milestone is just exit_r.
+    assert abs(milestone - exit_r) < 1e-6
 
     # Smart flee
     prev = build_prev(in_battle=True, enemy_level=12, party_levels=[8, 3, 1])

@@ -32,7 +32,7 @@ python cli.py train --workers 8
 python train_ppo.py --workers 8 --timesteps 2000000
 ```
 
-Auto-curriculum is **on by default**: when ~70% of recent episodes succeed at the current goal, training advances through a soft story order (leave house → Oak/Route 1 → parcel/map → each gym fight + badge → legendaries / extras → all badges). Stages whose flags are **already true** are skipped (flags can be earned out of order).
+Auto-curriculum is **on by default** and order-free: whenever ~70% of recent episodes clear *some* goal (in-game event order isn't reliable, so there's no fixed sequence to walk), training gets reassigned a fresh, randomly-picked not-yet-satisfied goal (see `curriculum_config.pick_new_goal`). Every goal an episode actually reaches — in whatever order it happens to reach it — gets its own `saves/<goal>/checkpoint.state` written on the spot (see `PokemonRedEnv._save_milestone_checkpoints`), so that pool of usable starting points just keeps growing.
 
 Disable with `--no-auto-curriculum` if you want a fixed goal.
 
@@ -40,7 +40,7 @@ Useful flags:
 
 | Flag | Meaning |
 |------|---------|
-| `--stage stage_left_house` | Starting stage (auto-advances through STAGE_ORDER) |
+| `--stage stage_left_house` | Starting goal (auto-curriculum reassigns randomly from there, order-free) |
 | `--no-auto-curriculum` | Keep a fixed stage/goal |
 | `--goal badge1` | Override episode success condition |
 | `--workers 8` | Parallel `SubprocVecEnv` envs |
@@ -56,8 +56,8 @@ tensorboard --logdir logs
 
 Watch especially:
 
-- `pokemon/goal_success_rate` — success on the *current* curriculum goal
-- `pokemon/curriculum_stage_idx` — index into `STAGE_ORDER` as auto-curriculum advances
+- `pokemon/goal_success_rate` — fraction of recent episodes that cleared *some* goal (any goal)
+- `pokemon/curriculum_stage_idx` — informational only: STAGE_ORDER's list position of the currently-assigned goal (STAGE_ORDER no longer drives which goal comes next)
 - `pokemon/badges_mean` — average badges held at episode end
 - `pokemon/loop_episode_rate` (target ≪ 0.10)
 - `rollout/ep_rew_mean`
@@ -68,7 +68,7 @@ Watch especially:
 python cli.py eval --gui
 ```
 
-Auto-picks the newest `best_model.zip` / `ppo_latest.zip`. With **auto-curriculum** (default), one episode keeps playing after each goal and skips already-satisfied flags/badges (prints `✓ stage_left_house cleared → advancing to stage_route1_entry`).
+Auto-picks the newest `best_model.zip` / `ppo_latest.zip`. With **auto-curriculum** (default), one episode keeps playing after each goal — whichever fires next, in whatever order — and each one saves its own `saves/<goal>/checkpoint.state` when `--save-checkpoints` is on (prints `[ok] <goal> cleared -> advancing to <next-random-goal>`).
 
 ```bash
 python cli.py eval --gui --no-auto-curriculum --goal left_house   # fixed single goal
@@ -83,9 +83,9 @@ Configured in [`curriculum_config.py`](curriculum_config.py) (~30 stages):
 - Each gym: `fought_*` flag then corresponding badge bit (1–8)  
 - Side / late: SS Anne, Lapras, Snorlax, birds, fossil, Mewtwo, all badges  
 
-`STAGE_ORDER` is only a **recommended** order. Eval/train auto-advance skips any stage whose RAM goal is already satisfied, so out-of-order event flags do not block progress.
+`STAGE_ORDER` is **not** a progression order — it only backs the goal one-hot's indexing and cosmetic listings (`--list-stages`). Which goal gets assigned next (in training, eval, and debug-play) is a random, order-free pick among not-yet-satisfied goals (`curriculum_config.pick_new_goal`), preferring ones that already have a `saves/<goal>/checkpoint.state` written.
 
-Create mid-game saves by copying `checkpoint.state` into `saves/<stage_name>/` (optional; missing saves fall back to `start`).
+`saves/<goal_name>/checkpoint.state` gets written automatically the moment any episode reaches that goal (see `--save-checkpoints`, on by default); missing saves fall back to `start`.
 
 ## Environment details
 

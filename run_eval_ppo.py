@@ -114,6 +114,7 @@ def run(args):
         worker_rank=0,
         n_workers=1,
         collect_heatmap=args.heatmap,
+        save_checkpoints=args.save_checkpoints,
     )
     # Monitor forbids step() after terminated; in-place advance keeps the
     # episode alive, so Monitor is fine. Still skip when auto for clarity.
@@ -123,7 +124,7 @@ def run(args):
 
     print(f"Loading {model_path}")
     print(f"Auto curriculum: {'ON' if auto else 'OFF'}")
-    print(f"Save checkpoints on goal success: {'ON' if args.save_checkpoints else 'OFF'}")
+    print(f"Save checkpoints (any goal, order-free): {'ON' if args.save_checkpoints else 'OFF'}")
     print(f"Start stage: {stage}  goal={goal}  max_steps={max_steps}")
     model = MaskablePPO.load(str(model_path), device="cpu" if args.cpu else "auto")
     data = raw.emu.data
@@ -180,6 +181,20 @@ def run(args):
             steps += 1
             if info.get("loop_flag"):
                 loop_hits += 1
+
+            # Dynamic, order-free checkpoint capture (see
+            # PokemonRedEnv._save_milestone_checkpoints, called from inside
+            # env.step() above when save_checkpoints=True): every
+            # GOAL_CANDIDATES event/badge newly satisfied this step already
+            # got its own saves/<name>/checkpoint.state written, whatever
+            # event it is -- not just the curriculum's currently-assigned
+            # goal or STAGE_ORDER's heuristic order. This is just the
+            # -v/-vv visibility into that; the write itself already happened.
+            if verbose and args.save_checkpoints:
+                for milestone_name, _payout in data.last_milestone_payouts:
+                    print(
+                        f"  [checkpoint] saved -> saves/{milestone_name}/checkpoint.state"
+                    )
 
             if args.heatmap and info.get("heatmap_positions"):
                 from utils.PositionHeatmap import push_episode
@@ -300,7 +315,7 @@ def run(args):
                     f"  [step] {steps:4d} act={aname:6s} rew={reward:+.4f} "
                     f"total={total:7.2f} map={map_id} mode={_mode_flags(raw.emu):9s} "
                     f"loop={int(bool(info.get('loop_flag')))} "
-                    f"in_goal_map={int(in_allowed_map)} "
+                    f"in_goal_map={int(has_active_event)} "
                     f"ms={info.get('milestone')}"
                 )
 
@@ -465,6 +480,7 @@ def run_batch(args):
     print(f"Workers:    {n_workers}")
     print(f"Stage:      {stage}  goal={goal}  max_steps={max_steps}")
     print(f"Auto curr.: {'ON' if auto else 'OFF'}")
+    print(f"Save ckpts: {'ON' if args.save_checkpoints else 'OFF'} (any goal, order-free)")
     print(f"Metrics:    {', '.join(args.batch_metrics)}")
     print(f"Out dir:    {out_dir}")
     print(f"Live view:  {'ON' if args.heatmap else 'OFF'}")
@@ -493,6 +509,7 @@ def run_batch(args):
             render_mode=None,
             n_workers=n_workers,
             collect_heatmap=True,
+            save_checkpoints=args.save_checkpoints,
         )
 
     if n_workers <= 1:
@@ -616,10 +633,10 @@ def main():
     )
     p.add_argument(
         "--save-checkpoints",
-        action="store_true",
-        default=False,
+        action=argparse.BooleanOptionalAction,
+        default=True,
         help="On goal success, overwrite saves/<new_stage>/checkpoint.state with "
-             "the reached state (opt-in; off by default)",
+             "the reached state (default: on; pass --no-save-checkpoints to disable)",
     )
     p.add_argument("--gui", action="store_true")
     p.add_argument("--cpu", action="store_true")
