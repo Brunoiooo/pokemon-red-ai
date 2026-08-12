@@ -2417,6 +2417,36 @@ class Data:
             and not self.is_battle(memory)
         )
 
+    def cutscene_skip_frames(self, memory: PyBoyMemoryView | bytes) -> int:
+        """Frames still guaranteed input-locked, read straight from pokered's
+        own countdown registers instead of guessing a fixed hold length.
+
+        wIgnoreInputCounter (D13A) ticks down to 0 once per frame whenever
+        BIT_DISABLE_JOYPAD is set — the "ignore input for half a second"
+        window the engine sets on every door/warp transition (see
+        pret/pokered engine/play_time.asm CountDownIgnoreInputBitReset,
+        home/overworld.asm IgnoreInputForHalfSecond).
+
+        wSimulatedJoypadStatesIndex (CD38) ticks down once per frame
+        whenever BIT_SCRIPTED_MOVEMENT_STATE is set — the remaining length
+        of a forced-walk script (e.g. following Oak into the lab); see
+        pret/pokered home/overworld.asm's simulated-button-press handling.
+
+        Both are exact remaining-frame counts, not booleans, so a caller can
+        tick straight through the whole locked window in one go instead of
+        polling it away frame_skip frames at a time across many wasted
+        env.step() calls. Returns 0 when neither applies (still locked for
+        another reason, e.g. wJoyIgnore/link state) — caller should fall
+        back to single-frame ticks in that case.
+        """
+        status5 = int(memory[0xD730])
+        remaining = 0
+        if status5 & 0x20:  # BIT_DISABLE_JOYPAD
+            remaining = max(remaining, int(memory[0xD13A]))
+        if status5 & 0x80:  # BIT_SCRIPTED_MOVEMENT_STATE
+            remaining = max(remaining, int(memory[0xCD38]))
+        return remaining
+
     def dialog_id(self, memory: PyBoyMemoryView | bytes):
         return memory[0xCF13]
 

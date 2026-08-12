@@ -197,6 +197,7 @@ class Emulator:
         action_idx = int(action_idx) % N_ACTIONS
         duration = max(1, int(duration))
 
+        self._skip_locked_frames()
         self._press_action(action_idx)
 
         if render_each:
@@ -246,6 +247,31 @@ class Emulator:
     def is_new_episode(self, memory: bytes):
         return ()
 
+    # Upper bound on a single _skip_locked_frames() call, in emulator frames
+    # (~34s at 60fps). Generous enough for the longest scripted walk in the
+    # game while still bounding worst-case blocking time if is_cutscene_locked
+    # somehow never clears (e.g. an unrecognized lock source).
+    MAX_CUTSCENE_SKIP = 2048
+
+    def _skip_locked_frames(self) -> int:
+        """Jump straight through a forced-walk / warp-transition window.
+
+        Reads pokered's own frame-exact countdown registers (see
+        Data.cutscene_skip_frames) so a whole cutscene collapses into one or
+        two big pyboy.tick() calls instead of being polled away
+        frame_skip-frames-at-a-time across many separate env.step() calls —
+        every one of which discards its action anyway per _press_action.
+        """
+        total = 0
+        while total < self.MAX_CUTSCENE_SKIP and self.data.is_cutscene_locked(
+            self.pyboy.memory
+        ):
+            n = self.data.cutscene_skip_frames(self.pyboy.memory)
+            n = max(1, min(n, self.MAX_CUTSCENE_SKIP - total))
+            self.pyboy.tick(n, render=self.use_sdl, sound=False)
+            total += n
+        return total
+
     def _press_action(self, action_idx: int) -> None:
         # During forced walks the engine ignores (or may override) input — skip
         # presses so we don't disturb scripted sequences. Dialog/menu still need A/B.
@@ -273,6 +299,7 @@ class Emulator:
         action_idx = meta_action // len(DURATION_BINS)
         duration = DURATION_BINS[meta_action % len(DURATION_BINS)]
 
+        self._skip_locked_frames()
         self._press_action(action_idx)
 
         if render_each:
