@@ -49,7 +49,6 @@ from curriculum_config import (
     next_stage,
     stage_for_goal,
 )
-from pokemon.Data import GOAL_ALLOWED_MAPS, GOAL_LEFT_HOUSE
 from pokemon.Emulator import Emulator
 
 BUTTON_NAMES = ["A", "B", "Start", "Select", "Left", "Right", "Up", "Down", "None"]
@@ -196,14 +195,14 @@ def fuse_line(emu: Emulator) -> str:
         f"menu={int(data.in_menu_ticks)}/{data.max_useless_ticks} "
         f"loop={data.loop_streak}/{data.max_loop_streak}"
     )
-    # Per-map dwell time vs. its flat step allowance (Data.map_dwell_budget)
-    # — informational only, no reward penalty is tied to it. Only meaningful
-    # while GOAL_ALLOWED_MAPS restricts the active goal, so it's omitted (not
-    # just zeroed) otherwise.
-    if data.goal in GOAL_ALLOWED_MAPS:
-        budget = data.map_dwell_budget
-        dwell = data.map_id_visit_counts.get(data.map_id(emu.pyboy.memory), 0)
-        line += f" map={dwell}/{budget:.0f}"
+    # Size-scaled per-map world-step budget (see Data.map_step_budget) —
+    # exceeding this both penalizes every step and truncates the episode
+    # (Data.map_budget_exceeded), unlike the old flat/informational-only
+    # map_dwell_budget display this replaces.
+    mid = data.map_id(emu.pyboy.memory)
+    budget = data.map_step_budget(mid)
+    used = data.world_map_step_counts.get(mid, 0)
+    line += f" map_budget={used}/{budget}"
     return line
 
 
@@ -247,7 +246,7 @@ def _resolve_stage_goal(args: argparse.Namespace) -> tuple[str, str]:
         stage = args.from_checkpoint
     if stage is None:
         stage = "stage_left_house"
-    return stage, get_goal_for_stage(stage) or GOAL_LEFT_HOUSE
+    return stage, get_goal_for_stage(stage) or GOAL_ORDER[0]
 
 
 def _clear_visits(data) -> None:

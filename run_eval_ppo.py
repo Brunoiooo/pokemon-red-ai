@@ -77,7 +77,6 @@ def run(args):
         resolve_stage_name,
     )
     from env.pokemon_red_env import PokemonRedEnv
-    from pokemon.Data import GOAL_ALLOWED_MAPS
 
     model_path = resolve_model_path(getattr(args, "model", None))
     auto = bool(getattr(args, "auto_curriculum", True))
@@ -155,13 +154,13 @@ def run(args):
         maps_seen: list[int] = [int(last_map)] if last_map is not None else []
         loop_hits = 0
         blocked_printed: set[str] = set()
-        # -v: off-goal-map tracking (mirrors reward_off_goal_camp's
-        # GOAL_ALLOWED_MAPS check in Data.py) — surfaces whether the agent is
-        # camping outside the current goal's critical path, not just whether
-        # loop_flag fired (which also covers spatial/menu loops on-path).
+        # -v: off-goal-map tracking — surfaces whether the agent is on a map
+        # with no reachable, unfinished progress (see Data.active_map_events/
+        # reward_active_map_presence), not just whether loop_flag fired
+        # (which also covers spatial/menu loops on an otherwise fine map).
         off_path_steps = 0
-        last_in_allowed_map: bool | None = None
-        last_over_dwell_budget: bool | None = None
+        last_has_active_event: bool | None = None
+        last_over_map_budget: bool | None = None
         if verbose:
             print(
                 f"\n=== Episode {ep + 1}/{args.episodes} start "
@@ -215,41 +214,37 @@ def run(args):
                     )
                 last_milestone = milestone
 
-            # -v: are we inside GOAL_ALLOWED_MAPS for the *current* goal? Only
+            # -v: does the current map have a reachable, unfinished
+            # GOAL_CANDIDATES event right now (see active_map_events)? Only
             # print on a status flip (like [map]/[milestone]) so a long camp
-            # doesn't spam a line per step; the [step] line below still shows
-            # the instantaneous flag on every sampled/printed step.
+            # doesn't spam a line per step.
             cur_goal = info.get("goal")
-            allowed_maps = GOAL_ALLOWED_MAPS.get(cur_goal)
-            in_allowed_map = allowed_maps is None or (
-                map_id is not None and int(map_id) in allowed_maps
-            )
-            if not in_allowed_map:
+            has_active_event = data.has_active_map_event()
+            if not has_active_event:
                 off_path_steps += 1
-            if verbose and in_allowed_map != last_in_allowed_map:
-                status = "on-path" if in_allowed_map else "OFF-PATH"
+            if verbose and has_active_event != last_has_active_event:
+                status = "on-path" if has_active_event else "OFF-PATH"
                 print(
                     f"  [goal-map] step={steps:4d} map={map_id} goal={cur_goal} "
                     f"-> {status} (off_path_steps={off_path_steps})"
                 )
-            last_in_allowed_map = in_allowed_map
+            last_has_active_event = has_active_event
 
-            # -v: map-dwell budget flip (see Data.map_dwell_budget) — the
-            # "fair share" of the episode (max_steps / len(allowed_maps)) the
-            # current map has to itself. Informational only, no reward
-            # penalty is tied to it. Only meaningful on-path (allowed_maps
-            # restricts the goal); printed on flip like [goal-map] above.
-            if verbose and allowed_maps and in_allowed_map:
-                budget = data.map_dwell_budget
-                dwell = data.map_id_visit_counts.get(int(map_id), 0) if map_id is not None else 0
-                over_budget = dwell > budget
-                if over_budget != last_over_dwell_budget:
+            # -v: size-scaled per-map step budget flip (see
+            # Data.map_step_budget/map_budget_exceeded) — exceeding this both
+            # penalizes every step and truncates the episode, unlike the old
+            # flat/informational-only map_dwell_budget this replaces.
+            if verbose and map_id is not None:
+                budget = data.map_step_budget(int(map_id))
+                used = data.world_map_step_counts.get(int(map_id), 0)
+                over_budget = used > budget
+                if over_budget != last_over_map_budget:
                     print(
-                        f"  [map-dwell] step={steps:4d} map={map_id} "
-                        f"dwell={dwell}/{budget:.0f} "
+                        f"  [map-budget] step={steps:4d} map={map_id} "
+                        f"used={used}/{budget} "
                         f"-> {'OVER BUDGET' if over_budget else 'within budget'}"
                     )
-                last_over_dwell_budget = over_budget
+                last_over_map_budget = over_budget
 
             # -v/-vv: goal-payout bookkeeping — proves the regress/re-pay farm
             # loop is closed (paid once, then blocked on re-entry) and shows

@@ -24,12 +24,7 @@ from curriculum_config import (
     next_stage,
     stage_for_goal,
 )
-from pokemon.Data import (
-    GOAL_BADGE_1,
-    GOAL_LEFT_HOUSE,
-    GOAL_ROUTE_1,
-    Data,
-)
+from pokemon.Data import BADGE_GOALS, Data
 from pokemon.Emulator import N_ACTIONS, Emulator
 
 # Flattened float feature groups from Data.inputs() (excluding images / raw ids).
@@ -83,7 +78,7 @@ class PokemonRedEnv(gym.Env):
         save_state: str = "start",
         max_steps: int = 5000,
         frame_skip: int = 16,
-        goal: str = GOAL_BADGE_1,
+        goal: str = BADGE_GOALS[0],
         render_mode: str | None = None,
         curriculum_mix: float = 0.0,
         curriculum_saves: list[str] | None = None,
@@ -118,6 +113,7 @@ class PokemonRedEnv(gym.Env):
         self._step_count = 0
         self._episode_loop = False
         self._episode_loop_causes: set[str] = set()
+        self._goals_peak_count = 0
         # Base curriculum owned by the trainer/callback. In-episode auto_advance
         # is ephemeral — reset() restores these so workers don't permanently
         # drift to later stages and stop counting the current goal.
@@ -347,6 +343,7 @@ class PokemonRedEnv(gym.Env):
         self._step_count = 0
         self._episode_loop = False
         self._episode_loop_causes = set()
+        self._goals_peak_count = 0
         obs = self._torch_inputs_to_obs(inputs)
         info = self._info(
             terminated=False,
@@ -443,6 +440,11 @@ class PokemonRedEnv(gym.Env):
         mem = self.emu.pyboy.memory
         badges = data.badges(mem)
         live_goals = data.live_story_goals()
+        # Peak live-goal count seen this episode (see reset()'s init) — this
+        # bookkeeping used to live on Data (_peak_live_goals), tied to the
+        # old reward_goal_regression; it's purely a monitoring concern now,
+        # so it lives on the env wrapper instead.
+        self._goals_peak_count = max(self._goals_peak_count, len(live_goals))
         # Mean dwell-steps per map touched so far this episode (see
         # map_id_visit_counts / Data.map_dwell_budget) — how close episodes
         # run to the flat per-map budget on average, for the training
@@ -478,10 +480,14 @@ class PokemonRedEnv(gym.Env):
             "milestones_hit": sorted(data._milestones_hit),
             "goals_live": live_goals,
             "goals_live_count": len(live_goals),
-            "goals_peak_count": int(data._peak_live_goals),
-            "goals_regressed": list(data._last_regressed),
-            "goals_regressed_hard": list(data._last_hard_regressed),
-            "goals_cleared": sorted(data._cleared_goals),
+            "goals_peak_count": self._goals_peak_count,
+            "goals_regressed": list(data.last_regressed),
+            # No more soft/hard distinction (see Data.last_regressed) —
+            # every regression is real now, so this is the same list.
+            "goals_regressed_hard": list(data.last_regressed),
+            # Vestigial, always empty — the curriculum-clear-exemption
+            # bookkeeping this reported is gone (see Data.mark_goal_cleared).
+            "goals_cleared": [],
             "menu_ticks": float(data.in_menu_ticks),
             "steps": self._step_count,
             "terminated": terminated,
@@ -513,7 +519,7 @@ def make_pokemon_env(
     save_state: str = "start",
     max_steps: int = 5000,
     frame_skip: int = 16,
-    goal: str = GOAL_BADGE_1,
+    goal: str = BADGE_GOALS[0],
     rank: int = 0,
     seed: int = 0,
     curriculum_mix: float = 0.3,
@@ -547,12 +553,10 @@ def make_pokemon_env(
     return _init
 
 
-# Re-export goals for trainers / curriculum.
+# Re-export for trainers / curriculum.
 __all__ = [
     "PokemonRedEnv",
     "make_pokemon_env",
     "VECTOR_DIM",
-    "GOAL_BADGE_1",
-    "GOAL_LEFT_HOUSE",
-    "GOAL_ROUTE_1",
+    "BADGE_GOALS",
 ]

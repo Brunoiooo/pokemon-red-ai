@@ -72,11 +72,12 @@ Six color metrics (cycle with 'r'), independent of the view mode:
   recorded battles (< _MIN_BATTLE_SAMPLES) rather than shown at a noisy
   100%/0%.
 
-Off-goal map cue (combined and single views, all metrics): any map not in
-GOAL_ALLOWED_MAPS for the active stage's goal — the same critical-path set
-reward_off_goal_camp penalizes dwelling outside of — is labeled and tinted
-red. A map-level classification, not a new per-tile signal, and skipped
-for the "All" stage pool (no single goal to check against).
+Off-goal map cue (combined and single views, all metrics): any map outside
+the active stage goal's small event_graph neighborhood (its own home map
+plus inferred parent/child events' home maps — see _allowed_maps_lookup) is
+labeled and tinted red. A map-level classification, not a new per-tile
+signal, and skipped for the "All" stage pool (no single goal to check
+against) or a goal with no event_graph entry (e.g. a badge).
 
 Per-tile numeric value labels (toggle with 'v'), independent of view mode
 and metric: prints the exact per-tile value on top of each cell, for
@@ -745,22 +746,37 @@ def _stage_order_lookup() -> list[str]:
 
 
 def _allowed_maps_lookup() -> dict[str, frozenset[int] | None]:
-    """stage label -> GOAL_ALLOWED_MAPS entry for that stage's goal, for the
-    off-goal-map visual cue in the combined/single views. A missing or None
-    entry (stage not recognized, or its goal has no restriction in
-    GOAL_ALLOWED_MAPS) just means off-goal highlighting is skipped for that
-    stage — it's the same map-level check reward_off_goal_camp uses, not a
-    new per-tile signal, so there's nothing to fall back to."""
+    """stage label -> the small set of maps relevant to that stage's goal,
+    for the off-goal-map visual cue in the combined/single views.
+
+    There is no more hand-curated GOAL_ALLOWED_MAPS critical-path set to
+    read (see Data.py's generic goal system) — this instead uses
+    event_graph.py's static-analysis map attribution: the goal event's own
+    home map plus its inferred parent/child events' home maps (the same
+    small neighborhood Data.active_map_events draws on for
+    reward_active_map_presence, not a hand-picked full path). A goal with no
+    event_graph entry (e.g. a badge — wObtainedBadges has no map of its
+    own) or an unrecognized stage just skips highlighting for that stage."""
     try:
         from curriculum_config import get_goal_for_stage
 
-        from pokemon.Data import GOAL_ALLOWED_MAPS
+        from pokemon.event_graph import EVENT_GRAPH
     except Exception:
         return {}
     out: dict[str, frozenset[int] | None] = {}
     for stage in _stage_order_lookup():
         try:
-            out[stage] = GOAL_ALLOWED_MAPS.get(get_goal_for_stage(stage))
+            goal = get_goal_for_stage(stage)
+            info = EVENT_GRAPH.get(goal)
+            if info is None:
+                out[stage] = None
+                continue
+            map_ids = {info["map_id"]} if info["map_id"] is not None else set()
+            for name in (*info["parents"], *info["children"]):
+                neighbor = EVENT_GRAPH.get(name)
+                if neighbor and neighbor["map_id"] is not None:
+                    map_ids.add(neighbor["map_id"])
+            out[stage] = frozenset(map_ids) if map_ids else None
         except Exception:
             continue
     return out

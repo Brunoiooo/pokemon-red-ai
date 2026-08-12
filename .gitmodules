@@ -1,0 +1,3 @@
+[submodule "reference/pokered"]
+	path = reference/pokered
+	url = https://github.com/pret/pokered.git

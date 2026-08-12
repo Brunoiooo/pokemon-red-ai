@@ -1,4 +1,5 @@
 import hashlib
+import math
 from collections import deque
 from multiprocessing.synchronize import RLock
 import pickle
@@ -7,143 +8,13 @@ from dataclasses import dataclass, field
 from pyboy import PyBoy, PyBoyMemoryView
 import torch
 
+from pokemon import event_constants as _event_constants
+from pokemon import event_graph as _event_graph
+from pokemon import map_constants as _map_constants
+
 # Raw WRAM addresses below are documented at:
 # https://datacrystal.tcrf.net/wiki/Pokémon_Red_and_Blue/RAM_map
 
-
-# Pokemon Red early-game map IDs (used for curriculum milestones).
-MAP_PALLET_TOWN = 0
-MAP_ROUTE_1 = 12
-MAP_REDS_HOUSE_2F = 37
-MAP_REDS_HOUSE_1F = 38
-MAP_RIVALS_HOUSE = 39
-MAP_OAKS_LAB = 40
-HOUSE_MAPS = frozenset({MAP_REDS_HOUSE_1F, MAP_REDS_HOUSE_2F})
-
-# Map IDs for the rest of the curriculum (GOAL_ALLOWED_MAPS below). wCurMap
-# values match the pret/pokered disassembly's map id ordering:
-# https://github.com/pret/pokered/blob/master/constants/map_constants.asm
-# (cross-checked against the RAM map doc linked above).
-MAP_VIRIDIAN_CITY = 1
-MAP_PEWTER_CITY = 2
-MAP_CERULEAN_CITY = 3
-MAP_LAVENDER_TOWN = 4
-MAP_VERMILION_CITY = 5
-MAP_CELADON_CITY = 6
-MAP_FUCHSIA_CITY = 7
-MAP_CINNABAR_ISLAND = 8
-MAP_INDIGO_PLATEAU = 9
-MAP_SAFFRON_CITY = 10
-
-MAP_ROUTE_2 = 13
-MAP_ROUTE_3 = 14
-MAP_ROUTE_4 = 15
-MAP_ROUTE_5 = 16
-MAP_ROUTE_6 = 17
-MAP_ROUTE_7 = 18
-MAP_ROUTE_8 = 19
-MAP_ROUTE_9 = 20
-MAP_ROUTE_10 = 21
-MAP_ROUTE_11 = 22
-MAP_ROUTE_12 = 23
-MAP_ROUTE_13 = 24
-MAP_ROUTE_14 = 25
-MAP_ROUTE_15 = 26
-MAP_ROUTE_16 = 27
-MAP_ROUTE_17 = 28
-MAP_ROUTE_18 = 29
-MAP_ROUTE_19 = 30
-MAP_ROUTE_20 = 31
-MAP_ROUTE_21 = 32
-MAP_ROUTE_22 = 33
-MAP_ROUTE_23 = 34
-MAP_ROUTE_24 = 35
-MAP_ROUTE_25 = 36
-
-MAP_VIRIDIAN_POKECENTER = 41
-MAP_VIRIDIAN_MART = 42
-MAP_VIRIDIAN_GYM = 45
-MAP_VIRIDIAN_FOREST_NORTH_GATE = 47
-MAP_ROUTE_2_GATE = 49
-MAP_VIRIDIAN_FOREST_SOUTH_GATE = 50
-MAP_VIRIDIAN_FOREST = 51
-MAP_PEWTER_GYM = 54
-MAP_PEWTER_MART = 56
-MAP_PEWTER_POKECENTER = 58
-MAP_MT_MOON_1F = 59
-MAP_MT_MOON_B1F = 60
-MAP_MT_MOON_B2F = 61
-MAP_CERULEAN_POKECENTER = 64
-MAP_CERULEAN_GYM = 65
-MAP_CERULEAN_MART = 67
-MAP_MT_MOON_POKECENTER = 68
-MAP_ROUTE_5_GATE = 70
-MAP_UNDERGROUND_PATH_ROUTE_5 = 71
-MAP_ROUTE_6_GATE = 73
-MAP_UNDERGROUND_PATH_ROUTE_6 = 74
-MAP_ROUTE_7_GATE = 76
-MAP_UNDERGROUND_PATH_ROUTE_7 = 77
-MAP_ROUTE_8_GATE = 79
-MAP_UNDERGROUND_PATH_ROUTE_8 = 80
-MAP_ROCK_TUNNEL_POKECENTER = 81
-MAP_ROCK_TUNNEL_1F = 82
-MAP_POWER_PLANT = 83
-MAP_ROUTE_12_GATE_1F = 87
-MAP_BILLS_HOUSE = 88
-MAP_VERMILION_POKECENTER = 89
-MAP_VERMILION_MART = 91
-MAP_VERMILION_GYM = 92
-MAP_VERMILION_DOCK = 94
-MAP_VICTORY_ROAD_1F = 108
-MAP_HALL_OF_FAME = 118
-MAP_UNDERGROUND_PATH_NORTH_SOUTH = 119
-MAP_CHAMPIONS_ROOM = 120
-MAP_UNDERGROUND_PATH_WEST_EAST = 121
-MAP_CELADON_MART_1F = 122
-MAP_CELADON_POKECENTER = 133
-MAP_CELADON_GYM = 134
-MAP_GAME_CORNER = 135
-MAP_LAVENDER_POKECENTER = 141
-MAP_MR_FUJIS_HOUSE = 149
-MAP_LAVENDER_MART = 150
-MAP_FUCHSIA_MART = 152
-MAP_FUCHSIA_POKECENTER = 154
-MAP_FUCHSIA_GYM = 157
-MAP_POKEMON_MANSION_1F = 165
-MAP_CINNABAR_GYM = 166
-MAP_CINNABAR_LAB = 167
-MAP_CINNABAR_POKECENTER = 171
-MAP_CINNABAR_MART = 172
-MAP_INDIGO_PLATEAU_LOBBY = 174
-MAP_FIGHTING_DOJO = 177
-MAP_SAFFRON_GYM = 178
-MAP_SAFFRON_MART = 180
-MAP_SILPH_CO_1F = 181
-MAP_SAFFRON_POKECENTER = 182
-MAP_ROUTE_15_GATE_1F = 184
-MAP_ROUTE_16_GATE_1F = 186
-MAP_ROUTE_18_GATE_1F = 190
-MAP_SEAFOAM_ISLANDS_1F = 192
-MAP_ROUTE_22_GATE = 193
-MAP_VICTORY_ROAD_2F = 194
-MAP_VICTORY_ROAD_3F = 198
-MAP_LANCES_ROOM = 113
-
-# Multi-floor dungeons: grouped by area instead of one constant per floor.
-MAP_SS_ANNE = frozenset(range(95, 105))  # 1F..B1F_ROOMS ($5F-$68)
-MAP_POKEMON_TOWER = frozenset(range(142, 149))  # 1F-7F ($8E-$94)
-MAP_SEAFOAM_ISLANDS_CAVES = frozenset({159, 160, 161, 162})  # B1F-B4F ($9F-$A2)
-MAP_ROCKET_HIDEOUT = frozenset(
-    {199, 200, 201, 202, 203}
-)  # B1F-B4F + elevator ($C7-$CB)
-MAP_CINNABAR_LAB_ROOMS = frozenset(
-    {167, 168, 169, 170}
-)  # main + trade/metronome/fossil ($A7-$AA)
-MAP_SILPH_CO = frozenset(
-    {181, 207, 208, 209, 210, 211, 212, 213, 233, 234, 235, 236}
-)  # 1F, 2F-8F, 9F-11F, elevator
-MAP_CERULEAN_CAVE = frozenset({226, 227, 228})  # 2F, B1F, 1F ($E2-$E4)
-MAP_ELITE_FOUR = frozenset({245, 246, 247})  # Lorelei/Bruno/Agatha rooms ($F5-$F7)
 
 # Emulator button indices — A/B must be mashable to start and advance dialogs.
 ACTION_A = 0
@@ -161,7 +32,6 @@ LOOP_CAUSES = (
     "spatial_loop",
     "menu_spam",
     "menu_loop",
-    "off_goal_camp",
 )
 
 # Which fuse in truncated() ended the episode — "max_steps" is added by
@@ -173,64 +43,15 @@ TRUNCATE_CAUSES = (
     "loop_streak",
     "stuck_battle",
     "stuck_menu",
+    "map_budget",
     "max_steps",
 )
 
-# Flat per-map step allowance — the single source of truth curriculum_config's
-# get_stage_max_steps() multiplies by a goal's len(GOAL_ALLOWED_MAPS) to derive
-# that stage's episode max_steps (so an episode always gives every allowed map
-# the same per-map allowance no matter how many maps the goal covers), and the
-# normalization cap for map_id_visit_grid's dwell-time observation
-# (Data.map_visit_grid_cap). No longer backs a reward penalty — dwelling on a
-# map is informational input for the model only (see map_id_visit_grid), not
-# something it's punished for.
+# Normalization cap for map_id_visit_grid's dwell-time observation (see
+# Data.map_visit_grid_cap). Purely informational input for the model — the
+# live reward-affecting per-map budget is size-scaled (see map_step_budget /
+# map_budget_steps_per_sqrt_block), not this flat constant.
 MAP_DWELL_BUDGET = 256
-
-# Curriculum / episode goals (map, event flags, badges).
-GOAL_LEFT_HOUSE = "left_house"
-# Stepping onto Route 1 before getting a starter auto-triggers Oak's
-# "it's dangerous" intercept — this fires as a dialog while map_id is still
-# MAP_PALLET_TOWN (the map never actually transitions to Route 1 for this
-# pre-starter trigger, confirmed live: map=0 dialog_id=1). Distinct from
-# GOAL_ROUTE_1 below (the later, post-starter return trip, a real map change).
-GOAL_ROUTE_1_ENTRY = "route1_entry"
-ROUTE1_ENTRY_DIALOG_ID = 1
-GOAL_ROUTE_1 = "route1"
-GOAL_OAKS_PARCEL = "oaks_parcel"
-# Between picking up the parcel and getting credit for the Town Map: walk it
-# back to Oak. Gen 1 lets key items be deposited into the PC item storage
-# (no separate key-item pocket), so "delivered" must check both the bag and
-# the PC box — otherwise stashing it in the PC would fake completion.
-GOAL_GAVE_PARCEL = "gave_parcel"
-GOAL_TOWN_MAP = "town_map"
-GOAL_FOUGHT_BROCK = "fought_brock"
-GOAL_FOUGHT_MISTY = "fought_misty"
-GOAL_FOUGHT_SURGE = "fought_surge"
-GOAL_FOUGHT_ERIKA = "fought_erika"
-GOAL_FOUGHT_KOGA = "fought_koga"
-GOAL_FOUGHT_SABRINA = "fought_sabrina"
-GOAL_FOUGHT_BLAINE = "fought_blaine"
-GOAL_FOUGHT_GIOVANNI = "fought_giovanni"
-GOAL_BADGE_1 = "badge1"
-GOAL_BADGE_2 = "badge2"
-GOAL_BADGE_3 = "badge3"
-GOAL_BADGE_4 = "badge4"
-GOAL_BADGE_5 = "badge5"
-GOAL_BADGE_6 = "badge6"
-GOAL_BADGE_7 = "badge7"
-GOAL_BADGE_8 = "badge8"
-GOAL_SS_ANNE = "ss_anne"
-GOAL_LAPRAS = "lapras"
-GOAL_SNORLAX = "snorlax"
-GOAL_ARTICUNO = "articuno"
-GOAL_ZAPDOS = "zapdos"
-GOAL_MOLTRES = "moltres"
-GOAL_FOSSIL = "fossil"
-GOAL_MEWTWO = "mewtwo"
-GOAL_ALL_BADGES = "all_badges"
-# True end-game goal: beat the Elite Four and Champion (auto-warps to the
-# Hall of Fame room) while still holding all 8 badges.
-GOAL_CHAMPION = "champion"
 
 # Item / Pokédex IDs needed for goal checks below (constants/item_constants.asm
 # and the National Pokédex order, both from pret/pokered — not RAM addresses).
@@ -238,294 +59,41 @@ ITEM_ID_OAKS_PARCEL = 0x46  # 70
 ITEM_ID_TOWN_MAP = 0x05
 MEWTWO_POKEDEX_NUMBER = 150  # fixed since Gen 1, same order as wPokedexOwned
 
-# Maps on the critical path for each curriculum goal (excludes distraction
-# detours like the rivals' house, Game Corner floor, Safari Zone, etc. unless
-# that detour IS the goal). Built up incrementally: each stage's set is the
-# previous stage's plus the new ground covered reaching it, because a stage
-# can start cold from "start" (no stage checkpoint saved yet — see
-# curriculum_config.py) and the agent then has to walk the whole way from
-# Pallet Town, not just the final leg.
-_MAPS_LEFT_HOUSE = HOUSE_MAPS | {MAP_PALLET_TOWN}
-_MAPS_ROUTE_1_ENTRY = frozenset({MAP_PALLET_TOWN, MAP_ROUTE_1, MAP_OAKS_LAB})
-# Includes MAP_ROUTE_1: goal auto-advances toward route1 the instant the entry
-# trigger fires, but the forced walk-into-lab cutscene can still read
-# map_id == MAP_ROUTE_1 for a few ticks afterward. Also includes MAP_OAKS_LAB:
-# the entry trigger force-walks the player straight into the lab to pick a
-# starter — that leg is a cutscene, not something the agent navigates, so it
-# is not its own curriculum goal (see former oaks_lab goal, folded in here).
-_MAPS_ROUTE_1 = frozenset({MAP_PALLET_TOWN, MAP_OAKS_LAB, MAP_ROUTE_1})
-
-_MAPS_OAKS_PARCEL = _MAPS_ROUTE_1 | {
-    MAP_VIRIDIAN_CITY,
-    MAP_VIRIDIAN_MART,
-    MAP_VIRIDIAN_POKECENTER,
-}
-# Delivery walk-back ends at Oak's Lab, already in _MAPS_ROUTE_1 — no new maps.
-_MAPS_GAVE_PARCEL = _MAPS_OAKS_PARCEL
-_MAPS_TOWN_MAP = _MAPS_GAVE_PARCEL | {MAP_RIVALS_HOUSE}  # Daisy's gift, Pallet Town
-
-_MAPS_FOUGHT_BROCK = _MAPS_TOWN_MAP | {
-    MAP_ROUTE_2,
-    MAP_ROUTE_2_GATE,
-    MAP_VIRIDIAN_FOREST_NORTH_GATE,
-    MAP_VIRIDIAN_FOREST_SOUTH_GATE,
-    MAP_VIRIDIAN_FOREST,
-    MAP_PEWTER_CITY,
-    MAP_PEWTER_GYM,
-    MAP_PEWTER_MART,
-    MAP_PEWTER_POKECENTER,
-}
-_MAPS_BADGE_1 = _MAPS_FOUGHT_BROCK  # badge is handed over in the same gym room
-
-_MAPS_FOUGHT_MISTY = _MAPS_BADGE_1 | {
-    MAP_ROUTE_3,
-    MAP_MT_MOON_1F,
-    MAP_MT_MOON_B1F,
-    MAP_MT_MOON_B2F,
-    MAP_MT_MOON_POKECENTER,
-    MAP_ROUTE_4,
-    MAP_CERULEAN_CITY,
-    MAP_CERULEAN_GYM,
-    MAP_CERULEAN_POKECENTER,
-    MAP_CERULEAN_MART,
-}
-_MAPS_BADGE_2 = _MAPS_FOUGHT_MISTY
-
-_MAPS_SS_ANNE = (
-    _MAPS_BADGE_2
-    | {
-        MAP_ROUTE_24,
-        MAP_ROUTE_25,
-        MAP_BILLS_HOUSE,  # S.S. Ticket
-        MAP_ROUTE_5,
-        MAP_ROUTE_5_GATE,
-        MAP_UNDERGROUND_PATH_ROUTE_5,
-        MAP_ROUTE_6,
-        MAP_ROUTE_6_GATE,
-        MAP_UNDERGROUND_PATH_ROUTE_6,
-        MAP_VERMILION_CITY,
-        MAP_VERMILION_POKECENTER,
-        MAP_VERMILION_MART,
-        MAP_VERMILION_DOCK,
-    }
-    | MAP_SS_ANNE
-)
-_MAPS_FOUGHT_SURGE = _MAPS_SS_ANNE | {MAP_VERMILION_GYM}
-_MAPS_BADGE_3 = _MAPS_FOUGHT_SURGE
-
-_MAPS_FOUGHT_ERIKA = _MAPS_BADGE_3 | {
-    MAP_ROUTE_7,
-    MAP_ROUTE_7_GATE,
-    MAP_UNDERGROUND_PATH_ROUTE_7,
-    MAP_SAFFRON_CITY,  # just passed through — gym is locked until Silph Co.
-    MAP_SAFFRON_POKECENTER,
-    MAP_CELADON_CITY,
-    MAP_CELADON_GYM,
-    MAP_CELADON_POKECENTER,
-    MAP_CELADON_MART_1F,
-}
-_MAPS_BADGE_4 = _MAPS_FOUGHT_ERIKA
-
-# Fuchsia (Koga) is gated behind the sleeping Snorlax on Route 12/16, which
-# needs the Poke Flute from Mr. Fuji, which needs the Silph Scope from Team
-# Rocket's hideout under the Celadon Game Corner — a hard prerequisite for
-# physically reaching Koga, even though Silph Co./Sabrina are the *later*
-# curriculum stage (see stage_fought_koga vs stage_fought_sabrina in
-# curriculum_config.py).
-_MAPS_FOUGHT_KOGA = (
-    _MAPS_BADGE_4
-    | {
-        MAP_GAME_CORNER,
-        MAP_ROUTE_8,
-        MAP_ROUTE_8_GATE,
-        MAP_UNDERGROUND_PATH_ROUTE_8,
-        MAP_ROUTE_9,
-        MAP_ROUTE_10,
-        MAP_ROCK_TUNNEL_POKECENTER,
-        MAP_ROCK_TUNNEL_1F,
-        MAP_LAVENDER_TOWN,
-        MAP_LAVENDER_POKECENTER,
-        MAP_LAVENDER_MART,
-        MAP_MR_FUJIS_HOUSE,
-        MAP_ROUTE_12,
-        MAP_ROUTE_12_GATE_1F,
-        MAP_ROUTE_13,
-        MAP_ROUTE_14,
-        MAP_ROUTE_15,
-        MAP_ROUTE_15_GATE_1F,
-        MAP_ROUTE_16,
-        MAP_ROUTE_16_GATE_1F,
-        MAP_ROUTE_17,
-        MAP_ROUTE_18,
-        MAP_ROUTE_18_GATE_1F,
-        MAP_FUCHSIA_CITY,
-        MAP_FUCHSIA_GYM,
-        MAP_FUCHSIA_MART,
-        MAP_FUCHSIA_POKECENTER,
-    }
-    | MAP_POKEMON_TOWER
-    | MAP_ROCKET_HIDEOUT
-)
-_MAPS_BADGE_5 = _MAPS_FOUGHT_KOGA
-
-_MAPS_FOUGHT_SABRINA = (
-    _MAPS_BADGE_5
-    | {
-        MAP_FIGHTING_DOJO,
-        MAP_SAFFRON_GYM,
-        MAP_SAFFRON_MART,
-    }
-    | MAP_SILPH_CO
-)
-_MAPS_BADGE_6 = _MAPS_FOUGHT_SABRINA
-
-_MAPS_FOUGHT_BLAINE = (
-    _MAPS_BADGE_6
-    | {
-        MAP_ROUTE_19,
-        MAP_ROUTE_20,
-        MAP_SEAFOAM_ISLANDS_1F,
-        MAP_ROUTE_21,
-        MAP_CINNABAR_ISLAND,
-        MAP_CINNABAR_GYM,
-        MAP_CINNABAR_MART,
-        MAP_CINNABAR_POKECENTER,
-        MAP_POKEMON_MANSION_1F,
-    }
-    | MAP_SEAFOAM_ISLANDS_CAVES
-)
-_MAPS_BADGE_7 = _MAPS_FOUGHT_BLAINE
-
-_MAPS_FOUGHT_GIOVANNI = _MAPS_BADGE_7 | {MAP_VIRIDIAN_GYM}  # finally unlocked
-_MAPS_BADGE_8 = _MAPS_FOUGHT_GIOVANNI
-
-_MAPS_LAPRAS = _MAPS_BADGE_8  # Silph Co. 7F gift — already covered above
-_MAPS_SNORLAX = _MAPS_LAPRAS  # both sites (Route 12 / Route 16) already covered
-
-_MAPS_ARTICUNO = _MAPS_SNORLAX  # Seafoam Islands already covered (Blaine leg)
-
-_MAPS_ZAPDOS = _MAPS_ARTICUNO | {MAP_POWER_PLANT}  # reached by Surfing off Route 10
-
-_MAPS_MOLTRES = _MAPS_ZAPDOS | {
-    MAP_ROUTE_22,
-    MAP_ROUTE_22_GATE,
-    MAP_ROUTE_23,
-    MAP_VICTORY_ROAD_1F,
-    MAP_VICTORY_ROAD_2F,
-    MAP_VICTORY_ROAD_3F,
-}
-
-# Revived at Cinnabar Lab; the raw fossil pickup itself is Mt Moon B2F,
-# already covered by the Misty leg above.
-_MAPS_FOSSIL = _MAPS_MOLTRES | MAP_CINNABAR_LAB_ROOMS
-
-# Cerulean Cave only opens after Hall of Fame, so Mewtwo pulls in the
-# Elite Four / Champion path too.
-_MAPS_MEWTWO = (
-    _MAPS_FOSSIL
-    | {
-        MAP_INDIGO_PLATEAU,
-        MAP_INDIGO_PLATEAU_LOBBY,
-        MAP_HALL_OF_FAME,
-        MAP_UNDERGROUND_PATH_NORTH_SOUTH,
-        MAP_UNDERGROUND_PATH_WEST_EAST,
-        MAP_LANCES_ROOM,
-        MAP_CHAMPIONS_ROOM,
-    }
-    | MAP_ELITE_FOUR
-    | MAP_CERULEAN_CAVE
-)
-
-_MAPS_ALL_BADGES = _MAPS_MEWTWO  # by now every badge-path map is covered
-_MAPS_CHAMPION = (
-    _MAPS_ALL_BADGES  # Victory Road / Elite Four / Hall of Fame already covered
-)
-
-GOAL_ALLOWED_MAPS: dict[str, frozenset[int]] = {
-    GOAL_LEFT_HOUSE: _MAPS_LEFT_HOUSE,
-    GOAL_ROUTE_1_ENTRY: _MAPS_ROUTE_1_ENTRY,
-    GOAL_ROUTE_1: _MAPS_ROUTE_1,
-    GOAL_OAKS_PARCEL: _MAPS_OAKS_PARCEL,
-    GOAL_GAVE_PARCEL: _MAPS_GAVE_PARCEL,
-    GOAL_TOWN_MAP: _MAPS_TOWN_MAP,
-    GOAL_FOUGHT_BROCK: _MAPS_FOUGHT_BROCK,
-    GOAL_BADGE_1: _MAPS_BADGE_1,
-    GOAL_FOUGHT_MISTY: _MAPS_FOUGHT_MISTY,
-    GOAL_BADGE_2: _MAPS_BADGE_2,
-    GOAL_SS_ANNE: _MAPS_SS_ANNE,
-    GOAL_FOUGHT_SURGE: _MAPS_FOUGHT_SURGE,
-    GOAL_BADGE_3: _MAPS_BADGE_3,
-    GOAL_FOUGHT_ERIKA: _MAPS_FOUGHT_ERIKA,
-    GOAL_BADGE_4: _MAPS_BADGE_4,
-    GOAL_FOUGHT_KOGA: _MAPS_FOUGHT_KOGA,
-    GOAL_BADGE_5: _MAPS_BADGE_5,
-    GOAL_FOUGHT_SABRINA: _MAPS_FOUGHT_SABRINA,
-    GOAL_BADGE_6: _MAPS_BADGE_6,
-    GOAL_FOUGHT_BLAINE: _MAPS_FOUGHT_BLAINE,
-    GOAL_BADGE_7: _MAPS_BADGE_7,
-    GOAL_FOUGHT_GIOVANNI: _MAPS_FOUGHT_GIOVANNI,
-    GOAL_BADGE_8: _MAPS_BADGE_8,
-    GOAL_LAPRAS: _MAPS_LAPRAS,
-    GOAL_SNORLAX: _MAPS_SNORLAX,
-    GOAL_ARTICUNO: _MAPS_ARTICUNO,
-    GOAL_ZAPDOS: _MAPS_ZAPDOS,
-    GOAL_MOLTRES: _MAPS_MOLTRES,
-    GOAL_FOSSIL: _MAPS_FOSSIL,
-    GOAL_MEWTWO: _MAPS_MEWTWO,
-    GOAL_ALL_BADGES: _MAPS_ALL_BADGES,
-    GOAL_CHAMPION: _MAPS_CHAMPION,
-}
-
+# The 8 badges live in wObtainedBadges (see badges()), not wEventFlags, so
+# they can't be expressed as an EVENT_* name from event_constants.py — kept
+# as the one hand-picked addition to the otherwise-generic GOAL_CANDIDATES
+# pool below.
 BADGE_GOALS = (
-    GOAL_BADGE_1,
-    GOAL_BADGE_2,
-    GOAL_BADGE_3,
-    GOAL_BADGE_4,
-    GOAL_BADGE_5,
-    GOAL_BADGE_6,
-    GOAL_BADGE_7,
-    GOAL_BADGE_8,
+    "badge1",
+    "badge2",
+    "badge3",
+    "badge4",
+    "badge5",
+    "badge6",
+    "badge7",
+    "badge8",
 )
 
-# Location goals: true only while on the map / outside the house. Leaving undoes
-# live progress unless the goal was curriculum-cleared (auto_advance).
-REGRESSABLE_GOALS = frozenset({GOAL_LEFT_HOUSE, GOAL_ROUTE_1_ENTRY, GOAL_ROUTE_1})
+# Manual, hand-picked exclusions on top of event_graph.AUTO_BLACKLIST_EVENTS
+# (dead / cyclic-toggle / resettable events -- see tools/gen_event_graph.py).
+# Extend this set for cases the automatic rules can't catch: e.g. an event
+# that is technically one-way and non-cyclic in the disassembly but is known
+# (from live play / debug_play -vv) to be an unreliable trigger.
+GOAL_MANUAL_BLACKLIST: frozenset[str] = frozenset()
 
-# Ordered early→late checklist for live progress counting / regression metrics.
-STORY_GOAL_ORDER = (
-    GOAL_LEFT_HOUSE,
-    GOAL_ROUTE_1_ENTRY,
-    GOAL_ROUTE_1,
-    GOAL_OAKS_PARCEL,
-    GOAL_GAVE_PARCEL,
-    GOAL_TOWN_MAP,
-    GOAL_FOUGHT_BROCK,
-    GOAL_BADGE_1,
-    GOAL_FOUGHT_MISTY,
-    GOAL_BADGE_2,
-    GOAL_SS_ANNE,
-    GOAL_FOUGHT_SURGE,
-    GOAL_BADGE_3,
-    GOAL_FOUGHT_ERIKA,
-    GOAL_BADGE_4,
-    GOAL_FOUGHT_KOGA,
-    GOAL_BADGE_5,
-    GOAL_FOUGHT_SABRINA,
-    GOAL_BADGE_6,
-    GOAL_FOUGHT_BLAINE,
-    GOAL_BADGE_7,
-    GOAL_FOUGHT_GIOVANNI,
-    GOAL_BADGE_8,
-    GOAL_LAPRAS,
-    GOAL_SNORLAX,
-    GOAL_ARTICUNO,
-    GOAL_ZAPDOS,
-    GOAL_MOLTRES,
-    GOAL_FOSSIL,
-    GOAL_MEWTWO,
-    GOAL_ALL_BADGES,
-    GOAL_CHAMPION,
+# Generic goal namespace: every named wEventFlags bit from event_constants.py,
+# minus anything auto- or manually blacklisted, plus the 8 badges (badges
+# live in wObtainedBadges, not wEventFlags, so they can't be expressed as an
+# EVENT_* name -- see badges()/is_goal_satisfied()). This is the pool
+# curriculum/goal-conditioning code should draw from instead of the old
+# hand-picked GOAL_* stage constants above.
+EVENT_GOAL_CANDIDATES: frozenset[str] = frozenset(
+    name
+    for name in _event_constants.EVENTS
+    if name not in _event_graph.AUTO_BLACKLIST_EVENTS
+    and name not in GOAL_MANUAL_BLACKLIST
 )
+GOAL_CANDIDATES: frozenset[str] = EVENT_GOAL_CANDIDATES | frozenset(BADGE_GOALS)
 
 
 @dataclass
@@ -538,21 +106,11 @@ class Data:
     visited_dialogs: dict[tuple[int, int], int] = field(default_factory=dict)
 
     # Hierarchical rewards: macro >> meso >> micro (PokeRL / Whidden style).
+    # badge_reward/event_reward are the only two payout amounts left —
+    # reward_generic_progress pays every GOAL_CANDIDATES event/badge flat,
+    # once per episode, no per-goal hand-tuned amount or active-goal scaling.
     badge_reward: float = 10.0  # macro
     event_reward: float = 2.0  # macro
-    left_house_reward: float = 5.0  # macro early milestone
-    # Oak's "dangerous" intercept — reaching Route 1 before the starter.
-    # Distinct from route1_reward below (the later, post-starter return trip)
-    # so the entry stage gets full active-goal credit instead of borrowing
-    # route1_reward's muted off-goal share.
-    route1_entry_reward: float = 4.0  # macro early milestone
-    route1_reward: float = (
-        8.0  # macro early milestone (scaled further when active goal)
-    )
-    # Goal conditioning: full credit only for the active curriculum goal so the
-    # policy cannot farm house/lab returns while the stage target is route1+.
-    active_goal_scale: float = 3.0
-    off_goal_milestone_scale: float = 0.1
     new_screen_reward: float = 1.0  # meso (new map)
     # Separate from new_screen_reward — this pays reward_battle_useless_count's
     # per-turn-changed credit. Was accidentally sharing new_screen_reward, so
@@ -646,19 +204,16 @@ class Data:
     dialog_wrong_streak_threshold: int = 2
     # In-dialog waste now reuses base_reward via the same shape as
     # reward_position's step_penalty (see reward_dialog) — no separate scale.
-    # Lingering on a map that cannot complete the active location goal
-    # (e.g. rivals' house while targeting Oak's Lab).
-    off_goal_camp_penalty: float = -0.12
     # Re-open a dialog that was already exited on this map: 1st = penalty, 2nd = truncate.
     dialog_reopen_penalty: float = -0.5
     # Consecutive anti-loop hits → truncate episode (escape local optima).
     max_loop_streak: int = 48
-    # Claw back location-goal payouts when the agent leaves without clearing
-    # them via curriculum auto_advance (1.0 = full refund of what was paid).
-    goal_regression_scale: float = 1.0
-
-    # Episode goal for terminated() — early milestones for PPO curriculum.
-    goal: str = GOAL_BADGE_1
+    # Episode goal for terminated() — a GOAL_CANDIDATES member (an EVENT_*
+    # name or one of BADGE_GOALS). Only used by goal_reached()/terminated();
+    # reward_generic_progress pays out every GOAL_CANDIDATES event regardless
+    # of which one is "the" active goal, so this doesn't gate reward anymore,
+    # only episode success/failure and the PPO goal one-hot (curriculum_config.py).
+    goal: str = BADGE_GOALS[0]
 
     in_menu_ticks: float = 0.0
     in_battle_ticks: float = 0.0
@@ -759,6 +314,37 @@ class Data:
     # penalty is tied to it.
     map_dwell_budget: float = MAP_DWELL_BUDGET
 
+    # Size-scaled per-map step budget: steps allowed on one map this episode,
+    # scaled by that map's own width*height (map_constants.py, generated from
+    # pret/pokered's map_const macro) instead of the flat MAP_DWELL_BUDGET
+    # above. Only fills while is_world() (see _tick_map_budget) — dialog/
+    # battle/menu time on a map doesn't consume it — but once exceeded, the
+    # penalty applies every step regardless of mode (see map_budget_exceeded/
+    # reward_map_budget), so ducking into a menu can't dodge it.
+    # sqrt(area), not area, so the budget compresses the spread between tiny
+    # rooms and huge routes instead of scaling linearly with it (a linear
+    # model made a 4x4 room ~21x stingier than the old flat-256-per-map
+    # system while barely touching city-sized maps -- see map_step_budget).
+    # 340 calibrated so Pallet Town (~90 blocks) lands close to the old flat
+    # per-map allowance (4096); tune empirically after a real training run.
+    map_budget_steps_per_sqrt_block: float = 340.0
+    world_map_step_counts: dict[int, int] = field(default_factory=dict)
+    map_budget_penalty: float = -0.02
+
+    # Per-step shaping toward whichever map currently has an unfinished,
+    # reachable event (see active_map_events): small reward for being on a
+    # map with one pending, small penalty for loitering on a map with none —
+    # two sides of the same signal, not two independent knobs.
+    active_map_event_reward: float = 0.01
+    inactive_map_event_penalty: float = -0.005
+
+    # Generic regression safety net over GOAL_CANDIDATES (see
+    # reward_generic_progress). Should rarely fire — event_graph's auto
+    # blacklist already excludes resettable/cyclic events from
+    # GOAL_CANDIDATES — but a missed case or a manually-added candidate
+    # shouldn't be able to farm a false milestone by flip-flopping.
+    event_regression_penalty: float = -0.3
+
     recent_actions: deque = field(default_factory=lambda: deque(maxlen=20))
     recent_positions: deque = field(default_factory=lambda: deque(maxlen=16))
     recent_menu_states: deque = field(default_factory=lambda: deque(maxlen=16))
@@ -772,29 +358,23 @@ class Data:
     dialog_wrong_streak: int = 0
     # Fuse(s) that fired on the most recent truncated() call — see TRUNCATE_CAUSES.
     last_truncate_causes: frozenset[str] = frozenset()
+    # Paid-this-episode set for reward_generic_progress — every GOAL_CANDIDATES
+    # event/badge pays out at most once per episode.
     _milestones_hit: set[str] = field(default_factory=set)
-    # Payout credited when a milestone first hit — used to claw back on regress.
-    _milestone_payouts: dict[str, float] = field(default_factory=dict)
-    # Regressable milestones that have already been paid-and-clawed-back once
-    # this episode — blocks re-payment on re-entry (see reward_goal_regression).
-    _milestones_spent: set[str] = field(default_factory=set)
-    # Goals cleared by curriculum auto_advance this episode (no clawback on leave).
-    _cleared_goals: set[str] = field(default_factory=set)
-    # Live story goals satisfied last step (for detecting count drops).
-    _prev_live_goals: set[str] = field(default_factory=set)
-    # Union of both kinds below — informational only, kept for debug_play.
-    _last_regressed: list[str] = field(default_factory=list)
-    # Subset of _last_regressed that actually clawed back a payout (goal was
-    # NOT yet curriculum-cleared). This is the one that should drive
-    # goal_regression_rate — _last_regressed also fires on every ordinary
-    # "left a map I already cleared to reach the next stage" step, which is
-    # expected curriculum progress, not backsliding.
-    _last_hard_regressed: list[str] = field(default_factory=list)
-    _peak_live_goals: int = 0
-    # Per-step debug trail for eval -vv: (name, payout) actually paid this
-    # step, and names that hit their condition but were blocked because
-    # they were already regressed-and-spent this episode.
+    # Snapshot of GOAL_CANDIDATES satisfied last step, for the regression
+    # diff in reward_generic_progress.
+    _prev_satisfied_events: frozenset[str] = field(default_factory=frozenset)
+    # Per-step debug trail for eval -vv: (name, payout) actually paid this step.
     last_milestone_payouts: list[tuple[str, float]] = field(default_factory=list)
+    # GOAL_CANDIDATES names that un-satisfied this step (see
+    # reward_generic_progress's regression penalty). No more soft/hard
+    # distinction — every regression is real now (no curriculum-clear
+    # exemption bookkeeping left to distinguish "backslide" from "advanced
+    # past this on purpose").
+    last_regressed: list[str] = field(default_factory=list)
+    # Vestigial, always empty now — the old regressed-and-spent blocking
+    # concept is gone (see reward_generic_progress). Kept only so external
+    # readers (run_eval_ppo.py -v) don't need a hasattr guard.
     last_milestone_blocked: list[str] = field(default_factory=list)
     # Set once per reward() call; True on the exact step a full-party wipe
     # exits the battle screen. Shared by reward_core (suppress the resulting
@@ -902,6 +482,8 @@ class Data:
         self.dialog_hit_counts = {}
         self.dialog_id_visit_counts = {}
         self.map_id_visit_counts = {}
+        self.world_map_step_counts = {}
+        self._prev_satisfied_events = frozenset()
         self.battle_outcome_counts = {}
         self.milestone_hit_counts = {}
         self._last_heatmap_pos = None
@@ -916,13 +498,8 @@ class Data:
         self.menu_noop_streak = 0
         self.dialog_wrong_streak = 0
         self._milestones_hit = set()
-        self._milestone_payouts = {}
-        self._milestones_spent = set()
-        self._cleared_goals = set()
-        self._prev_live_goals = set()
-        self._last_regressed = []
-        self._last_hard_regressed = []
-        self._peak_live_goals = 0
+        self.last_milestone_payouts = []
+        self.last_regressed = []
         self._dialog_screens_seen = set()
         self._completed_dialogs = set()
         self._dialog_reopen_counts = {}
@@ -1135,6 +712,7 @@ class Data:
         mid = self.map_id(self.pyboy.memory)
         self.visited_maps.add(mid)
         self.map_id_visit_counts[mid] = self.map_id_visit_counts.get(mid, 0) + 1
+        self._tick_map_budget(self.pyboy.memory)
 
     def get_dialog(self, memory: bytes | None = None):
         if memory is None:
@@ -1336,25 +914,19 @@ class Data:
         # Per-step signal; env accumulates into _episode_loop for episode stats.
         self.loop_flag = False
         self.loop_causes = set()
+        self.last_milestone_payouts = []
         self._just_blacked_out = self._detect_blackout(memory)
-        if self._just_blacked_out:
-            # HandlePlayerBlackOut force-warps to the last Pokemon Center —
-            # that departure from the goal map is not the agent choosing to
-            # abandon it, so don't claw back location milestones already
-            # paid for reaching it (mirrors mark_goal_cleared for a
-            # legitimate curriculum-advance departure). Without this, a
-            # near-death fight on the goal map made finishing the loss cost
-            # up to -goal payout (e.g. -24 for route1 at active_goal_scale),
-            # far worse than truncated_reward (-0.05) — so the policy
-            # learned to mash useless inputs and stall out the battle-stuck
-            # fuse instead of ever letting the blackout resolve.
-            for name in REGRESSABLE_GOALS:
-                if name in self._milestones_hit:
-                    self.mark_goal_cleared(name)
 
         milestone += self.reward_core(memory)
-        milestone += self.reward_story_milestones()
-        milestone += self.reward_goal_regression()
+        # One-shot payout for any newly-satisfied GOAL_CANDIDATES event/badge
+        # + regression penalty for any that un-satisfy (see
+        # reward_generic_progress). Replaces the old named-goal
+        # reward_story_milestones/reward_goal_regression pair — no clawback
+        # exemption needed for HandlePlayerBlackOut's forced warp anymore,
+        # since every surviving candidate is a permanent event bit (the auto
+        # blacklist already excludes map-presence-style resettable checks),
+        # not a "currently on this map" location goal that a warp could undo.
+        milestone += self.reward_generic_progress(memory)
         # Battle→overworld (or dialog) transition — win/lose/flee uses prev memory.
         milestone += self.reward_battle_exit(memory)
 
@@ -1388,6 +960,11 @@ class Data:
             step += self.reward_anti_loop(action=action, memory=memory)
         # Always track dialog enter/exit — cutscenes often follow textboxes.
         step += self.reward_dialog_reopen(memory)
+        # Map-size step budget: applies in every mode (world/dialog/battle/
+        # menu), not just is_world() — see map_budget_exceeded.
+        step += self.reward_map_budget(self.pyboy.memory)
+        # Nudge toward maps with unfinished reachable progress (world-mode only).
+        step += self.reward_active_map_presence(self.pyboy.memory)
 
         return milestone, step
 
@@ -1419,241 +996,66 @@ class Data:
 
         return 0.0
 
-    def _scaled_milestone(self, name: str, base: float) -> float:
-        """Full credit for the active goal; muted credit for off-goal story beats."""
-        if name == self.goal:
-            return base * self.active_goal_scale
-        return base * self.off_goal_milestone_scale
-
     def mark_goal_cleared(self, goal: str) -> None:
-        """Curriculum auto_advance: leaving this location is not a regression."""
-        if goal:
-            self._cleared_goals.add(str(goal))
+        """Vestigial no-op, kept for API compat with pokemon_red_env.py /
+        debug_play.py call sites. The old curriculum-advance-exempts-
+        regression bookkeeping this backed (_cleared_goals) was removed with
+        reward_story_milestones/reward_goal_regression — see
+        reward_generic_progress, which has no such exemption because its
+        regression check only fires for GOAL_CANDIDATES (auto-blacklist
+        already excludes resettable/cyclic events, so a real regression
+        should be rare regardless of curriculum movement).
+        """
 
     def seed_cleared_goals(self, active_goal: str) -> None:
-        """Backfill _cleared_goals for every STORY_GOAL_ORDER stage before ``active_goal``.
-
-        A curriculum stage resumes from a checkpoint that already sits past
-        earlier milestones (see curriculum_config.py's per-stage
-        ``checkpoint``), but clean() zeroes _cleared_goals every episode.
-        Without this, _prereq_cleared's same-episode chain in
-        reward_story_milestones can never be satisfied for any goal past the
-        first in the chain — e.g. starting fresh at stage_gave_parcel means
-        oaks_parcel was never "hit" this episode, so gave_parcel's payout
-        (the entire point of that curriculum stage) can never fire, even
-        though is_goal_satisfied() correctly detects completion and the
-        curriculum still auto-advances. Call once per reset, after the
-        episode's Data.clean() and after ``self.goal`` is finalized.
-        """
-        if active_goal not in STORY_GOAL_ORDER:
-            return
-        for name in STORY_GOAL_ORDER[: STORY_GOAL_ORDER.index(active_goal)]:
-            self.mark_goal_cleared(name)
+        """Vestigial no-op, kept for API compat — see mark_goal_cleared."""
 
     def live_story_goals(self) -> list[str]:
-        """Story goals that are true in the *current* game state (can shrink)."""
-        return [g for g in STORY_GOAL_ORDER if self.is_goal_satisfied(g)]
+        """GOAL_CANDIDATES currently true in game state (can shrink)."""
+        return sorted(g for g in GOAL_CANDIDATES if self.is_goal_satisfied(g))
 
-    def _prereq_cleared(self, goal: str) -> bool:
-        """Whether ``goal`` was paid out at some point this episode.
+    def reward_generic_progress(self, memory: PyBoyMemoryView | bytes | None = None) -> float:
+        """One-shot bonus for every GOAL_CANDIDATES event/badge newly
+        satisfied this step, plus a penalty for any that regress (see
+        event_regression_penalty) — the generic replacement for the old
+        hand-picked reward_story_milestones/reward_goal_regression pair.
 
-        Used to gate early-game milestone payouts on STORY_GOAL_ORDER so a
-        later beat cannot pay out for free by skipping the one before it —
-        see reward_story_milestones. Checks _milestones_spent too: a
-        regressable goal that was hit and later clawed back (e.g. walked
-        back into a house) still genuinely happened, so it should not
-        un-satisfy a downstream prerequisite.
+        No prereq chains, no active-goal scaling, no clawback-then-repay
+        bookkeeping: every candidate pays the same flat amount once per
+        episode (badges pay badge_reward, everything else pays
+        event_reward), tracked by self._milestones_hit (paid-this-episode
+        set) so a flicker (regress then re-satisfy) cannot double-pay.
         """
-        return (
-            goal in self._milestones_hit
-            or goal in self._milestones_spent
-            or goal in self._cleared_goals
-        )
-
-    def reward_goal_regression(self) -> float:
-        """Claw back location milestones that are no longer true.
-
-        Cleared-via-curriculum goals are exempt so the correct path
-        (enter lab → advance → leave toward Route 1) is not punished.
-        Unpaid dabbling (off-goal lab visit while training Route 1) is refunded.
-
-        Clawed-back goals are marked ``_milestones_spent`` so re-entering
-        cannot earn the payout a second time (see reward_story_milestones) —
-        without that, leave-then-return nets a full free payout every trip
-        (pay on entry, refund equals the clawback, pay again on re-entry),
-        turning the map border into a farmable reward loop.
-        """
-        self._last_regressed = []
-        self._last_hard_regressed = []
+        if memory is None:
+            memory = self.pyboy.memory
+        current = frozenset(n for n in GOAL_CANDIDATES if self.is_goal_satisfied(n))
         reward = 0.0
-        for name in list(self._milestones_hit):
-            if name not in REGRESSABLE_GOALS:
-                continue
-            if name in self._cleared_goals:
-                continue
-            if self.is_goal_satisfied(name):
-                continue
-            payout = float(self._milestone_payouts.pop(name, 0.0))
-            self._milestones_hit.discard(name)
-            self._milestones_spent.add(name)
-            reward -= payout * self.goal_regression_scale
-            self._last_regressed.append(name)
-            self._last_hard_regressed.append(name)
 
-        live = set(self.live_story_goals())
-        lost_live = self._prev_live_goals - live
-        for name in lost_live:
-            if name not in self._last_regressed:
-                self._last_regressed.append(name)
-        self._peak_live_goals = max(self._peak_live_goals, len(live))
-        self._prev_live_goals = live
-        return reward
-
-    def reward_story_milestones(self) -> float:
-        """One-shot bonuses for story / map progress (order-independent).
-
-        Later-game flags (fought_brock_yet, is_ss_anne_here, ...) used to
-        also pay out via a raw prev-vs-current memory bit diff
-        (reward_event_flags, now removed) with no "already paid" bookkeeping
-        — one of those bits (position_in_air) flips on the pause-menu
-        animation, so a policy could farm it indefinitely by spamming START.
-        They are folded into the ``checks``/``_milestones_hit``-gated pattern
-        below instead, reusing ``is_goal_satisfied`` as the single source of
-        truth for each condition.
-        """
-        reward = 0.0
-        mid = self.map_id(self.pyboy.memory)
-        self.last_milestone_payouts = []
-        self.last_milestone_blocked = []
-
-        checks = [
-            (
-                GOAL_LEFT_HOUSE,
-                bool(self._start_map_id in HOUSE_MAPS and mid not in HOUSE_MAPS),
-                self.left_house_reward,
-            ),
-            (
-                GOAL_ROUTE_1_ENTRY,
-                # Oak's intercept fires as a dialog while still on Pallet Town
-                # (see is_goal_satisfied) — map_id never actually becomes
-                # MAP_ROUTE_1 for this pre-starter trigger.
-                self._prereq_cleared(GOAL_LEFT_HOUSE)
-                and (
-                    mid == MAP_ROUTE_1
-                    or (
-                        mid == MAP_PALLET_TOWN
-                        and self.is_dialog(self.pyboy.memory)
-                        and self.dialog_id(self.pyboy.memory) == ROUTE1_ENTRY_DIALOG_ID
-                    )
-                ),
-                self.route1_entry_reward,
-            ),
-            (
-                GOAL_ROUTE_1,
-                # Guard against the entry-trigger tile also satisfying this
-                # check: without it, GOAL_ROUTE_1 fires (muted, off-goal) the
-                # instant Route 1 is touched during stage_route1_entry, then
-                # gets clawed back by reward_goal_regression() on the forced
-                # walk into the Lab — a spurious earn/regress cycle. The
-                # explicit goal check below is the only guard against that now
-                # (there used to be an oaks_lab prereq covering it too, but
-                # that stage was folded away — the Lab visit is a forced
-                # cutscene the agent never navigates, see _MAPS_ROUTE_1).
-                self._prereq_cleared(GOAL_ROUTE_1_ENTRY)
-                and mid == MAP_ROUTE_1
-                and self.goal != GOAL_ROUTE_1_ENTRY,
-                self.route1_reward,
-            ),
-            (
-                GOAL_OAKS_PARCEL,
-                self._prereq_cleared(GOAL_ROUTE_1)
-                and bool(self.have_oaks_parcel(self.pyboy.memory)),
-                self.event_reward,
-            ),
-            (
-                GOAL_GAVE_PARCEL,
-                self._prereq_cleared(GOAL_OAKS_PARCEL)
-                and bool(self.gave_oaks_parcel(self.pyboy.memory)),
-                self.event_reward,
-            ),
-            (
-                GOAL_TOWN_MAP,
-                # Must be received in the rival's house (Daisy's gift) —
-                # checking inventory alone isn't enough to pin the trigger to
-                # that specific hand-off.
-                self._prereq_cleared(GOAL_GAVE_PARCEL)
-                and mid == MAP_RIVALS_HOUSE
-                and bool(self.have_town_map(self.pyboy.memory)),
-                self.event_reward,
-            ),
-        ]
-        # Later-game story flags: each maps 1:1 onto a curriculum goal and
-        # is_goal_satisfied() already implements the exact trigger condition
-        # (trainer-fought bit, event flag, etc.) — reuse it instead of
-        # duplicating the memory reads here.
-        checks += [
-            (name, self.is_goal_satisfied(name), self.event_reward)
-            for name in (
-                GOAL_FOUGHT_BROCK,
-                GOAL_FOUGHT_MISTY,
-                GOAL_FOUGHT_SURGE,
-                GOAL_FOUGHT_ERIKA,
-                GOAL_FOUGHT_KOGA,
-                GOAL_FOUGHT_SABRINA,
-                GOAL_FOUGHT_BLAINE,
-                GOAL_FOUGHT_GIOVANNI,
-                GOAL_SS_ANNE,
-                GOAL_LAPRAS,
-                GOAL_SNORLAX,
-                GOAL_ARTICUNO,
-                GOAL_ZAPDOS,
-                GOAL_MOLTRES,
-                GOAL_FOSSIL,
-                GOAL_MEWTWO,
-                GOAL_ALL_BADGES,
-            )
-        ]
-        # Beating the Elite Four / Champion is the true end-game milestone —
-        # pay it at badge scale, not the muted event_reward the rest of this
-        # later-game list uses.
-        checks.append(
-            (GOAL_CHAMPION, self.is_goal_satisfied(GOAL_CHAMPION), self.badge_reward)
-        )
-        milestones_hit_this_step = 0
-        for name, hit, value in checks:
-            if not hit or name in self._milestones_hit:
+        newly_hit = 0
+        for name in current - self._prev_satisfied_events:
+            if name in self._milestones_hit:
                 continue
-            if name in self._milestones_spent:
-                self.last_milestone_blocked.append(name)
-                continue
-            payout = self._scaled_milestone(name, value)
+            payout = self.badge_reward if name in BADGE_GOALS else self.event_reward
             self._milestones_hit.add(name)
-            self._milestone_payouts[name] = payout
-            reward += payout
             self.last_milestone_payouts.append((name, payout))
-            milestones_hit_this_step += 1
+            reward += payout
+            newly_hit += 1
 
-        badges = self.badges(self.pyboy.memory)
-        for i, name in enumerate(BADGE_GOALS):
-            if name not in self._milestones_hit and i < len(badges) and badges[i]:
-                payout = self._scaled_milestone(name, self.badge_reward)
-                self._milestones_hit.add(name)
-                self._milestone_payouts[name] = payout
-                reward += payout
-                milestones_hit_this_step += 1
+        regressed = self._prev_satisfied_events - current
+        self.last_regressed = sorted(regressed)
+        if regressed:
+            self.loop_flag = True
+            reward += self.event_regression_penalty * len(regressed)
+
+        self._prev_satisfied_events = current
 
         # --heatmap milestone-density overlay: same _last_heatmap_pos
         # attribution as reward_sums/battle_outcome_counts (a milestone can
         # fire mid-dialog, off is_world(), so it's anchored on the last
         # known world tile rather than nowhere).
-        if (
-            self.collect_heatmap
-            and milestones_hit_this_step
-            and self._last_heatmap_pos is not None
-        ):
+        if self.collect_heatmap and newly_hit and self._last_heatmap_pos is not None:
             self.milestone_hit_counts[self._last_heatmap_pos] = (
-                self.milestone_hit_counts.get(self._last_heatmap_pos, 0)
-                + milestones_hit_this_step
+                self.milestone_hit_counts.get(self._last_heatmap_pos, 0) + newly_hit
             )
 
         return reward
@@ -1784,19 +1186,11 @@ class Data:
                 penalty += self.menu_loop_penalty
                 causes.add("menu_loop")
 
-        # 4) Off-goal map camping — rivals' house etc. while targeting lab/route.
-        allowed = GOAL_ALLOWED_MAPS.get(self.goal)
-        if (
-            allowed is not None
-            and self.is_world(self.pyboy.memory)
-            and not self.is_cutscene_locked(self.pyboy.memory)
-            and self.map_id(self.pyboy.memory) not in allowed
-        ):
-            visits = self.position_visit_counts.get(self.get_position(), 0)
-            # Punish dwell / A-B mash off the critical path; brief walk-through OK.
-            if visits > 2 or (interacting and not in_dialog):
-                penalty += self.off_goal_camp_penalty
-                causes.add("off_goal_camp")
+        # 4) Off-goal map camping used to compare self.map_id against a
+        # hand-curated GOAL_ALLOWED_MAPS[goal] set. Replaced by the generic
+        # active_map_events()-driven reward_active_map_presence (see
+        # reward()) — no per-goal map list to maintain, and it shapes every
+        # step rather than only camping past a visit-count threshold.
 
         self.loop_causes = causes
         if causes:
@@ -1939,12 +1333,12 @@ class Data:
     def reward_map(self):
         if self.map_id(self.pyboy.memory) in self.visited_maps:
             return 0.0
-        # Don't reward "discovering" a map that's off the active goal's path
-        # (see off_goal_camp_penalty / GOAL_ALLOWED_MAPS) — first-visit credit
-        # should not offset the penalty for straying off-course.
-        allowed = GOAL_ALLOWED_MAPS.get(self.goal)
-        if allowed is not None and self.map_id(self.pyboy.memory) not in allowed:
-            return 0.0
+        # First-visit credit used to be withheld off the active goal's
+        # hand-curated GOAL_ALLOWED_MAPS path. That gating is gone — the
+        # generic active_map_events()-driven reward_active_map_presence (see
+        # reward()) now separately shapes toward/away from maps with
+        # reachable progress, so plain exploration credit here no longer
+        # needs its own goal awareness.
         return self.new_screen_reward
 
     def reward_player_pokemons_current_hps(self, memory: bytes):
@@ -2103,79 +1497,123 @@ class Data:
     def is_goal_satisfied(self, goal: str) -> bool:
         """Whether ``goal`` is already true in the current game state.
 
-        Used by curriculum to skip stages when flags/badges were obtained out
-        of the recommended STAGE_ORDER.
+        ``goal`` is either one of BADGE_GOALS ("badge1".."badge8", read off
+        wObtainedBadges — see badges()) or a raw EVENT_* name from
+        event_constants.py, read generically by is_event_satisfied(). Used by
+        curriculum to skip goals already true in the live save (see
+        curriculum_config.next_stage's is_satisfied callback).
         """
-        mem = self.pyboy.memory
-        mid = self.map_id(mem)
-        badges = self.badges(mem)
-
-        if goal == GOAL_LEFT_HOUSE:
-            return mid not in HOUSE_MAPS
-        if goal == GOAL_ROUTE_1_ENTRY:
-            return mid == MAP_ROUTE_1 or (
-                mid == MAP_PALLET_TOWN
-                and self.is_dialog(mem)
-                and self.dialog_id(mem) == ROUTE1_ENTRY_DIALOG_ID
-            )
-        if goal == GOAL_ROUTE_1:
-            return mid == MAP_ROUTE_1
-        if goal == GOAL_OAKS_PARCEL:
-            return bool(self.have_oaks_parcel(mem))
-        if goal == GOAL_GAVE_PARCEL:
-            return bool(self.gave_oaks_parcel(mem))
-        if goal == GOAL_TOWN_MAP:
-            return bool(self.have_town_map(mem))
-        if goal == GOAL_FOUGHT_BROCK:
-            return bool(self.fought_brock_yet(mem))
-        if goal == GOAL_FOUGHT_MISTY:
-            return bool(self.fought_misty_yet(mem))
-        if goal == GOAL_FOUGHT_SURGE:
-            return bool(self.fought_lt_surge_yet(mem))
-        if goal == GOAL_FOUGHT_ERIKA:
-            return bool(self.fought_erika_yet(mem))
-        if goal == GOAL_FOUGHT_KOGA:
-            return bool(self.fought_koga_yet(mem))
-        if goal == GOAL_FOUGHT_SABRINA:
-            return bool(self.fought_sabrina_yet(mem))
-        if goal == GOAL_FOUGHT_BLAINE:
-            return bool(self.fought_blaine_yet(mem))
-        if goal == GOAL_FOUGHT_GIOVANNI:
-            return bool(self.fought_giovanni_yet(mem))
         if goal in BADGE_GOALS:
+            badges = self.badges(self.pyboy.memory)
             idx = BADGE_GOALS.index(goal)
             return bool(idx < len(badges) and badges[idx])
-        if goal == GOAL_SS_ANNE:
-            return bool(self.is_ss_anne_here(mem))
-        if goal == GOAL_LAPRAS:
-            return bool(self.did_you_get_lapras_yet(mem))
-        if goal == GOAL_SNORLAX:
-            return bool(
-                self.fought_snorlax_yet_vermilion(mem)
-                or self.fought_snorlax_yet_celadon(mem)
-            )
-        if goal == GOAL_ARTICUNO:
-            return bool(self.fought_articuno_yet(mem))
-        if goal == GOAL_ZAPDOS:
-            return bool(self.fought_zapdos_yet(mem))
-        if goal == GOAL_MOLTRES:
-            return bool(self.fought_moltres_yet(mem))
-        if goal == GOAL_FOSSIL:
-            return bool(self.fossilized_pokemon(mem))
-        if goal == GOAL_MEWTWO:
-            # mewtwo_can_be_caught (0xD85F bit1) means "encounterable", not
-            # "caught" — the real goal is catching it, read off the Pokédex
-            # owned bit instead (see has_caught_mewtwo).
-            return bool(self.has_caught_mewtwo(mem))
-        if goal == GOAL_ALL_BADGES:
-            return bool(badges) and all(badges)
-        if goal == GOAL_CHAMPION:
-            # Hall of Fame is only ever entered via the auto-warp right after
-            # beating the Champion — no other way in, so map_id alone is a
-            # reliable trigger. badges check is belt-and-suspenders (can't
-            # reach Indigo Plateau without all 8 anyway).
-            return mid == MAP_HALL_OF_FAME and bool(badges) and all(badges)
-        return False
+        return self.is_event_satisfied(goal, self.pyboy.memory)
+
+    def is_event_satisfied(self, event_name: str, memory: PyBoyMemoryView | bytes | None = None) -> bool:
+        """Generic wEventFlags bit read for any name known to event_constants.py.
+
+        This is the fallback every unrecognized ``goal`` string falls through
+        to in is_goal_satisfied(), and the single source of truth for the new
+        generic goal pool (GOAL_CANDIDATES / EVENT_GOAL_CANDIDATES) — no
+        per-event hand-written method, so no per-event chance of a wrong-bit
+        bug like the fought_X_yet cluster this replaces.
+        """
+        if event_name not in _event_constants.EVENTS:
+            return False
+        if memory is None:
+            memory = self.pyboy.memory
+        addr = _event_constants.event_address(event_name)
+        bit = _event_constants.event_bit(event_name)
+        return bool(memory[addr] & (1 << bit))
+
+    def map_step_budget(self, map_id: int) -> int:
+        """Size-scaled world-step allowance for one map this episode.
+
+        Scales with sqrt(width*height), not the raw area, so the spread
+        between a tiny 4x4 room and a huge multi-screen route stays
+        compressed instead of linear (see map_budget_steps_per_sqrt_block).
+        Floor of 64 so a degenerate/UNUSED_MAP entry (width=height=0 in
+        map_constants.py) still gets a usable budget.
+        """
+        area = _map_constants.map_area_blocks(map_id)
+        return max(64, int(math.sqrt(area) * self.map_budget_steps_per_sqrt_block))
+
+    def _tick_map_budget(self, memory: PyBoyMemoryView | bytes) -> None:
+        """Advance the current map's world-step counter. Called once per step
+        from count() — only fills while actually walking the world; dialog/
+        battle/menu time on a map is free (see map_budget_exceeded for why
+        the resulting penalty is *not* similarly gated)."""
+        if not self.is_world(memory):
+            return
+        mid = self.map_id(memory)
+        self.world_map_step_counts[mid] = self.world_map_step_counts.get(mid, 0) + 1
+
+    def map_budget_exceeded(self, memory: PyBoyMemoryView | bytes | None = None) -> bool:
+        """True once the current map's size-scaled step budget is used up.
+
+        Checked every step regardless of mode: a policy stuck cycling through
+        a menu or a battle on an already-overstayed map should not be able to
+        dodge the penalty just because _tick_map_budget itself only fills
+        during is_world().
+        """
+        if memory is None:
+            memory = self.pyboy.memory
+        mid = self.map_id(memory)
+        return self.world_map_step_counts.get(mid, 0) > self.map_step_budget(mid)
+
+    def reward_map_budget(self, memory: PyBoyMemoryView | bytes | None = None) -> float:
+        return self.map_budget_penalty if self.map_budget_exceeded(memory) else 0.0
+
+    def active_map_events(
+        self, map_id: int | None = None, memory: PyBoyMemoryView | bytes | None = None
+    ) -> list[str]:
+        """GOAL_CANDIDATES events whose home map is ``map_id`` (default: the
+        current map), not yet satisfied, but whose parents (per
+        event_graph.py's static-analysis edges) are all already satisfied —
+        i.e. plausibly "next in line" to happen right here, right now.
+
+        Events with no inferred parent (event_graph ROOT_EVENTS) are active
+        as soon as their map is entered, since there's nothing to wait on.
+        """
+        if memory is None:
+            memory = self.pyboy.memory
+        if map_id is None:
+            map_id = self.map_id(memory)
+
+        active: list[str] = []
+        for name in EVENT_GOAL_CANDIDATES:
+            info = _event_graph.EVENT_GRAPH.get(name)
+            if info is None or info["map_id"] != map_id:
+                continue
+            if self.is_event_satisfied(name, memory):
+                continue
+            if all(
+                self.is_event_satisfied(p, memory)
+                for p in info["parents"]
+                if p in _event_constants.EVENTS
+            ):
+                active.append(name)
+        return active
+
+    def has_active_map_event(self, memory: PyBoyMemoryView | bytes | None = None) -> bool:
+        return bool(self.active_map_events(memory=memory))
+
+    def reward_active_map_presence(self, memory: PyBoyMemoryView | bytes | None = None) -> float:
+        """Small shaping signal toward maps with unfinished, reachable
+        progress and away from maps with none — see active_map_event_reward/
+        inactive_map_event_penalty. World-mode only: presence doesn't mean
+        much mid-dialog/battle, and reward_position already covers movement
+        shaping there."""
+        if memory is None:
+            memory = self.pyboy.memory
+        if not self.is_world(memory):
+            return 0.0
+        return (
+            self.active_map_event_reward
+            if self.has_active_map_event(memory)
+            else self.inactive_map_event_penalty
+        )
+
 
     def goal_reached(self) -> bool:
         return self.is_goal_satisfied(self.goal)
@@ -2199,15 +1637,12 @@ class Data:
             and self.max_useless_ticks
             <= self.visited_positions.get(self.get_position(), 0)
         )
-        # Tutorial map lock: leaving the one allowed map (GOAL_ALLOWED_MAPS)
-        # used to fail the episode outright. It now costs an escalating
-        # penalty instead (off_map_ticks / off_map_penalty_scale, tracked in
-        # count() and applied in reward()), so a fresh/undertrained policy
-        # gets pushed back toward the PC's room rather than losing the
-        # episode the instant it steps out.
         stuck_loop = self.loop_streak >= self.max_loop_streak
         stuck_battle = self.max_useless_battle_ticks <= self.in_battle_ticks
         stuck_menu = self.max_useless_ticks <= self.in_menu_ticks
+        # Size-scaled per-map budget (see map_budget_exceeded) — checked in
+        # every mode, same as its per-step penalty in reward().
+        map_budget = self.map_budget_exceeded(self.pyboy.memory)
 
         causes: set[str] = set()
         if stuck_tile:
@@ -2220,51 +1655,30 @@ class Data:
             causes.add("stuck_battle")
         if stuck_menu:
             causes.add("stuck_menu")
+        if map_budget:
+            causes.add("map_budget")
         self.last_truncate_causes = frozenset(causes)
 
         return bool(causes)
 
     def current_milestone(self) -> str:
-        # Furthest known goal that is currently satisfied (order-independent).
-        priority = (
-            GOAL_CHAMPION,
-            GOAL_ALL_BADGES,
-            GOAL_MEWTWO,
-            GOAL_MOLTRES,
-            GOAL_ZAPDOS,
-            GOAL_ARTICUNO,
-            GOAL_SNORLAX,
-            GOAL_LAPRAS,
-            GOAL_FOSSIL,
-            GOAL_BADGE_8,
-            GOAL_FOUGHT_GIOVANNI,
-            GOAL_BADGE_7,
-            GOAL_FOUGHT_BLAINE,
-            GOAL_BADGE_6,
-            GOAL_FOUGHT_SABRINA,
-            GOAL_BADGE_5,
-            GOAL_FOUGHT_KOGA,
-            GOAL_BADGE_4,
-            GOAL_FOUGHT_ERIKA,
-            GOAL_BADGE_3,
-            GOAL_FOUGHT_SURGE,
-            GOAL_SS_ANNE,
-            GOAL_BADGE_2,
-            GOAL_FOUGHT_MISTY,
-            GOAL_BADGE_1,
-            GOAL_FOUGHT_BROCK,
-            GOAL_TOWN_MAP,
-            GOAL_OAKS_PARCEL,
-            GOAL_ROUTE_1,
-            GOAL_ROUTE_1_ENTRY,
-            GOAL_LEFT_HOUSE,
-        )
-        for g in priority:
-            if self.is_goal_satisfied(g):
-                return g
-        if self._milestones_hit:
-            return sorted(self._milestones_hit)[-1]
-        return "start"
+        """Most-advanced GOAL_CANDIDATES event/badge paid out this episode
+        (see reward_generic_progress / self._milestones_hit), using each
+        event's wEventFlags bit index as a rough story-order proxy (events
+        are declared in event_constants.asm roughly city-by-city in
+        progression order — see tools/gen_event_constants.py). Badges have
+        no bit index (wObtainedBadges, not wEventFlags) so they're anchored
+        to a fixed pseudo-index band between event sections instead.
+        """
+        if not self._milestones_hit:
+            return "start"
+
+        def order_key(name: str) -> int:
+            if name in BADGE_GOALS:
+                return -1_000_000 + (BADGE_GOALS.index(name) + 1) * 1000
+            return _event_constants.EVENTS.get(name, -1)
+
+        return max(self._milestones_hit, key=order_key)
 
     def is_illegal_world_move(self, memory: bytes, action: int):
         return (
