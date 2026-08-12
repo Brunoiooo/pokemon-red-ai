@@ -135,14 +135,17 @@ def render_module(symbols: dict[str, int], pokered_commit: str) -> str:
         "DO NOT EDIT BY HAND.",
         '"""',
         "",
-        "# name -> address. Multiple names can share an address (rgbds UNION",
-        "# blocks: the same bytes are reused for different purposes depending",
-        "# on game state, e.g. menu scratch space vs. battle scratch space).",
-        "RAM: dict[str, int] = {",
+        "from types import SimpleNamespace",
+        "",
+        "# name -> address, as attributes (RAM.wFoo). Multiple names can share an",
+        "# address (rgbds UNION blocks: the same bytes are reused for different",
+        "# purposes depending on game state, e.g. menu scratch space vs. battle",
+        "# scratch space) -- each still gets its own attribute.",
+        "RAM = SimpleNamespace(",
     ]
     for name in sorted(symbols):
-        lines.append(f"    {name!r}: 0x{symbols[name]:04X},")
-    lines.append("}")
+        lines.append(f"    {name}=0x{symbols[name]:04X},")
+    lines.append(")")
     lines.append("")
     lines.append("# address -> name(s), for reverse lookup / validation.")
     lines.append("RAM_BY_ADDRESS: dict[int, list[str]] = {")
