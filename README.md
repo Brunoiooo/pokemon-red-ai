@@ -40,7 +40,7 @@ Useful flags:
 
 | Flag | Meaning |
 |------|---------|
-| `--stage stage_left_house` | Starting goal (auto-curriculum reassigns randomly from there, order-free) |
+| `--stage EVENT_GOT_STARTER` | Starting goal (auto-curriculum reassigns randomly from there, order-free) |
 | `--no-auto-curriculum` | Keep a fixed stage/goal |
 | `--goal badge1` | Override episode success condition |
 | `--workers 8` | Parallel `SubprocVecEnv` envs |

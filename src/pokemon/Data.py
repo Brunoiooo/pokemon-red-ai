@@ -540,7 +540,6 @@ class Data:
         self.dialog_id_visit_counts = {}
         self.map_id_visit_counts = {}
         self.world_map_step_counts = {}
-        self._prev_satisfied_events = frozenset()
         self.battle_outcome_counts = {}
         self.milestone_hit_counts = {}
         self.truncate_hit_counts = {}
@@ -553,7 +552,20 @@ class Data:
         self.loop_streak = 0
         self.menu_noop_streak = 0
         self.dialog_wrong_streak = 0
-        self._milestones_hit = set()
+        # Seed both from the just-loaded save's actual live state rather than
+        # always empty: a checkpoint captured after some GOAL_CANDIDATES
+        # events already fired (e.g. saves/EVENT_ENTERED_BLUES_HOUSE) would
+        # otherwise have reward_generic_progress's first call this episode
+        # see every already-satisfied event as newly hit in one batch --
+        # paying out and firing terminated()/goal_success for all of them at
+        # once on literally every reset. Seeding _milestones_hit too (not
+        # just _prev_satisfied_events) blocks a later regress-then-reflicker
+        # of one of these from paying a second time. Reading memory here is
+        # safe -- this is a settled save snapshot, not the live frame-skip
+        # window where an event flag can flip true a tick before the write
+        # lands (same reasoning as _saw_oaks_parcel_in_bag just below).
+        self._milestones_hit = {n for n in GOAL_CANDIDATES if self.is_goal_satisfied(n)}
+        self._prev_satisfied_events = frozenset(self._milestones_hit)
         self.last_milestone_payouts = []
         self.last_regressed = []
         self._dialog_screens_seen = set()

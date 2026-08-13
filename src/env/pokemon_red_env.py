@@ -23,7 +23,6 @@ from curriculum_config import (
     get_curriculum_saves,
     get_goal_for_stage,
     get_stage_max_steps,
-    pick_new_goal,
     stage_for_goal,
 )
 from pokemon.Data import BADGE_GOALS, REWARD_COMPONENT_NAMES, Data
@@ -329,19 +328,35 @@ class PokemonRedEnv(gym.Env):
         }
 
     def _advance_after_goal(self) -> tuple[bool, str | None]:
-        """Advance curriculum in-place. Returns (advanced, cleared_stage).
-
-        Ephemeral: does not change the base stage, so ``reset()`` returns to
-        the trainer-assigned curriculum until MilestoneCallback reassigns it.
+        """Keep the episode going in-place after a milestone. Returns
+        (advanced, cleared_stage).
 
         Not gated on the specifically-assigned self.goal: Data.terminated()
         fires on ANY GOAL_CANDIDATES event/badge newly satisfied this step
         (see last_milestone_payouts). Whichever goal(s) actually landed this
-        step count as "cleared"; the next goal is a random, order-free pick
-        among what's still unsatisfied (see curriculum_config.pick_new_goal)
-        -- there is no "next" goal, only "some goal not yet reached". It
-        doesn't matter which goal fired first or which one comes next; what
-        matters is that *something* keeps happening.
+        step count as "cleared"; self.goal/self.stage are deliberately left
+        alone here -- reward_generic_progress already pays for any newly
+        satisfied goal regardless of assignment, and max_steps is a flat
+        constant for every goal, so there is nothing to gain by reassigning
+        self.goal mid-episode, only risk: a random reassignment (the old
+        curriculum_config.pick_new_goal call this used to make) could hand
+        out a goal nowhere near the map the episode is actually standing on,
+        with no way to get there this episode -- wasting the rest of the run
+        wandering back toward familiar ground instead of continuing to
+        explore forward. Per-leg counters get a fresh start (see
+        clear_visits), so budgets/penalties from before this goal cleared
+        don't leak into the fresh pressure the episode still has ahead --
+        except self._step_count, deliberately NOT reset here (unlike
+        set_curriculum's reset_steps=True, which this used to pass): a
+        policy that keeps chaining newly-satisfied milestones re-triggers
+        this method every time, and each call would otherwise hand max_steps
+        a brand new lease on life. self._step_count must stay a true,
+        never-reset ceiling on the *whole episode*, not just the current
+        leg -- a hung eval episode (a deterministic policy stringing
+        together enough milestones to keep resetting its own truncation
+        fuses) blocked MaskableEvalCallback for minutes before this was
+        caught (evaluate_policy runs synchronously in the main training
+        process, so one runaway eval episode stalls every worker).
         """
         hits = [name for name, _ in self.emu.data.last_milestone_payouts]
         cleared = hits[0] if hits else self.stage
@@ -349,18 +364,10 @@ class PokemonRedEnv(gym.Env):
         # legitimately cleared curriculum beat (lab → Route 1).
         for name in hits:
             self.emu.data.mark_goal_cleared(name)
-        nxt = pick_new_goal(is_satisfied=self.emu.data.is_goal_satisfied)
-        if nxt is None:
-            return False, cleared
-        self.set_curriculum(
-            stage=nxt,
-            goal=get_goal_for_stage(nxt),
-            max_steps=get_stage_max_steps(nxt),
-            # Keep base saves; only the live goal/max_steps change this episode.
-            reset_steps=True,
-            clear_visits=True,
-            permanent=False,
-        )
+        self._episode_loop = False
+        self._episode_loop_causes = set()
+        self.emu.data.loop_flag = False
+        self.set_curriculum(clear_visits=True, permanent=False)
         return True, cleared
 
     def _pick_save(self, options: dict | None) -> str:

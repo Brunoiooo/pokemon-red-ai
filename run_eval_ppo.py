@@ -421,20 +421,14 @@ def run(args):
             if info.get("goal_success"):
                 cleared = info.get("cleared_stage") or stage
                 stages_cleared.append(cleared)
-                stage = info.get("stage") or stage
-                print(
-                    f"  [ok] {cleared} cleared (goal={get_goal_for_stage(cleared)}) "
-                    f"-> advancing to {stage} "
-                    f"(goal={info.get('goal')})"
-                )
-                if args.save_checkpoints:
-                    out_dir = Path(f"saves/{stage}")
-                    out_dir.mkdir(parents=True, exist_ok=True)
-                    out_path = out_dir / "checkpoint.state"
-                    with raw.emu.files_lock:
-                        with open(out_path, "wb") as f:
-                            raw.emu.pyboy.save_state(f)
-                    print(f"  [checkpoint] saved -> {out_path}")
+                # Checkpoint for `cleared` itself was already written inside
+                # env.step() (PokemonRedEnv._save_milestone_checkpoints, see
+                # the -v visibility print above) -- self.stage/self.goal are
+                # deliberately left unchanged by goal success (see
+                # PokemonRedEnv._advance_after_goal's docstring), so there is
+                # no separate "new stage" here to save a (mislabeled) second
+                # checkpoint for.
+                print(f"  [ok] {cleared} cleared (goal={get_goal_for_stage(cleared)})")
 
             if truncated or terminated:
                 done = True
@@ -658,9 +652,16 @@ def main():
         help="Override max steps (default: per-stage curriculum limit)",
     )
     p.add_argument("--frame-skip", type=int, default=16)
-    p.add_argument("--stage", default="stage_left_house", help="Starting curriculum stage")
+    # Must match curriculum_config.DEFAULT_STAGE -- "stage_left_house" used
+    # to be here, but that's a dead pre-generic-goal-system id with no
+    # wEventFlags equivalent (see _LEGACY_STAGE_ALIASES' docstring), so it
+    # silently resolved to an arbitrary, unreachable, checkpoint-less goal
+    # (STAGE_ORDER[0] == EVENT_GOT_TOWN_MAP) instead of erroring.
+    p.add_argument("--stage", default="EVENT_GOT_STARTER", help="Starting curriculum stage")
     p.add_argument(
-        "--goal", default="left_house",
+        # Same dead-id problem as --stage above -- "left_house" isn't a real
+        # goal name (not in BADGE_GOALS or EVENT_GOAL_CANDIDATES).
+        "--goal", default="EVENT_GOT_STARTER",
         help="Fixed goal when --no-auto-curriculum",
     )
     p.add_argument(
@@ -673,8 +674,10 @@ def main():
         "--save-checkpoints",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="On goal success, overwrite saves/<new_stage>/checkpoint.state with "
-             "the reached state (default: on; pass --no-save-checkpoints to disable)",
+        help="On every GOAL_CANDIDATES event/badge newly satisfied, overwrite "
+             "saves/<name>/checkpoint.state with the reached state -- whichever "
+             "goal(s) actually cleared this step, not the curriculum's assigned "
+             "goal (default: on; pass --no-save-checkpoints to disable)",
     )
     p.add_argument("--gui", action="store_true")
     p.add_argument("--cpu", action="store_true")

@@ -72,7 +72,11 @@ p_train.add_argument("--ent-coef-max", type=float, default=0.3,
                      help="Ceiling for --auto-entropy (default: 0.3)")
 p_train.add_argument("--frame-skip", type=int, default=16)
 p_train.add_argument("--max-steps", type=int, default=None)
-p_train.add_argument("--stage", default="stage_left_house",
+# Must match curriculum_config.DEFAULT_STAGE -- "stage_left_house" used to
+# be here, a dead pre-generic-goal-system id that silently resolved to an
+# arbitrary, unreachable, checkpoint-less goal (see curriculum_config.py's
+# resolve_stage_name docstring).
+p_train.add_argument("--stage", default="EVENT_GOT_STARTER",
                      help="Starting curriculum stage (see curriculum_config.STAGE_ORDER)")
 p_train.add_argument("--list-stages", action="store_true",
                      help="List all curriculum stages (id, goal, max_steps, save) and exit")
@@ -137,10 +141,11 @@ p_eval.add_argument("--checkpoint", "-c", default="start")
 p_eval.add_argument("--max-steps", "-s", type=int, default=None,
                     help="Override max steps (default: per-stage limit)")
 p_eval.add_argument("--frame-skip", type=int, default=16)
-p_eval.add_argument("--stage", default="stage_left_house",
+# Same dead-id fallback problem as p_train's --stage above.
+p_eval.add_argument("--stage", default="EVENT_GOT_STARTER",
                     help="Starting curriculum stage (see curriculum_config.STAGE_ORDER)")
 p_eval.add_argument(
-    "--goal", default="left_house",
+    "--goal", default="EVENT_GOT_STARTER",
     help="Fixed goal when --no-auto-curriculum",
 )
 p_eval.add_argument(

@@ -20,10 +20,12 @@ GOAL_HIT_COUNTS_PATH = Path("saves") / "goal_hit_counts.json"
 
 # Every map_id any episode has ever set foot on this training run (see
 # MilestoneCallback._visited_maps), persisted the same way and for the same
-# reason as GOAL_HIT_COUNTS_PATH -- fed into curriculum_config.pick_new_goal
-# as ``visited_maps`` so the free pick in _try_reassign never hands out a
-# goal on a map training hasn't reached yet. Recorded once and reused for
-# the rest of the run instead of recomputed live, since it only ever grows.
+# reason as GOAL_HIT_COUNTS_PATH. No longer fed into pick_new_goal (see its
+# docstring -- candidates are now restricted to goals with their own
+# checkpoint instead, which is a stronger, exact reachability signal than
+# "training touched this map at some point"). Still tracked and exposed as
+# the pokemon/maps_visited_count TensorBoard gauge, and read by
+# PositionHeatmap.py's goal-saturation side panel.
 VISITED_MAPS_PATH = Path("saves") / "visited_maps.json"
 
 
@@ -175,7 +177,10 @@ class MilestoneCallback(BaseCallback):
         self,
         window: int = 100,
         auto_curriculum: bool = True,
-        start_stage: str = "stage_left_house",
+        # Must match curriculum_config.DEFAULT_STAGE -- see that constant's
+        # docstring for why "stage_left_house" (a dead pre-generic-goal-
+        # system id) used to be here.
+        start_stage: str = "EVENT_GOT_STARTER",
         success_threshold: float | None = None,
         min_episodes: int | None = None,
         check_every: int | None = None,
@@ -230,9 +235,9 @@ class MilestoneCallback(BaseCallback):
         # rather than a fixed sequence.
         self._goal_hit_counts: Counter[str] = Counter()
         # Every map_id any episode has touched this run, whole-run cumulative
-        # like _goal_hit_counts -- fed into pick_new_goal's ``visited_maps``
-        # in _try_reassign so the free pick only ever lands on a goal whose
-        # home map training has actually reached, not one still unseen.
+        # like _goal_hit_counts. No longer fed into pick_new_goal (see its
+        # docstring); kept for the pokemon/maps_visited_count gauge and
+        # PositionHeatmap.py's side panel.
         self._visited_maps: set[int] = set()
         # Every goal_success hit this window, whichever goal it was --
         # cleared_stage no longer needs to equal self.stage: goals clear
@@ -362,7 +367,7 @@ class MilestoneCallback(BaseCallback):
         # so brand-new discoveries aren't favored purely for being unseen --
         # weight only decays as a goal accumulates *practiced* hits.
         weights = {g: 1.0 / (1.0 + c) for g, c in self._goal_hit_counts.items()}
-        nxt = pick_new_goal(weights=weights, visited_maps=self._visited_maps)
+        nxt = pick_new_goal(weights=weights)
         if nxt is None or nxt == self.stage:
             return
 

@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import os
 import random
+import warnings
 
 from pokemon import event_constants as _event_constants
 from pokemon import event_graph as _event_graph
@@ -56,6 +57,22 @@ ADVANCE_CHECK_EVERY = 2048
 # guards against a policy that never triggers any map's budget/other fuses
 # at all (e.g. standing still on the very first map forever).
 DEFAULT_MAX_STEPS = 20_000
+
+# Fallback stage/goal for any --stage value that resolve_stage_name can't
+# place (not a live goal name, not a recognized _LEGACY_STAGE_ALIASES key --
+# e.g. the stale "stage_left_house" that used to be every CLI's --stage
+# default: it has no wEventFlags equivalent at all, see
+# _LEGACY_STAGE_ALIASES' docstring). Previously this silently substituted
+# STAGE_ORDER[0] -- an arbitrary "lowest wEventFlags bit index" pick that
+# resolved to EVENT_GOT_TOWN_MAP, a goal with no saves/ checkpoint and no
+# geographic relationship to a fresh "start" save, so every episode run
+# under it wasted its whole length wandering toward an unreachable goal and
+# eating reward_active_map_presence's off-goal-map penalty the entire time.
+# EVENT_GOT_STARTER is the actual earliest real milestone (picking a starter
+# in Oak's Lab), already checkpointed from minutes into the game, so an
+# episode assigned this can actually make progress instead of just being
+# punished for existing.
+DEFAULT_STAGE = "EVENT_GOT_STARTER"
 
 # Badges have no wEventFlags bit of their own (wObtainedBadges instead — see
 # badges()/BADGE_GOALS), so they need a stand-in event to sort next to.
@@ -140,8 +157,8 @@ CURRICULUM: dict[str, dict] = {goal: _stage(goal) for goal in STAGE_ORDER}
 # Not exhaustive: several old stages (stage_left_house, stage_route1_entry,
 # stage_route1, stage_lapras, ...) were map-presence or known-broken-bit
 # checks with no wEventFlags equivalent at all (see the fought_X_yet audit
-# in Data.py's git history) — those fall through unresolved to
-# resolve_stage_name's caller-side fallback instead of a fabricated mapping.
+# in Data.py's git history) — those fall through to resolve_stage_name's own
+# DEFAULT_STAGE fallback (with a warning) instead of a fabricated mapping.
 _LEGACY_STAGE_ALIASES: dict[str, str] = {
     "stage_oaks_parcel": "EVENT_GOT_OAKS_PARCEL",
     "stage_gave_parcel": "EVENT_OAK_GOT_PARCEL",
@@ -172,12 +189,26 @@ N_GOALS: int = len(GOAL_ORDER)
 def resolve_stage_name(stage: str) -> str:
     """Normalize a stage id: a live goal name resolves to itself; a
     recognized legacy 'stage_*' id (pre-generic-goal system) maps to its
-    nearest new equivalent (see _LEGACY_STAGE_ALIASES); anything else is
-    returned unchanged (callers already fall back to STAGE_ORDER[0] on a
-    CURRICULUM miss, e.g. get_goal_for_stage)."""
+    nearest new equivalent (see _LEGACY_STAGE_ALIASES). Anything else --
+    e.g. a dead pre-generic-goal id with no equivalent at all, like the old
+    "stage_left_house" default -- previously fell through unchanged and let
+    every caller's own ``CURRICULUM.get(stage, CURRICULUM[DEFAULT_STAGE])``
+    silently substitute an arbitrary goal (whatever happens to sort first by
+    wEventFlags bit index). That goal had no checkpoint and no geographic
+    relationship to a fresh save, so an episode assigned it wasted its whole
+    length chasing an unreachable target. Warn loudly and resolve to
+    DEFAULT_STAGE instead, so callers no longer need their own fallback."""
     if stage in CURRICULUM:
         return stage
-    return _LEGACY_STAGE_ALIASES.get(stage, stage)
+    resolved = _LEGACY_STAGE_ALIASES.get(stage)
+    if resolved is not None:
+        return resolved
+    warnings.warn(
+        f"resolve_stage_name: unrecognized stage {stage!r}, falling back to "
+        f"DEFAULT_STAGE ({DEFAULT_STAGE!r}) instead of an arbitrary goal",
+        stacklevel=2,
+    )
+    return DEFAULT_STAGE
 
 
 def _save_exists(name: str) -> bool:
@@ -207,20 +238,20 @@ def goal_status(goal: str) -> str:
 
 def get_goal_for_stage(stage: str) -> str:
     stage = resolve_stage_name(stage)
-    cfg = CURRICULUM.get(stage, CURRICULUM[STAGE_ORDER[0]])
+    cfg = CURRICULUM.get(stage, CURRICULUM[DEFAULT_STAGE])
     return cfg["goal"]
 
 
 def get_stage_max_steps(stage: str) -> int:
     stage = resolve_stage_name(stage)
-    cfg = CURRICULUM.get(stage, CURRICULUM[STAGE_ORDER[0]])
+    cfg = CURRICULUM.get(stage, CURRICULUM[DEFAULT_STAGE])
     return int(cfg["max_steps"])
 
 
 def get_curriculum_saves(stage: str) -> list[str]:
     """Ordered list of save dirs for curriculum mix (earlier … current)."""
     stage = resolve_stage_name(stage)
-    cfg = CURRICULUM.get(stage, CURRICULUM[STAGE_ORDER[0]])
+    cfg = CURRICULUM.get(stage, CURRICULUM[DEFAULT_STAGE])
     saves: list[str] = []
     for name in cfg.get("earlier", []):
         saves.append(resolve_checkpoint(name))
@@ -249,72 +280,59 @@ def stage_index(stage: str) -> int:
 
 def pick_new_goal(
     *,
-    is_satisfied=None,
-    prefer_discovered: bool = True,
-    visited_maps: set[int] | None = None,
     weights: dict[str, float] | None = None,
     rng: random.Random | None = None,
 ) -> str | None:
-    """Random, order-free pick of a goal to work toward next.
+    """Random pick of an already-mastered goal (has its own
+    saves/<goal>/checkpoint.state -- see _save_exists) to start a fresh
+    episode/leg from.
 
-    Replaces the old next_stage()/prev_stage() STAGE_ORDER walk: there is no
-    "next" goal, only "some goal not yet satisfied". If ``is_satisfied`` is
-    given (a live, single-playthrough check -- e.g.
-    Data.is_goal_satisfied), candidates it reports as already true are
-    excluded; omit it when there's no single live state to check against
-    (e.g. MilestoneCallback picking a base goal across many independent
-    parallel workers).
+    This is a "which checkpoint do we practice forward from" pick, not "aim
+    for this specific target": reward_generic_progress already pays out for
+    *every* GOAL_CANDIDATES event/badge newly satisfied in an episode,
+    regardless of which goal was assigned, and get_stage_max_steps is a flat
+    constant for every goal too -- the assigned goal has never actually
+    gated reward or episode length. Restricting candidates to _save_exists
+    goals keeps the pick meaningful: every candidate is somewhere a real
+    episode has actually stood, so resolve_checkpoint(nxt) always resolves
+    to a real, reachable state, never silently falling back to "start".
 
-    ``visited_maps`` optionally restricts candidates to goals whose home map
-    (event_graph.py's per-event map_id, or a badge's anchor event's -- see
-    _goal_map_id) is in the set -- e.g. MilestoneCallback passes every map_id
-    any episode has ever touched this training run, so the pick doesn't hand
-    out a goal on a map nothing has reached yet. Falls back to the
-    unrestricted pool if that would leave nothing (e.g. the set is still
-    empty very early on).
+    Checkpoints are written by deterministic eval rollouts only (see
+    train_ppo.py's eval_env / MaskableEvalCallback and
+    PokemonRedEnv._save_milestone_checkpoints), not noisy exploratory
+    training episodes -- so "mastered" means the policy demonstrably reaches
+    it under its current (near-)greedy behavior, not that one lucky training
+    rollout stumbled into it once.
 
-    When ``prefer_discovered`` is True (default), candidates are further
-    restricted to goals that are either already discovered -- i.e. have
-    their own saves/<goal>/checkpoint.state, meaning some episode has
-    actually reached it before, see
-    PokemonRedEnv._save_milestone_checkpoints -- or whose EVENT_GRAPH
-    parents are all already discovered (see _parents_satisfied), meaning
-    whatever leads up to this goal has already happened at least once even
-    if the goal itself hasn't been hit yet. This keeps training from being
-    handed a goal with no known path to it (or into it) yet. Falls back to
-    the (map-filtered) candidate pool otherwise (e.g. very early on, before
-    anything's been discovered).
+    Used to gate on EVENT_GRAPH parents / a training run's visited maps to
+    guess whether an unreached goal was "probably reachable" -- dropped
+    because event_graph's parent derivation only sees wEventFlags gates, not
+    the geography needed to actually walk there (e.g. a goal three towns
+    away with no in-game event dependency at all was "eligible" from step
+    one). Restricting to _save_exists sidesteps that guesswork entirely.
 
-    ``weights`` optionally biases the pick within the (already-filtered)
-    candidate pool -- e.g. MilestoneCallback passes a per-goal
-    inverse-hit-count so goals the policy rarely lands on (still hard / not
-    yet mastered) get sampled more often than ones it clears constantly.
-    This is what lets a practice order emerge from what the model has
-    actually learned, instead of every not-yet-satisfied goal being equally
-    likely forever. A candidate missing from ``weights`` (never seen yet)
-    defaults to weight 1.0, same as an already-seen-once goal, so novel
-    goals aren't starved relative to ones with one recorded hit. Omit for a
-    plain uniform pick.
+    ``weights`` optionally biases the pick within the candidate pool -- e.g.
+    MilestoneCallback passes a per-goal inverse-hit-count so goals the
+    policy rarely starts from get sampled more often than ones it's already
+    drilled constantly. This is what lets a practice order emerge from what
+    the model has actually learned, instead of every mastered goal being
+    equally likely forever. A candidate missing from ``weights`` (never seen
+    yet) defaults to weight 1.0, same as an already-seen-once goal, so
+    novel goals aren't starved relative to ones with one recorded hit. Omit
+    for a plain uniform pick.
+
+    None if nothing is mastered yet (very early in a fresh run, before the
+    first eval pass has confirmed any goal) -- callers should leave the
+    current assignment alone in that case.
     """
     rng = rng or random
     candidates = [
         g
         for g in STAGE_ORDER
-        if CURRICULUM.get(g, {}).get("enabled", True)
-        and (is_satisfied is None or not is_satisfied(g))
+        if CURRICULUM.get(g, {}).get("enabled", True) and _save_exists(g)
     ]
     if not candidates:
         return None
-    if visited_maps is not None:
-        on_visited_map = [g for g in candidates if _goal_map_id(g) in visited_maps]
-        if on_visited_map:
-            candidates = on_visited_map
-    if prefer_discovered:
-        eligible = [
-            g for g in candidates if _save_exists(g) or _parents_satisfied(g)
-        ]
-        if eligible:
-            candidates = eligible
     if weights:
         w = [weights.get(g, 1.0) for g in candidates]
         if sum(w) > 0:
@@ -323,7 +341,12 @@ def pick_new_goal(
 
 
 def stage_for_goal(goal: str) -> str:
-    """First curriculum stage that targets ``goal`` (fallback: STAGE_ORDER[0])."""
+    """First curriculum stage that targets ``goal`` (fallback: DEFAULT_STAGE)."""
     if goal in CURRICULUM:
         return goal
-    return STAGE_ORDER[0]
+    warnings.warn(
+        f"stage_for_goal: unrecognized goal {goal!r}, falling back to "
+        f"DEFAULT_STAGE ({DEFAULT_STAGE!r})",
+        stacklevel=2,
+    )
+    return DEFAULT_STAGE

@@ -91,7 +91,10 @@ def run(args):
     print(f"Total steps:{args.timesteps:,}")
     print(f"GUI:        {'ON' if args.gui else 'OFF'}")
     print(f"Auto curr.: {'ON' if args.auto_curriculum else 'OFF'}")
-    print(f"Save ckpts: {'ON' if args.save_checkpoints else 'OFF'}")
+    print(
+        f"Save ckpts: eval=ON train="
+        f"{'ON' if args.save_checkpoints else 'OFF'}"
+    )
     print(f"Heatmap:    {'ON (' + format(args.heatmap_frames, ',') + ' frame window)' if args.heatmap else 'OFF'}")
     print("=" * 70)
 
@@ -143,11 +146,15 @@ def run(args):
                 curriculum_saves=curriculum_saves[-1:],
                 render_mode=None,
                 auto_advance=args.auto_curriculum,
-                # Eval episodes are deterministic rollouts run purely to
-                # score the policy -- letting them write saves/<goal>/
-                # checkpoint.state would race with (and can clobber) the
-                # real training workers' checkpoints for no benefit.
-                save_checkpoints=False,
+                # Eval episodes are deterministic (near-)greedy rollouts, so
+                # a goal they reach is one the policy can reliably repeat --
+                # a much stronger "mastered" signal than a noisy exploratory
+                # training episode stumbling into it once. This is now the
+                # primary writer of saves/<goal>/checkpoint.state (see
+                # curriculum_config.pick_new_goal's docstring); training
+                # workers default to --no-save-checkpoints so there's only
+                # one writer per goal directory.
+                save_checkpoints=True,
             )
         ]
     )
@@ -325,7 +332,11 @@ def build_argparser(parent=None):
                    help="Ceiling for --auto-entropy (default: 0.3)")
     p.add_argument("--frame-skip", type=int, default=16)
     p.add_argument("--max-steps", type=int, default=None)
-    p.add_argument("--stage", default="stage_left_house",
+    # Must match curriculum_config.DEFAULT_STAGE -- "stage_left_house" used
+    # to be here, but that's a dead pre-generic-goal-system id with no
+    # wEventFlags equivalent (see _LEGACY_STAGE_ALIASES' docstring), so it
+    # silently resolved to an arbitrary, unreachable, checkpoint-less goal.
+    p.add_argument("--stage", default="EVENT_GOT_STARTER",
                    help="Starting curriculum stage (see curriculum_config.STAGE_ORDER)")
     p.add_argument("--list-stages", action="store_true",
                    help="List all curriculum stages (id, goal, max_steps, save) and exit")
@@ -334,12 +345,17 @@ def build_argparser(parent=None):
     p.add_argument("--auto-curriculum", action=argparse.BooleanOptionalAction, default=True,
                    help="Auto-advance through STAGE_ORDER when goal success rate is high (default: on)")
     p.add_argument(
-        "--save-checkpoints", action=argparse.BooleanOptionalAction, default=True,
+        "--save-checkpoints", action=argparse.BooleanOptionalAction, default=False,
         help="On every GOAL_CANDIDATES event/badge newly satisfied, overwrite "
              "saves/<name>/checkpoint.state with the reached state -- whichever "
              "goal an episode clears first, not just the currently-assigned "
-             "curriculum goal or STAGE_ORDER's heuristic order (default: on; "
-             "pass --no-save-checkpoints to disable)",
+             "curriculum goal. Default off for training workers: the eval_env "
+             "(deterministic rollouts, always writes) is the intended source "
+             "of truth, since a goal reached under exploration noise isn't "
+             "necessarily one the policy can reliably repeat. Pass "
+             "--save-checkpoints to also let (noisier) training episodes "
+             "write -- both writers use atomic replace, so this is safe, just "
+             "noisier -- e.g. for faster bootstrapping very early in a run.",
     )
     p.add_argument("--curriculum-mix", type=float, default=0.3,
                    help="Probability of resetting to an earlier curriculum save")

@@ -44,9 +44,9 @@ import keyboard
 
 from curriculum_config import (
     CURRICULUM,
+    DEFAULT_STAGE,
     GOAL_ORDER,
     get_goal_for_stage,
-    pick_new_goal,
     stage_for_goal,
 )
 from pokemon.Emulator import Emulator
@@ -246,16 +246,17 @@ def print_help() -> None:
 
 
 def _resolve_stage_goal(args: argparse.Namespace) -> tuple[str, str]:
-    """Match train_ppo defaults: stage_left_house → left_house."""
+    """Match train_ppo defaults: unset --stage/--goal -> DEFAULT_STAGE."""
     if args.goal:
         goal = str(args.goal)
         if goal not in GOAL_ORDER:
             # A bare goal id (e.g. "gave_parcel") was expected, but this looks
             # like a stage name (e.g. "stage_gave_parcel") got passed instead.
-            # stage_for_goal() silently falls back to stage_left_house for any
-            # unrecognized goal, which used to make data.goal permanently
-            # unmatchable (no milestone ever equals it -> stuck on muted
-            # rewards and auto-advance never fires) with no error at all.
+            # stage_for_goal() now warns (see curriculum_config.py) rather
+            # than silently falling back for any unrecognized goal, which
+            # used to make data.goal permanently unmatchable (no milestone
+            # ever equals it -> stuck on muted rewards and auto-advance
+            # never fires) with no error at all.
             hint = ""
             if goal in CURRICULUM:
                 hint = (
@@ -272,7 +273,7 @@ def _resolve_stage_goal(args: argparse.Namespace) -> tuple[str, str]:
     if stage is None and args.from_checkpoint in CURRICULUM:
         stage = args.from_checkpoint
     if stage is None:
-        stage = "stage_left_house"
+        stage = DEFAULT_STAGE
     return stage, get_goal_for_stage(stage) or GOAL_ORDER[0]
 
 
@@ -309,17 +310,14 @@ def _clear_visits(data) -> None:
 def _advance_after_goal(emu: Emulator, stage: str, goal: str) -> tuple[bool, str, str]:
     """In-place curriculum advance — mirrors PokemonRedEnv._advance_after_goal.
 
-    Order-free: whichever goal just fired, the next one is a random pick
-    among what's still unsatisfied (see curriculum_config.pick_new_goal).
+    stage/goal are deliberately left unchanged (see that docstring for why:
+    reward doesn't gate on the assigned goal, so reassigning it mid-episode
+    only risks handing out a goal nowhere near reachable this run). Only the
+    per-leg counters get a fresh start.
     """
-    nxt = pick_new_goal(is_satisfied=emu.data.is_goal_satisfied)
-    if nxt is None:
-        return False, stage, goal
     emu.data.mark_goal_cleared(goal)
-    new_goal = get_goal_for_stage(nxt)
-    emu.data.goal = new_goal
     _clear_visits(emu.data)
-    return True, nxt, new_goal
+    return True, stage, goal
 
 
 def run(args: argparse.Namespace) -> None:
