@@ -249,23 +249,32 @@ def get_stage_max_steps(stage: str) -> int:
 
 
 def get_curriculum_saves(stage: str) -> list[str]:
-    """Ordered list of save dirs for curriculum mix (earlier … current)."""
+    """Ordered list of save dirs for curriculum mix (earlier … current).
+
+    "start" is always the first (earlier) entry, even once the stage's own
+    checkpoint exists -- see PokemonRedEnv._pick_save / --curriculum-mix,
+    which resets from curriculum_saves[:-1] with probability curriculum_mix
+    and from curriculum_saves[-1] (the frontier checkpoint) otherwise.
+    Without this, curriculum_mix had nothing earlier than the frontier to
+    ever mix in, so episodes never reset from the true game start once a
+    stage's checkpoint existed. If the stage isn't mastered yet, every entry
+    resolves to "start" and dedup collapses this to a single-element list
+    (no mixing -- see PokemonRedEnv._pick_save's len(...) > 1 guard).
+    """
     stage = resolve_stage_name(stage)
     cfg = CURRICULUM.get(stage, CURRICULUM[DEFAULT_STAGE])
-    saves: list[str] = []
+    saves: list[str] = ["start"]
     for name in cfg.get("earlier", []):
         saves.append(resolve_checkpoint(name))
     saves.append(resolve_checkpoint(cfg["checkpoint"]))
-    named = resolve_checkpoint(stage)
-    if named not in saves and named != "start":
-        saves.append(named)
+    saves.append(resolve_checkpoint(stage))
     seen: set[str] = set()
     out: list[str] = []
     for s in saves:
         if s not in seen:
             seen.add(s)
             out.append(s)
-    return out or ["start"]
+    return out
 
 
 def stage_index(stage: str) -> int:

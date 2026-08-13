@@ -56,7 +56,13 @@ def run(args):
     stage = resolve_stage_name(args.stage)
     goal = args.goal or get_goal_for_stage(stage)
     max_steps = args.max_steps or get_stage_max_steps(stage)
+    # get_curriculum_saves always puts "start" first (see its docstring) --
+    # training resets from curriculum_saves[-1] (the frontier checkpoint)
+    # most episodes, and from "start" with probability args.curriculum_mix
+    # (see PokemonRedEnv._pick_save), so the true game start stays in the
+    # mix instead of only ever drilling forward from the frontier.
     curriculum_saves = get_curriculum_saves(stage)
+    train_save_state = curriculum_saves[-1]
 
     # SubprocVecEnv requires identical render_mode on every worker, so --gui
     # enables SDL on all training workers. Eval stays headless: a second SDL
@@ -86,6 +92,14 @@ def run(args):
     print(f"Goal:       {goal}")
     print(f"Max steps:  {max_steps}")
     print(f"Frame skip: {args.frame_skip}")
+    if len(curriculum_saves) > 1:
+        print(
+            f"Train save: {train_save_state} "
+            f"({args.curriculum_mix:.0%} mix-in from {curriculum_saves[:-1]})"
+        )
+    else:
+        print(f"Train save: {train_save_state}")
+    print("Eval save:  start")
     print(f"Saves:      {curriculum_saves}")
     print(f"Log dir:    {log_dir}")
     print(f"Total steps:{args.timesteps:,}")
@@ -107,7 +121,7 @@ def run(args):
     def _make(rank: int):
         def _thunk():
             env = PokemonRedEnv(
-                save_state=curriculum_saves[-1],
+                save_state=train_save_state,
                 max_steps=max_steps,
                 frame_skip=args.frame_skip,
                 goal=goal,
@@ -137,13 +151,16 @@ def run(args):
     eval_env = DummyVecEnv(
         [
             lambda: PokemonRedEnv(
-                save_state=curriculum_saves[-1],
+                # Always the true game start, regardless of --stage/--goal or
+                # curriculum_saves -- eval measures whole-game performance,
+                # not the narrow segment training happens to be drilling.
+                save_state="start",
                 max_steps=max_steps,
                 frame_skip=args.frame_skip,
                 goal=goal,
                 stage=stage,
                 curriculum_mix=0.0,
-                curriculum_saves=curriculum_saves[-1:],
+                curriculum_saves=["start"],
                 render_mode=None,
                 auto_advance=args.auto_curriculum,
                 # Eval episodes are deterministic (near-)greedy rollouts, so

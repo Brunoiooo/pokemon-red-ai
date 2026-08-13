@@ -71,7 +71,6 @@ def run(args):
     from stable_baselines3.common.monitor import Monitor
 
     from curriculum_config import (
-        get_curriculum_saves,
         get_goal_for_stage,
         get_stage_max_steps,
         resolve_stage_name,
@@ -82,16 +81,18 @@ def run(args):
     auto = bool(getattr(args, "auto_curriculum", True))
     stage = resolve_stage_name(args.stage)
 
+    # --checkpoint defaults to "start" -- honor that literally (the true
+    # game start) instead of silently substituting the stage's own mastered
+    # checkpoint. Pass --checkpoint <name> explicitly to eval from a
+    # specific saves/<name>/checkpoint.state instead.
+    save_state = args.checkpoint
+    saves = [save_state]
     if auto:
         goal = get_goal_for_stage(stage)
         max_steps = args.max_steps if args.max_steps else get_stage_max_steps(stage)
-        saves = get_curriculum_saves(stage)
-        save_state = args.checkpoint if args.checkpoint != "start" else saves[-1]
     else:
         goal = args.goal
         max_steps = args.max_steps if args.max_steps else 5000
-        save_state = args.checkpoint
-        saves = [save_state]
 
     heatmap_proc = heatmap_queue = None
     if args.heatmap:
@@ -137,12 +138,11 @@ def run(args):
 
     for ep in range(args.episodes):
         if auto:
-            saves = get_curriculum_saves(stage)
             raw.set_curriculum(
                 stage=stage,
                 goal=get_goal_for_stage(stage),
                 max_steps=get_stage_max_steps(stage) if not args.max_steps else args.max_steps,
-                save_state=args.checkpoint if args.checkpoint != "start" else saves[-1],
+                save_state=save_state,
                 curriculum_saves=saves,
                 curriculum_mix=0.0,
                 reset_steps=True,
@@ -471,7 +471,6 @@ def run_batch(args):
     from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 
     from curriculum_config import (
-        get_curriculum_saves,
         get_goal_for_stage,
         get_stage_max_steps,
         resolve_stage_name,
@@ -483,16 +482,16 @@ def run_batch(args):
     auto = bool(getattr(args, "auto_curriculum", True))
     stage = resolve_stage_name(args.stage)
 
+    # --checkpoint defaults to "start" -- honor that literally, same fix as
+    # in run() above.
+    save_state = args.checkpoint
+    saves = [save_state]
     if auto:
         goal = get_goal_for_stage(stage)
         max_steps = args.max_steps if args.max_steps else get_stage_max_steps(stage)
-        saves = get_curriculum_saves(stage)
-        save_state = args.checkpoint if args.checkpoint != "start" else saves[-1]
     else:
         goal = args.goal
         max_steps = args.max_steps if args.max_steps else 5000
-        save_state = args.checkpoint
-        saves = [save_state]
 
     n_workers = max(1, args.batch_workers)
     target_runs = args.batch

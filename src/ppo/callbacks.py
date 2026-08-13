@@ -325,19 +325,30 @@ class MilestoneCallback(BaseCallback):
 
         return float(stage_index(self.stage))
 
-    def _apply_stage_to_env(self, env: VecEnv, stage: str) -> None:
+    def _apply_stage_to_env(self, env: VecEnv, stage: str, *, is_eval: bool = False) -> None:
         from curriculum_config import get_curriculum_saves, get_goal_for_stage, get_stage_max_steps
 
         goal = get_goal_for_stage(stage)
         max_steps = get_stage_max_steps(stage)
-        saves = get_curriculum_saves(stage)
+        if is_eval:
+            # Eval always resets from the true game start (see eval_env's
+            # construction in train_ppo.py) -- it measures whole-game
+            # performance, not the narrow segment training is drilling, so
+            # it must not inherit curriculum_mix's "start" vs frontier
+            # mixing (get_curriculum_saves now puts "start" in the mix pool
+            # for training; without this override eval would pick it up too
+            # the moment a stage reassignment calls this).
+            save_state, saves, mix = "start", ["start"], 0.0
+        else:
+            saves = get_curriculum_saves(stage)
+            save_state, mix = saves[-1], self.curriculum_mix
         env.env_method(
             "set_curriculum",
             goal=goal,
             max_steps=max_steps,
-            save_state=saves[-1],
+            save_state=save_state,
             curriculum_saves=saves,
-            curriculum_mix=self.curriculum_mix,
+            curriculum_mix=mix,
             stage=stage,
             clear_visits=True,
         )
@@ -375,7 +386,7 @@ class MilestoneCallback(BaseCallback):
         self.stage = nxt
         self._apply_stage_to_env(self.training_env, nxt)
         if self.eval_env is not None:
-            self._apply_stage_to_env(self.eval_env, nxt)
+            self._apply_stage_to_env(self.eval_env, nxt, is_eval=True)
 
         # Fresh window so we don't immediately leap again on stale successes.
         self._successes.clear()
