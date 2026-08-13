@@ -60,8 +60,8 @@ TRUNCATE_CAUSES = (
 
 # Normalization cap for map_id_visit_grid's dwell-time observation (see
 # Data.map_visit_grid_cap). Purely informational input for the model — the
-# live reward-affecting per-map budget is size-scaled (see map_step_budget),
-# not this flat constant.
+# live per-map truncate budget is size-scaled (see map_truncate_budget), not
+# this flat constant.
 MAP_DWELL_BUDGET = 256
 
 # position_visit_counts thresholds where reward_anti_loop's graduated visit
@@ -133,7 +133,6 @@ REWARD_COMPONENT_NAMES: tuple[str, ...] = (
     "battle_useless_step",
     "anti_loop",
     "dialog_reopen",
-    "map_budget",
     "active_map_presence",
     "new_dialog_presence",
     "new_map_presence",
@@ -374,15 +373,13 @@ class Data:
     # Size-scaled per-map step budget: steps allowed on one map this episode
     # is that map's own width*height in blocks (map_constants.py, generated
     # from pret/pokered's map_const macro) — no extra multiplier, so the
-    # budget is literally the map's block area. Only fills while is_world()
-    # (see _tick_map_budget) — dialog/battle/menu time on a map doesn't
-    # consume it — but once exceeded, a per-step penalty ramps up every step
-    # regardless of mode (see map_budget_exceeded/reward_map_budget), so
-    # ducking into a menu can't dodge it. The episode itself isn't truncated
-    # until double that budget (see map_truncate_budget/truncated) — the
-    # ramp gets a full budget's worth of room to bite before the hard cutoff.
+    # budget is literally the map's block area, scaled by
+    # new_position_decay_visits (see map_truncate_budget). Only fills while
+    # is_world() (see _tick_map_budget) — dialog/battle/menu time on a map
+    # doesn't consume it. No per-step penalty for overstaying; the episode is
+    # simply truncated once the budget is exceeded (see map_truncate_budget/
+    # truncated).
     world_map_step_counts: dict[int, int] = field(default_factory=dict)
-    map_budget_penalty: float = -0.02
 
     # Per-step shaping toward whichever map currently has an unfinished,
     # reachable event (see active_map_events): small reward for being on a
@@ -1163,9 +1160,6 @@ class Data:
             step += self._accum_reward("anti_loop", self.reward_anti_loop(action=action, memory=memory))
         # Always track dialog enter/exit — cutscenes often follow textboxes.
         step += self._accum_reward("dialog_reopen", self.reward_dialog_reopen(memory))
-        # Map-size step budget: applies in every mode (world/dialog/battle/
-        # menu), not just is_world() — see map_budget_exceeded.
-        step += self._accum_reward("map_budget", self.reward_map_budget(self.pyboy.memory))
         # Nudge toward maps with unfinished reachable progress (world-mode only).
         step += self._accum_reward(
             "active_map_presence", self.reward_active_map_presence(self.pyboy.memory)
@@ -1768,15 +1762,6 @@ class Data:
         bit = _event_constants.event_bit(event_name)
         return bool(memory[addr] & (1 << bit))
 
-    def map_step_budget(self, map_id: int) -> int:
-        """Size-scaled world-step allowance for one map this episode before
-        reward_map_budget's per-step penalty starts ramping: half of
-        map_truncate_budget (see there for the area*new_position_decay_visits
-        derivation) -- derived from it, not independently floored, so the two
-        never drift out of their exact 1:2 ratio.
-        """
-        return self.map_truncate_budget(map_id) // 2
-
     def map_truncate_budget(self, map_id: int) -> int:
         """Hard step cutoff that ends the episode (see truncated()) -- the
         map's own width*height in blocks (floor of 64 so a degenerate/
@@ -1787,9 +1772,8 @@ class Data:
         it's stale" constant reward_position's exploration_reward decays
         against, instead of an unrelated hand-picked multiplier: the budget
         is exactly the step count it'd take to visit every tile on the map
-        new_position_decay_visits times each. map_step_budget (half of this)
-        is where reward_map_budget's ramp starts; this is where it tops out
-        and truncated() ends the episode.
+        new_position_decay_visits times each. No per-step penalty ramps up
+        before this -- truncated() simply ends the episode once it's passed.
         """
         area = _map_constants.map_area_blocks(map_id)
         return max(64, area) * self.new_position_decay_visits
@@ -1797,55 +1781,25 @@ class Data:
     def _tick_map_budget(self, memory: PyBoyMemoryView | bytes) -> None:
         """Advance the current map's world-step counter. Called once per step
         from count() — only fills while actually walking the world; dialog/
-        battle/menu time on a map is free (see map_budget_exceeded for why
-        the resulting penalty is *not* similarly gated)."""
+        battle/menu time on a map is free (see map_truncate_exceeded, which
+        is checked every mode regardless)."""
         if not self.is_world(memory):
             return
         mid = self.map_id(memory)
         self.world_map_step_counts[mid] = self.world_map_step_counts.get(mid, 0) + 1
 
-    def map_budget_exceeded(self, memory: PyBoyMemoryView | bytes | None = None) -> bool:
-        """True once the current map's step count has passed map_step_budget
-        -- the point reward_map_budget's per-step penalty ramp starts. Does
-        NOT by itself end the episode; see map_truncate_exceeded for the (2x
-        higher) hard cutoff checked by truncated().
-
-        Checked every step regardless of mode: a policy stuck cycling through
-        a menu or a battle on an already-overstayed map should not be able to
-        dodge the penalty just because _tick_map_budget itself only fills
-        during is_world().
-        """
-        if memory is None:
-            memory = self.pyboy.memory
-        mid = self.map_id(memory)
-        return self.world_map_step_counts.get(mid, 0) > self.map_step_budget(mid)
-
     def map_truncate_exceeded(self, memory: PyBoyMemoryView | bytes | None = None) -> bool:
         """True once the current map's step count has passed
-        map_truncate_budget (2x map_step_budget) -- the hard cutoff checked
-        by truncated(), same every-mode gating as map_budget_exceeded."""
+        map_truncate_budget -- the hard cutoff checked by truncated().
+        Checked every step regardless of mode: a policy stuck cycling through
+        a menu or a battle on an already-overstayed map should not be able to
+        dodge it just because _tick_map_budget itself only fills during
+        is_world().
+        """
         if memory is None:
             memory = self.pyboy.memory
         mid = self.map_id(memory)
         return self.world_map_step_counts.get(mid, 0) > self.map_truncate_budget(mid)
-
-    def reward_map_budget(self, memory: PyBoyMemoryView | bytes | None = None) -> float:
-        """Per-step penalty once map_step_budget is exceeded, ramping linearly
-        from map_budget_penalty at the budget up to 10x that at
-        map_truncate_budget (2x budget) -- same ramp shape as
-        reward_position/reward_dialog/reward_battle's waste_factor, capped at
-        the point truncated() ends the episode instead of growing forever.
-        """
-        if memory is None:
-            memory = self.pyboy.memory
-        mid = self.map_id(memory)
-        budget = self.map_step_budget(mid)
-        steps = self.world_map_step_counts.get(mid, 0)
-        if steps <= budget:
-            return 0.0
-        ramp_span = self.map_truncate_budget(mid) - budget
-        waste_factor = min(steps - budget, ramp_span) / ramp_span
-        return self.map_budget_penalty * (1.0 + waste_factor * 9.0)
 
     def active_map_events(
         self, map_id: int | None = None, memory: PyBoyMemoryView | bytes | None = None
@@ -1999,10 +1953,9 @@ class Data:
         stuck_loop = self.loop_streak >= self.max_loop_streak
         stuck_battle = self.max_useless_battle_ticks <= self.in_battle_ticks
         stuck_menu = self.max_useless_ticks <= self.in_menu_ticks
-        # Size-scaled per-map hard cutoff (see map_truncate_exceeded) — 2x
-        # map_step_budget, checked in every mode same as reward_map_budget's
-        # ramp. The lower map_step_budget threshold only starts that ramping
-        # per-step penalty; it does not truncate by itself.
+        # Size-scaled per-map hard cutoff (see map_truncate_exceeded/
+        # map_truncate_budget), checked in every mode. No per-step penalty
+        # before this; the episode is simply truncated once it's passed.
         map_budget = self.map_truncate_exceeded(self.pyboy.memory)
 
         causes: set[str] = set()

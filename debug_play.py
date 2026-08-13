@@ -194,15 +194,14 @@ def bag_line(emu: Emulator) -> str:
 
 
 def map_counter_str(emu: Emulator) -> str:
-    """Current map's world_map_step_counts vs its step/truncate budget (see
-    Data.map_step_budget / Data.map_truncate_budget) -- the same per-map
-    dwell counter Data.clean() / set_curriculum(clear_visits=True) zero out."""
+    """Current map's world_map_step_counts vs its truncate budget (see
+    Data.map_truncate_budget) -- the same per-map dwell counter Data.clean() /
+    set_curriculum(clear_visits=True) zero out."""
     data = emu.data
     mid = data.map_id(emu.pyboy.memory)
-    budget = data.map_step_budget(mid)
     truncate_budget = data.map_truncate_budget(mid)
     used = data.world_map_step_counts.get(mid, 0)
-    return f"{used}/{budget}(/{truncate_budget})"
+    return f"{used}/{truncate_budget}"
 
 
 def fuse_line(emu: Emulator) -> str:
@@ -216,9 +215,8 @@ def fuse_line(emu: Emulator) -> str:
         f"menu={int(data.in_menu_ticks)}/{data.max_useless_ticks} "
         f"loop={data.loop_streak}/{data.max_loop_streak}"
     )
-    # Size-scaled per-map world-step budget (see Data.map_step_budget) —
-    # exceeding it ramps a per-step penalty (Data.reward_map_budget); the
-    # episode is only truncated at 2x that, Data.map_truncate_budget (see
+    # Size-scaled per-map world-step budget (see Data.map_truncate_budget) —
+    # the episode is truncated once it's exceeded (see
     # Data.map_truncate_exceeded), unlike the old flat/informational-only
     # map_dwell_budget display this replaces.
     mid = data.map_id(emu.pyboy.memory)

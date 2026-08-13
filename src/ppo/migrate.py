@@ -116,12 +116,15 @@ NEW_BASE_BLOCKS_SINCE: list[dict] = [
     {
         "name": "reward_component_sums",
         # Fixed width matching len(Data.REWARD_COMPONENT_NAMES) as of
-        # 2026-08-13. Hardcoded rather than imported: this must stay pinned
-        # to the width this block actually had in checkpoints from that date,
-        # not track future changes to REWARD_COMPONENT_NAMES (a further
-        # change there needs its own new NEW_BASE_BLOCKS_SINCE entry, same as
-        # any other block here).
-        "width": 18,
+        # 2026-08-14 (18-wide 2026-08-13 through 2026-08-14, when
+        # "map_budget" was dropped -- see note below; checkpoints saved in
+        # that narrow window won't reconstruct exactly, same tradeoff any
+        # width change to an existing block here makes). Hardcoded rather
+        # than imported: this must stay pinned to the width this block
+        # actually has now, not silently track future changes to
+        # REWARD_COMPONENT_NAMES (a further change there needs this width
+        # (and note) bumped again, same as any other block here).
+        "width": 17,
         # Same skeleton offset as dialog_id_visit_counts/map_id_visit_counts
         # (all three splice in right before "map_id"); declared last so the
         # offset tie-break orders it after both.
@@ -129,7 +132,10 @@ NEW_BASE_BLOCKS_SINCE: list[dict] = [
         "note": (
             "2026-08-13: cumulative per-episode sum of each named reward "
             "sub-component (incl. total) added to the observation (see "
-            "Data.reward_component_vector / REWARD_COMPONENT_NAMES)."
+            "Data.reward_component_vector / REWARD_COMPONENT_NAMES). "
+            "2026-08-14: \"map_budget\" component dropped (the per-map "
+            "overstay penalty was removed; only the map_truncate_budget "
+            "hard cutoff remains), narrowing this block from 18 to 17."
         ),
     },
     {

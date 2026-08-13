@@ -52,10 +52,11 @@ ADVANCE_MIN_EPISODES = 40
 ADVANCE_CHECK_EVERY = 2048
 
 # Generous flat safety-net ceiling on top of Data.py's live, size-scaled
-# per-map budget (map_step_budget) — that budget grows as new maps are
-# visited instead of being precomputed per goal here, so this constant only
-# guards against a policy that never triggers any map's budget/other fuses
-# at all (e.g. standing still on the very first map forever).
+# per-map truncate budget (map_truncate_budget) — that budget grows as new
+# maps are visited instead of being precomputed per goal here, so this
+# constant only guards against a policy that never triggers any map's
+# budget/other fuses at all (e.g. standing still on the very first map
+# forever).
 DEFAULT_MAX_STEPS = 20_000
 
 # Fallback stage/goal for any --stage value that resolve_stage_name can't
