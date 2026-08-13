@@ -129,6 +129,9 @@ def run(args):
     model = MaskablePPO.load(str(model_path), device="cpu" if args.cpu else "auto")
     data = raw.emu.data
 
+    from pokemon.map_collision import walkable_tile_count
+    from pokemon.map_constants import MAPS_BY_ID
+
     verbose = int(getattr(args, "verbose", 0) or 0)
     ACTION_NAMES = ("NONE", "A", "B", "UP", "DOWN", "LEFT", "RIGHT", "START", "SELECT")
 
@@ -209,6 +212,7 @@ def run(args):
                     info.get("heatmap_milestones"),
                     info.get("heatmap_dialogs"),
                     info.get("heatmap_truncations"),
+                    info.get("heatmap_visit_counts"),
                     info.get("heatmap_steps") or 0,
                     info.get("stage", stage),
                     info.get("party_count"),
@@ -324,12 +328,31 @@ def run(args):
                     ctr_truncate_budget = data.map_truncate_budget(int(map_id))
                     ctr_used = data.world_map_step_counts.get(int(map_id), 0)
                     map_ctr = f" map_ctr={ctr_used}/{ctr_budget}(/{ctr_truncate_budget})"
+                # How much of the current map has actually been discovered
+                # so far this run: distinct (x, y) on this map_id with a
+                # position_visit_counts entry (ordinary walking, plus
+                # whatever a wild encounter's flood fill in
+                # Data._mark_wild_grass_island bumped in one shot) against
+                # every walkable cell the map has (pokemon.map_collision,
+                # generated straight from pret/pokered's own map/tileset
+                # data -- see tools/gen_map_collision.py).
+                map_entry = MAPS_BY_ID.get(int(map_id)) if map_id is not None else None
+                if map_entry is not None:
+                    map_name = map_entry[0]
+                    discovered = sum(
+                        1 for pos in data.position_visit_counts if pos[2] == map_id
+                    )
+                    total_walkable = walkable_tile_count(int(map_id))
+                    disc_str = f" discovered={discovered}/{total_walkable}"
+                else:
+                    map_name, disc_str = "?", ""
                 print(
                     f"  [step] {steps:4d} act={aname:6s} rew={reward:+.4f} "
-                    f"total={total:7.2f} map={map_id} mode={_mode_flags(raw.emu):9s} "
+                    f"total={total:7.2f} map={map_id}({map_name}) "
+                    f"mode={_mode_flags(raw.emu):9s} "
                     f"loop={int(bool(info.get('loop_flag')))} "
                     f"in_goal_map={int(has_active_event)} "
-                    f"ms={info.get('milestone')}{map_ctr}"
+                    f"ms={info.get('milestone')}{map_ctr}{disc_str}"
                 )
 
             # -vv: per-hit damage-reward scale (which levels it's judged against),
@@ -545,6 +568,7 @@ def run_batch(args):
             info.get("heatmap_milestones"),
             info.get("heatmap_dialogs"),
             info.get("heatmap_truncations"),
+            info.get("heatmap_visit_counts"),
             info.get("heatmap_steps") or 0,
             info.get("party_count"),
             info.get("party_avg_level"),
@@ -557,7 +581,7 @@ def run_batch(args):
         if heatmap_queue is not None:
             from utils.PositionHeatmap import push_episode
 
-            push_episode(heatmap_queue, *payload[:9], stage_label, *payload[9:])
+            push_episode(heatmap_queue, *payload[:10], stage_label, *payload[10:])
 
     runs_done = 0
     goal_successes = 0
@@ -694,7 +718,7 @@ def main():
         "--batch-metrics", nargs="+",
         choices=[
             "ticks", "reward", "winrate", "fleerate", "recency", "dialog_recency",
-            "milestones", "truncations",
+            "milestones", "truncations", "visits",
         ],
         default=["ticks"],
         help="Which heatmap metric(s) to render in --batch mode (default: ticks)",

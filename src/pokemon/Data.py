@@ -9,6 +9,7 @@ import torch
 
 from pokemon import event_constants as _event_constants
 from pokemon import event_graph as _event_graph
+from pokemon import map_collision as _map_collision
 from pokemon import map_constants as _map_constants
 from pokemon import ram_constants as _ram_constants
 
@@ -62,6 +63,14 @@ TRUNCATE_CAUSES = (
 # live reward-affecting per-map budget is size-scaled (see map_step_budget),
 # not this flat constant.
 MAP_DWELL_BUDGET = 256
+
+# position_visit_counts thresholds where reward_anti_loop's graduated visit
+# penalty kicks in (soft) and doubles up (hard) -- see Data.reward_anti_loop.
+# SOFT also doubles as visit_mask_grid's per-tile observation cap (same
+# "meaningful visit count" scale) and, via PositionHeatmap's "visits"
+# metric, the reference unit its heatmap color scale is normalized against.
+VISIT_PENALTY_SOFT_THRESHOLD = 10
+VISIT_PENALTY_HARD_THRESHOLD = 20
 
 # Item / Pokédex IDs needed for goal checks below (constants/item_constants.asm
 # and the National Pokédex order, both from pret/pokered — not RAM addresses).
@@ -692,6 +701,7 @@ class Data:
             # every world<-battle return.
             if self.type_of_battle(self.pyboy.memory) == 1:
                 self._battle_entry_wild_visits = self.position_visit_counts.get(pos, 0)
+                self._mark_wild_grass_island(pos)
             if pos not in self.position_visit_counts:
                 self.position_visit_counts[pos] = 1
         elif not self.is_battle(self.pyboy.memory) and not self.is_dialog(
@@ -789,6 +799,37 @@ class Data:
         self.map_id_visit_counts[mid] = self.map_id_visit_counts.get(mid, 0) + 1
         self._tick_map_budget(self.pyboy.memory)
 
+    def _mark_wild_grass_island(self, start_pos: tuple[int, int, int]) -> None:
+        """BFS-flood the grass-tile patch a wild encounter's tile sits in,
+        over the full static per-map grass bitmap (see pokemon.map_collision,
+        generated straight from pret/pokered's own map/tileset data by
+        tools/gen_map_collision.py) and bump position_visit_counts by 1 on
+        every reachable tile -- so one wild battle credits the whole
+        connected grass "island" the tile sits in, not just that one square,
+        discouraging camping a single tile of a patch the agent has
+        effectively already scouted.
+
+        Grass-only, not "any walkable tile": on an overworld map the grass
+        directly abuts the path with no wall between them, so flooding over
+        is_walkable() would swallow the entire connected route instead of
+        stopping at the grass patch's actual edge. Empty for a non-grass
+        encounter tile (cave floor, water, Safari Zone building, ...) --
+        those tilesets have no grass tile at all, so flood_grass_island()
+        returns nothing and the single-tile seed in the caller is all that
+        tile gets, same as before this only ever covered grass anyway.
+
+        Unlike a live on-screen read, this covers the map's actual full
+        connected region (not just whatever currently fits on the GB
+        screen around the player) and needs no per-step caching -- it's
+        static data, looked up directly by (map_id, x, y).
+        """
+        x0, y0, map_id = start_pos
+        for x, y in _map_collision.flood_grass_island(map_id, x0, y0):
+            world_pos = (x, y, map_id)
+            self.position_visit_counts[world_pos] = (
+                self.position_visit_counts.get(world_pos, 0) + 1
+            )
+
     def get_dialog(self, memory: bytes | None = None):
         if memory is None:
             memory = self.pyboy.memory
@@ -824,7 +865,9 @@ class Data:
                 visits = self.position_visit_counts.get(
                     self.get_position(offset_x=dx, offset_y=dy), 0
                 )
-                row.append(min(visits, 10) / 10.0)
+                row.append(
+                    min(visits, VISIT_PENALTY_SOFT_THRESHOLD) / VISIT_PENALTY_SOFT_THRESHOLD
+                )
             grid.append(row)
         return grid
 
@@ -1085,8 +1128,16 @@ class Data:
             milestone += self._accum_reward("dialog_milestone", m)
             step += self._accum_reward("dialog_step", s)
         elif self.is_menu(self.pyboy.memory):
+            # Same waste shape and tempo as reward_position/reward_dialog/
+            # reward_battle_useless_count (base_reward scaled up to 10x at
+            # saturation over max_useless_ticks) -- this branch was missed
+            # when those three got upgraded off the old flat linear ramp
+            # (topped out at just -0.001, 10x weaker), leaving menu idling
+            # the only blocked-state waste cost still too weak to teach the
+            # agent to back out before stuck_menu's hard truncate fires.
+            menu_waste_factor = self.in_menu_ticks / self.max_useless_ticks
             step += self._accum_reward(
-                "menu_useless", self.in_menu_ticks / self.max_useless_ticks * self.base_reward
+                "menu_useless", self.base_reward * (1.0 + menu_waste_factor * 9.0)
             )
             if self._is_fresh_dialog_exit(memory):
                 milestone += self._accum_reward("dialog_exit", self.dialog_exit_reward)
@@ -1230,10 +1281,10 @@ class Data:
         # Skip while pressing A/B in world — that is the talk-to-NPC attempt.
         if self.is_world(self.pyboy.memory) and not interacting:
             visits = self.position_visit_counts.get(self.get_position(), 0)
-            if visits > 20:
+            if visits > VISIT_PENALTY_HARD_THRESHOLD:
                 penalty += self.visit_penalty_hard
                 causes.add("visit_penalty")
-            elif visits > 10:
+            elif visits > VISIT_PENALTY_SOFT_THRESHOLD:
                 penalty += self.visit_penalty_soft
                 causes.add("visit_penalty")
 

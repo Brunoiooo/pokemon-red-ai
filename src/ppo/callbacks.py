@@ -56,6 +56,7 @@ class HeatmapCallback(BaseCallback):
                     info.get("heatmap_milestones"),
                     info.get("heatmap_dialogs"),
                     info.get("heatmap_truncations"),
+                    info.get("heatmap_visit_counts"),
                     info.get("heatmap_steps") or 0,
                     info.get("stage"),
                     info.get("party_count"),
@@ -215,6 +216,11 @@ class MilestoneCallback(BaseCallback):
         # map touched) — how close episodes run to map_dwell_budget on
         # average, see PokemonRedEnv._info's map_dwell_avg.
         self._map_dwell_avgs: deque[float] = deque(maxlen=window)
+        # Per-episode mean of Data.position_visit_counts (avg visits per
+        # distinct tile touched, over the whole run) — how heavily episodes
+        # revisit their own footprint on average, see
+        # PokemonRedEnv._info's position_visit_avg.
+        self._position_visit_avgs: deque[float] = deque(maxlen=window)
         # Cumulative (whole run, not windowed) count of completed episodes
         # that touched each goal at least once -- see info["milestones_hit"]
         # below. Doubles as a per-goal mastery signal: fed into
@@ -242,6 +248,7 @@ class MilestoneCallback(BaseCallback):
         self._ep_regressed = None
         self._ep_goals_peak = None
         self._ep_map_dwell_avg = None
+        self._ep_position_visit_avg = None
 
     def _on_training_start(self) -> None:
         n = self.training_env.num_envs
@@ -252,6 +259,7 @@ class MilestoneCallback(BaseCallback):
         self._ep_regressed = [False] * n
         self._ep_goals_peak = [0] * n
         self._ep_map_dwell_avg = [0.0] * n
+        self._ep_position_visit_avg = [0.0] * n
         self.logger.record("pokemon/curriculum_stage_idx", self._stage_idx())
         self._reset_goal_hits()
         self._load_goal_hit_counts()
@@ -431,6 +439,9 @@ class MilestoneCallback(BaseCallback):
             # Cumulative for the episode so far — just keep the latest
             # reading, appended to the rolling window at done below.
             self._ep_map_dwell_avg[i] = float(info.get("map_dwell_avg", 0.0) or 0.0)
+            self._ep_position_visit_avg[i] = float(
+                info.get("position_visit_avg", 0.0) or 0.0
+            )
 
             if done:
                 self._loops.append(1 if self._ep_loop[i] else 0)
@@ -452,6 +463,7 @@ class MilestoneCallback(BaseCallback):
                 self._goals_peak.append(self._ep_goals_peak[i])
                 self._regressions.append(1 if self._ep_regressed[i] else 0)
                 self._map_dwell_avgs.append(self._ep_map_dwell_avg[i])
+                self._position_visit_avgs.append(self._ep_position_visit_avg[i])
                 for name in self._ep_milestones[i]:
                     self._goal_hit_counts[name] += 1
 
@@ -465,6 +477,7 @@ class MilestoneCallback(BaseCallback):
                 self._ep_regressed[i] = False
                 self._ep_goals_peak[i] = 0
                 self._ep_map_dwell_avg[i] = 0.0
+                self._ep_position_visit_avg[i] = 0.0
 
         if len(self._loops) >= 10 and self.n_calls % self.check_every == 0:
             loop_rate = float(np.mean(self._loops))
@@ -502,6 +515,11 @@ class MilestoneCallback(BaseCallback):
             if self._map_dwell_avgs:
                 self.logger.record(
                     "pokemon/map_dwell_avg_count", float(np.mean(self._map_dwell_avgs))
+                )
+            if self._position_visit_avgs:
+                self.logger.record(
+                    "pokemon/position_visit_avg_count",
+                    float(np.mean(self._position_visit_avgs)),
                 )
             if self._regressions:
                 self.logger.record(
