@@ -1,0 +1,977 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Kanto Pathfinder</title>
+<style>
+  :root {
+    --bg: #eef1e7;
+    --surface: #ffffff;
+    --surface-2: #f2f5ea;
+    --border: #d7ddc7;
+    --border-strong: #c1c9ac;
+    --text: #1c2117;
+    --text-muted: #656d58;
+    --text-faint: #98a087;
+    --accent: #4c6b2f;
+    --accent-strong: #3a5322;
+    --accent-soft: #e3ead2;
+    --warp: #a8721f;
+    --warp-soft: #f1e2c2;
+    --ok: #2f7a42;
+    --ok-soft: #dcefe0;
+    --warn: #a1462c;
+    --warn-soft: #f4ded6;
+    --wall: #4a4f42;
+    --walk: #dfe4d2;
+    --grass: #93b06a;
+    --start-marker: #2f6fa8;
+    --goal-marker: #a1462c;
+    --path-marker: #c99a2e;
+    --shadow: 0 1px 2px rgba(28, 33, 23, 0.06), 0 4px 14px rgba(28, 33, 23, 0.06);
+    --focus: #2f6fa8;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #11150d;
+      --surface: #191f14;
+      --surface-2: #10130c;
+      --border: #2b3223;
+      --border-strong: #3c4630;
+      --text: #e7ebdc;
+      --text-muted: #99a186;
+      --text-faint: #656d55;
+      --accent: #8dc25a;
+      --accent-strong: #a6d879;
+      --accent-soft: #263420;
+      --warp: #dba648;
+      --warp-soft: #332a16;
+      --ok: #7bcb8e;
+      --ok-soft: #1c3324;
+      --warn: #e08a6c;
+      --warn-soft: #3a2119;
+      --wall: #050703;
+      --walk: #2b3223;
+      --grass: #4d7233;
+      --start-marker: #6fb2e8;
+      --goal-marker: #e08a6c;
+      --path-marker: #e6c565;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 6px 20px rgba(0, 0, 0, 0.35);
+      --focus: #6fb2e8;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #11150d;
+    --surface: #191f14;
+    --surface-2: #10130c;
+    --border: #2b3223;
+    --border-strong: #3c4630;
+    --text: #e7ebdc;
+    --text-muted: #99a186;
+    --text-faint: #656d55;
+    --accent: #8dc25a;
+    --accent-strong: #a6d879;
+    --accent-soft: #263420;
+    --warp: #dba648;
+    --warp-soft: #332a16;
+    --ok: #7bcb8e;
+    --ok-soft: #1c3324;
+    --warn: #e08a6c;
+    --warn-soft: #3a2119;
+    --wall: #050703;
+    --walk: #2b3223;
+    --grass: #4d7233;
+    --start-marker: #6fb2e8;
+    --goal-marker: #e08a6c;
+    --path-marker: #e6c565;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 6px 20px rgba(0, 0, 0, 0.35);
+    --focus: #6fb2e8;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text);
+  }
+
+  body {
+    font-family: ui-sans-serif, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .mono {
+    font-family: ui-monospace, "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    font-variant-numeric: tabular-nums;
+  }
+
+  h1, h2, h3 {
+    font-family: ui-monospace, "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    text-wrap: balance;
+    margin: 0;
+    letter-spacing: 0.01em;
+  }
+
+  a { color: var(--accent-strong); }
+
+  button, input {
+    font: inherit;
+    color: inherit;
+  }
+
+  ::selection { background: var(--accent-soft); }
+
+  :focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+  }
+
+  .shell {
+    display: grid;
+    grid-template-columns: 320px 1fr;
+    min-height: 100vh;
+  }
+
+  @media (max-width: 860px) {
+    .shell { grid-template-columns: 1fr; }
+  }
+
+  /* ---------- Header ---------- */
+
+  .topbar {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 18px 24px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+
+  .brand {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+
+  .brand-mark {
+    font-size: 20px;
+    line-height: 1;
+  }
+
+  .brand h1 {
+    font-size: 17px;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+  }
+
+  .brand .sub {
+    color: var(--text-muted);
+    font-size: 12.5px;
+  }
+
+  .topbar-stats {
+    display: flex;
+    gap: 20px;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .topbar-stats .stat-n {
+    color: var(--text);
+    font-weight: 600;
+  }
+
+  /* ---------- Sidebar ---------- */
+
+  .sidebar {
+    border-right: 1px solid var(--border);
+    background: var(--surface);
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+    align-self: start;
+    position: sticky;
+    top: 0;
+    max-height: 100vh;
+    overflow-y: auto;
+  }
+
+  @media (max-width: 860px) {
+    .sidebar { position: static; max-height: none; border-right: none; border-bottom: 1px solid var(--border); }
+  }
+
+  .field label {
+    display: block;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+  }
+
+  .combo { position: relative; }
+
+  .combo input {
+    width: 100%;
+    padding: 9px 11px;
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    background: var(--surface-2);
+    color: var(--text);
+  }
+
+  .combo input::placeholder { color: var(--text-faint); }
+
+  .combo-list {
+    position: absolute;
+    z-index: 20;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    max-height: 280px;
+    overflow-y: auto;
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    box-shadow: var(--shadow);
+    padding: 4px;
+    display: none;
+  }
+
+  .combo-list.open { display: block; }
+
+  .combo-opt {
+    padding: 7px 9px;
+    border-radius: 5px;
+    cursor: pointer;
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    font-size: 13px;
+  }
+
+  .combo-opt .name { color: var(--text); }
+  .combo-opt .meta { color: var(--text-faint); font-size: 11px; white-space: nowrap; }
+
+  .combo-opt:hover, .combo-opt.active { background: var(--accent-soft); }
+
+  .combo-opt.disabled { opacity: 0.4; cursor: not-allowed; }
+  .combo-opt.disabled:hover { background: none; }
+
+  .combo-opt.pinned .name::before {
+    content: "\2605  ";
+    color: var(--warp);
+  }
+
+  .swap-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    width: 100%;
+    padding: 7px;
+    border: 1px dashed var(--border-strong);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 12px;
+  }
+
+  .swap-btn:hover { border-color: var(--accent); color: var(--accent-strong); }
+
+  .stepper {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+  }
+
+  .stepper button {
+    flex: 1 1 auto;
+    padding: 6px 8px;
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    background: var(--surface-2);
+    color: var(--text);
+    cursor: pointer;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  .stepper button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent-strong); }
+
+  .stepper button:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+
+  .stepper-pos {
+    flex: none;
+    font-size: 11px;
+    color: var(--text-faint);
+    white-space: nowrap;
+  }
+
+  .legend {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .legend-row { display: flex; align-items: center; gap: 8px; }
+
+  .swatch {
+    width: 13px;
+    height: 13px;
+    border-radius: 3px;
+    flex: none;
+    border: 1px solid rgba(0,0,0,0.15);
+  }
+
+  .sidebar h2 {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-faint);
+  }
+
+  .note {
+    font-size: 12px;
+    color: var(--text-muted);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+  }
+
+  /* ---------- Main ---------- */
+
+  .main {
+    padding: 24px 28px 60px;
+    min-width: 0;
+  }
+
+  .result-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 22px;
+    padding: 14px 18px;
+    border-radius: 10px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow);
+    margin-bottom: 22px;
+  }
+
+  .result-bar .metric { display: flex; flex-direction: column; gap: 2px; }
+  .result-bar .metric .k { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-faint); }
+  .result-bar .metric .v { font-size: 15px; font-weight: 600; }
+  .result-bar .metric .v.mono { font-family: ui-monospace, "Cascadia Mono", "SFMono-Regular", Consolas, monospace; }
+
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-size: 11.5px;
+    font-weight: 600;
+  }
+
+  .pill.ok { background: var(--ok-soft); color: var(--ok); }
+  .pill.warn { background: var(--warn-soft); color: var(--warn); }
+
+  .route-chain {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    font-size: 12.5px;
+    color: var(--text-muted);
+  }
+
+  .route-chain .hop {
+    color: var(--text);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    padding: 2px 8px;
+    border-radius: 5px;
+  }
+
+  .empty-state {
+    padding: 60px 20px;
+    text-align: center;
+    color: var(--text-muted);
+  }
+
+  .empty-state .glyph { font-size: 30px; margin-bottom: 10px; }
+
+  .segments {
+    display: flex;
+    align-items: flex-start;
+    gap: 4px;
+    overflow-x: auto;
+    padding-bottom: 12px;
+  }
+
+  .segment-card {
+    flex: none;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+
+  .segment-head {
+    padding: 10px 13px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .segment-head .map-name {
+    font-size: 12.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .segment-head .map-meta {
+    font-size: 11px;
+    color: var(--text-faint);
+    font-family: ui-monospace, "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+  }
+
+  .segment-canvas-wrap {
+    padding: 10px;
+    background: var(--surface-2);
+    display: flex;
+  }
+
+  .connector {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--warp);
+    font-size: 18px;
+    align-self: center;
+    padding: 0 2px;
+  }
+
+  footer.credit {
+    margin-top: 30px;
+    font-size: 11.5px;
+    color: var(--text-faint);
+  }
+
+  .visually-hidden {
+    position: absolute;
+    width: 1px; height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .segment-card { transition: transform 120ms ease; }
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">&#129517;</span>
+      <div>
+        <h1>Kanto Pathfinder</h1>
+        <div class="sub">Statyczny graf świata Pokémon Red &mdash; najkrótsza trasa cel&ndash;do&ndash;celu</div>
+      </div>
+    </div>
+    <div class="topbar-stats">
+      <span><span class="stat-n" id="stat-maps"></span> map</span>
+      <span><span class="stat-n" id="stat-warps"></span> warpów</span>
+      <span><span class="stat-n" id="stat-goals"></span> celów curriculum</span>
+    </div>
+  </header>
+
+  <aside class="sidebar">
+    <div class="field">
+      <label for="start-input">Start</label>
+      <div class="combo" id="start-combo">
+        <input type="text" id="start-input" class="mono" autocomplete="off" placeholder="Szukaj mapy lub celu&hellip;" />
+        <div class="combo-list" id="start-list" role="listbox"></div>
+      </div>
+    </div>
+
+    <button class="swap-btn" id="swap-btn" title="Zamień start i cel">&#8645; zamień start / cel</button>
+
+    <div class="field">
+      <label for="goal-input">Cel</label>
+      <div class="combo" id="goal-combo">
+        <input type="text" id="goal-input" class="mono" autocomplete="off" placeholder="Szukaj celu&hellip;" />
+        <div class="combo-list" id="goal-list" role="listbox"></div>
+      </div>
+      <div class="stepper">
+        <button type="button" id="goal-prev" title="Poprzedni cel (Start też się przestawia)">&#8592; poprzedni</button>
+        <span class="stepper-pos mono" id="goal-pos"></span>
+        <button type="button" id="goal-next" title="Następny cel (Start też się przestawia)">następny &#8594;</button>
+      </div>
+    </div>
+
+    <div>
+      <h2>Legenda</h2>
+      <div class="legend" style="margin-top:8px;">
+        <div class="legend-row"><span class="swatch" style="background:var(--wall)"></span> ściana</div>
+        <div class="legend-row"><span class="swatch" style="background:var(--walk)"></span> chodliwe</div>
+        <div class="legend-row"><span class="swatch" style="background:var(--grass)"></span> trawa</div>
+        <div class="legend-row"><span class="swatch" style="background:var(--path-marker)"></span> trasa</div>
+        <div class="legend-row"><span class="swatch" style="background:var(--start-marker)"></span> start</div>
+        <div class="legend-row"><span class="swatch" style="background:var(--goal-marker)"></span> cel</div>
+      </div>
+    </div>
+
+    <div class="note">
+      Graf pokrywa tylko przejścia przez warpy (drzwi, schody, jaskinie) &mdash; nie
+      obejmuje jeszcze pieszych przejść Route&harr;City przez krawędź mapy.
+      Cele bez wejścia warpowego są wyszarzone.
+    </div>
+  </aside>
+
+  <main class="main">
+    <div id="result-bar" class="result-bar" style="display:none;"></div>
+    <div id="empty-state" class="empty-state">
+      <div class="glyph">&#129517;</div>
+      Wybierz start i cel, aby zobaczyć trasę.
+    </div>
+    <div id="segments" class="segments"></div>
+    <footer class="credit">Dane statyczne z pret/pokered &middot; wygenerowane przez tools/gen_map_collision.py, tools/gen_map_warps.py, tools/render_route.py --html</footer>
+  </main>
+</div>
+
+<script>
+const WORLD = /*__WORLD_DATA__*/;
+const INITIAL = /*__INITIAL__*/;
+
+// ---------- decode base64 -> bit-test helpers ----------
+function b64ToBytes(b64) {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+const mapCache = new Map();
+function getMap(mapId) {
+  if (mapCache.has(mapId)) return mapCache.get(mapId);
+  const m = WORLD.maps[mapId];
+  const entry = {
+    name: m.name,
+    w: m.w,
+    h: m.h,
+    walk: b64ToBytes(m.walk),
+    grass: m.grass ? b64ToBytes(m.grass) : null,
+  };
+  mapCache.set(mapId, entry);
+  return entry;
+}
+
+function bitAt(bytes, idx) {
+  return (bytes[idx >> 3] & (1 << (idx & 7))) !== 0;
+}
+
+function isWalkable(mapId, x, y) {
+  const m = getMap(mapId);
+  if (!m || x < 0 || y < 0 || x >= m.w || y >= m.h) return false;
+  return bitAt(m.walk, y * m.w + x);
+}
+
+function isGrass(mapId, x, y) {
+  const m = getMap(mapId);
+  if (!m || !m.grass || x < 0 || y < 0 || x >= m.w || y >= m.h) return false;
+  return bitAt(m.grass, y * m.w + x);
+}
+
+function warpsFrom(mapId) {
+  return WORLD.warps[mapId] || [];
+}
+
+// ---------- BFS over (x, y, mapId) ----------
+function posKey(x, y, mapId) { return x + "," + y + "," + mapId; }
+
+function neighbors(x, y, mapId) {
+  const out = [];
+  const deltas = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  for (const [dx, dy] of deltas) {
+    const nx = x + dx, ny = y + dy;
+    if (isWalkable(mapId, nx, ny)) out.push([nx, ny, mapId]);
+  }
+  for (const [wx, wy, destMap, dx, dy] of warpsFrom(mapId)) {
+    if (wx === x && wy === y) out.push([dx, dy, destMap]);
+  }
+  return out;
+}
+
+function shortestPath(start, goal) {
+  const startKey = posKey(...start);
+  const goalKey = posKey(...goal);
+  if (startKey === goalKey) return [start];
+  const prev = new Map();
+  const seen = new Set([startKey]);
+  let queue = [start];
+  let qi = 0;
+  while (qi < queue.length) {
+    const cur = queue[qi++];
+    for (const nxt of neighbors(...cur)) {
+      const k = posKey(...nxt);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      prev.set(k, cur);
+      if (k === goalKey) {
+        const path = [nxt];
+        let ck = k;
+        while (ck !== startKey) {
+          const p = prev.get(ck);
+          path.push(p);
+          ck = posKey(...p);
+        }
+        path.reverse();
+        return path;
+      }
+      queue.push(nxt);
+    }
+  }
+  return null;
+}
+
+// ---------- goal/start option list ----------
+function mapIdByName(name) {
+  for (const id in WORLD.maps) if (WORLD.maps[id].name === name) return Number(id);
+  return null;
+}
+
+const START_PIN = {
+  key: "__start__",
+  name: INITIAL.start_label,
+  desc: "Punkt startowy",
+  tile: INITIAL.start_tile,
+  pinned: true,
+};
+
+const GOAL_OPTS = WORLD.goals.map(g => ({
+  key: g.id,
+  name: g.id,
+  desc: g.desc,
+  tile: g.tile,
+  pinned: false,
+}));
+
+const ALL_OPTS = [START_PIN, ...GOAL_OPTS];
+
+// ---------- searchable combobox ----------
+function setupCombo(inputEl, listEl, opts, onPick, initial) {
+  let filtered = opts;
+  let activeIdx = -1;
+  let selected = initial || null;
+
+  function render() {
+    listEl.innerHTML = "";
+    filtered.forEach((opt, i) => {
+      const div = document.createElement("div");
+      div.className = "combo-opt" + (opt.tile === null ? " disabled" : "") + (opt.pinned ? " pinned" : "") + (i === activeIdx ? " active" : "");
+      div.setAttribute("role", "option");
+      const nameSpan = document.createElement("span");
+      nameSpan.className = "name";
+      nameSpan.textContent = opt.name + (opt.desc && opt.desc !== opt.name ? " — " + opt.desc : "");
+      const metaSpan = document.createElement("span");
+      metaSpan.className = "meta";
+      metaSpan.textContent = opt.tile === null ? "brak wejścia" : (WORLD.maps[opt.tile[2]] ? WORLD.maps[opt.tile[2]].name : "");
+      div.appendChild(nameSpan);
+      div.appendChild(metaSpan);
+      if (opt.tile !== null) {
+        div.addEventListener("mousedown", (e) => {
+          e.preventDefault();
+          pick(opt);
+        });
+      }
+      listEl.appendChild(div);
+    });
+  }
+
+  function pick(opt) {
+    selected = opt;
+    inputEl.value = opt.name;
+    listEl.classList.remove("open");
+    onPick(opt);
+  }
+
+  function filter() {
+    const q = inputEl.value.trim().toLowerCase();
+    filtered = !q ? opts : opts.filter(o =>
+      o.name.toLowerCase().includes(q) || (o.desc || "").toLowerCase().includes(q)
+    );
+    activeIdx = -1;
+    render();
+  }
+
+  inputEl.addEventListener("focus", () => { filter(); listEl.classList.add("open"); });
+  inputEl.addEventListener("input", () => { filter(); listEl.classList.add("open"); });
+  inputEl.addEventListener("blur", () => { setTimeout(() => listEl.classList.remove("open"), 120); });
+  inputEl.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown") { e.preventDefault(); activeIdx = Math.min(activeIdx + 1, filtered.length - 1); render(); scrollActive(); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); activeIdx = Math.max(activeIdx - 1, 0); render(); scrollActive(); }
+    else if (e.key === "Enter") { e.preventDefault(); if (filtered[activeIdx] && filtered[activeIdx].tile !== null) pick(filtered[activeIdx]); }
+    else if (e.key === "Escape") { listEl.classList.remove("open"); inputEl.blur(); }
+  });
+
+  function scrollActive() {
+    const el = listEl.children[activeIdx];
+    if (el) el.scrollIntoView({ block: "nearest" });
+  }
+
+  if (initial) inputEl.value = initial.name;
+
+  return {
+    setSelected(opt) { selected = opt; inputEl.value = opt.name; },
+    getSelected() { return selected; },
+  };
+}
+
+// ---------- rendering ----------
+const CELL_MAX = 13;
+const CELL_MIN = 3;
+
+function cssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+function renderSegmentCanvas(mapId, cellsOnPath, startXY, goalXY) {
+  const m = getMap(mapId);
+  const cell = Math.max(CELL_MIN, Math.min(CELL_MAX, Math.floor(720 / Math.max(m.w, m.h))));
+  const canvas = document.createElement("canvas");
+  canvas.width = m.w * cell;
+  canvas.height = m.h * cell;
+  canvas.style.width = canvas.width + "px";
+  canvas.style.height = canvas.height + "px";
+  canvas.style.borderRadius = "4px";
+  const ctx = canvas.getContext("2d");
+
+  const wall = cssVar("--wall"), walk = cssVar("--walk"), grass = cssVar("--grass");
+  const pathC = cssVar("--path-marker"), startC = cssVar("--start-marker"), goalC = cssVar("--goal-marker");
+
+  for (let y = 0; y < m.h; y++) {
+    for (let x = 0; x < m.w; x++) {
+      let fill = wall;
+      if (isGrass(mapId, x, y)) fill = grass;
+      else if (isWalkable(mapId, x, y)) fill = walk;
+      ctx.fillStyle = fill;
+      ctx.fillRect(x * cell, y * cell, cell, cell);
+    }
+  }
+
+  ctx.fillStyle = pathC;
+  for (const [x, y] of cellsOnPath) {
+    const pad = Math.max(1, Math.floor(cell * 0.22));
+    ctx.fillRect(x * cell + pad, y * cell + pad, cell - pad * 2, cell - pad * 2);
+  }
+
+  function marker(xy, color) {
+    if (!xy) return;
+    const [x, y] = xy;
+    ctx.beginPath();
+    ctx.arc(x * cell + cell / 2, y * cell + cell / 2, Math.max(1.6, cell * 0.42), 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.lineWidth = Math.max(1, cell * 0.12);
+    ctx.strokeStyle = cssVar("--surface");
+    ctx.stroke();
+  }
+  marker(startXY, startC);
+  marker(goalXY, goalC);
+
+  return canvas;
+}
+
+function segmentsFromPath(path) {
+  const out = [];
+  for (const pos of path) {
+    if (out.length && out[out.length - 1][out[out.length - 1].length - 1][2] === pos[2]) {
+      out[out.length - 1].push(pos);
+    } else {
+      out.push([pos]);
+    }
+  }
+  return out;
+}
+
+function renderResult(startOpt, goalOpt) {
+  const resultBar = document.getElementById("result-bar");
+  const emptyState = document.getElementById("empty-state");
+  const segmentsEl = document.getElementById("segments");
+  segmentsEl.innerHTML = "";
+
+  if (!startOpt || !goalOpt) {
+    resultBar.style.display = "none";
+    emptyState.style.display = "block";
+    return;
+  }
+
+  const path = shortestPath(startOpt.tile, goalOpt.tile);
+  emptyState.style.display = "none";
+  resultBar.style.display = "flex";
+
+  if (!path) {
+    resultBar.innerHTML = `
+      <span class="pill warn">brak trasy</span>
+      <div class="metric"><span class="k">Powód</span><span class="v">graf nie obejmuje pieszych przejść Route&harr;City</span></div>
+    `;
+    return;
+  }
+
+  const segs = segmentsFromPath(path);
+  const steps = path.length - 1;
+
+  const chainHtml = segs.map(seg => `<span class="hop">${getMap(seg[0][2]).name}</span>`).join(
+    `<span aria-hidden="true">&rarr;</span>`
+  );
+
+  resultBar.innerHTML = `
+    <span class="pill ok">trasa znaleziona</span>
+    <div class="metric"><span class="k">Kroki</span><span class="v mono">${steps}</span></div>
+    <div class="metric"><span class="k">Mapy</span><span class="v mono">${segs.length}</span></div>
+    <div class="metric" style="flex:1 1 auto;"><span class="k">Przez</span><span class="route-chain">${chainHtml}</span></div>
+  `;
+
+  segs.forEach((seg, i) => {
+    const card = document.createElement("div");
+    card.className = "segment-card";
+    const mapId = seg[0][2];
+    const m = getMap(mapId);
+
+    const head = document.createElement("div");
+    head.className = "segment-head";
+    head.innerHTML = `<span class="map-name">${m.name}</span><span class="map-meta">id ${mapId} &middot; ${m.w}&times;${m.h} &middot; ${seg.length} kafelek trasy</span>`;
+    card.appendChild(head);
+
+    const wrap = document.createElement("div");
+    wrap.className = "segment-canvas-wrap";
+    const cellsOnPath = seg.map(p => [p[0], p[1]]);
+    const startXY = i === 0 ? [seg[0][0], seg[0][1]] : null;
+    const goalXY = i === segs.length - 1 ? [seg[seg.length - 1][0], seg[seg.length - 1][1]] : null;
+    wrap.appendChild(renderSegmentCanvas(mapId, cellsOnPath, startXY, goalXY));
+    card.appendChild(wrap);
+
+    segmentsEl.appendChild(card);
+
+    if (i < segs.length - 1) {
+      const conn = document.createElement("div");
+      conn.className = "connector";
+      conn.innerHTML = "&#8594;";
+      segmentsEl.appendChild(conn);
+    }
+  });
+}
+
+// ---------- wire up ----------
+document.getElementById("stat-maps").textContent = Object.keys(WORLD.maps).length;
+document.getElementById("stat-warps").textContent = Object.values(WORLD.warps).reduce((a, b) => a + b.length, 0);
+document.getElementById("stat-goals").textContent = WORLD.goals.length;
+
+let currentStart = START_PIN;
+let currentGoal = GOAL_OPTS.find(g => g.key === INITIAL.goal_key) || GOAL_OPTS.find(g => g.tile !== null) || null;
+
+const startCombo = setupCombo(
+  document.getElementById("start-input"),
+  document.getElementById("start-list"),
+  ALL_OPTS,
+  (opt) => { currentStart = opt; renderResult(currentStart, currentGoal); },
+  currentStart
+);
+
+const goalCombo = setupCombo(
+  document.getElementById("goal-input"),
+  document.getElementById("goal-list"),
+  GOAL_OPTS,
+  (opt) => { currentGoal = opt; updateStepperUI(); renderResult(currentStart, currentGoal); },
+  currentGoal
+);
+
+document.getElementById("swap-btn").addEventListener("click", () => {
+  const s = currentStart, g = currentGoal;
+  if (!g || g.tile === null) return;
+  currentStart = { key: g.key, name: g.name, desc: g.desc, tile: g.tile, pinned: false };
+  currentGoal = ALL_OPTS.find(o => o.tile && s.tile && o.tile[0] === s.tile[0] && o.tile[1] === s.tile[1] && o.tile[2] === s.tile[2]) ||
+                { key: s.key, name: s.name, desc: s.desc, tile: s.tile, pinned: false };
+  startCombo.setSelected(currentStart);
+  goalCombo.setSelected(currentGoal);
+  updateStepperUI();
+  renderResult(currentStart, currentGoal);
+});
+
+// ---------- prev/next goal stepper (walks pokemon.goal_positions.unlock_order,
+// skipping goals with no resolvable tile -- same list the combobox already
+// disables them in) ----------
+const RESOLVABLE_GOALS = GOAL_OPTS.filter(g => g.tile !== null);
+
+function resolvableIndex(goal) {
+  return RESOLVABLE_GOALS.findIndex(g => g.key === (goal && goal.key));
+}
+
+function updateStepperUI() {
+  const idx = resolvableIndex(currentGoal);
+  const posEl = document.getElementById("goal-pos");
+  const prevBtn = document.getElementById("goal-prev");
+  const nextBtn = document.getElementById("goal-next");
+  if (idx === -1) {
+    posEl.textContent = "";
+    prevBtn.disabled = true;
+    nextBtn.disabled = true;
+    return;
+  }
+  posEl.textContent = (idx + 1) + " / " + RESOLVABLE_GOALS.length;
+  prevBtn.disabled = idx <= 0;
+  nextBtn.disabled = idx >= RESOLVABLE_GOALS.length - 1;
+}
+
+// Start is derived from the new goal's position, not stored separately: the
+// tile you'd actually be standing on after this many hops is "whatever goal
+// sits right before it" (or the pinned game-start for position 0). Deriving
+// it from the index this way -- instead of chaining off whatever currentStart
+// happened to be -- makes Next/Previous exact inverses of each other with no
+// history stack: same tour pokemon.goal_positions.unlock_order() walks in
+// --auto, just steppable one leg at a time instead of dumped all at once.
+function stepGoal(delta) {
+  const idx = resolvableIndex(currentGoal);
+  const base = idx === -1 ? 0 : idx;
+  const next = Math.max(0, Math.min(RESOLVABLE_GOALS.length - 1, base + delta));
+  currentGoal = RESOLVABLE_GOALS[next];
+  currentStart = next > 0 ? RESOLVABLE_GOALS[next - 1] : START_PIN;
+  startCombo.setSelected(currentStart);
+  goalCombo.setSelected(currentGoal);
+  updateStepperUI();
+  renderResult(currentStart, currentGoal);
+}
+
+document.getElementById("goal-prev").addEventListener("click", () => stepGoal(-1));
+document.getElementById("goal-next").addEventListener("click", () => stepGoal(1));
+
+updateStepperUI();
+renderResult(currentStart, currentGoal);
+</script>
+</body>
+</html>

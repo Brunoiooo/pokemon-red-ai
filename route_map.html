@@ -1,0 +1,977 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Kanto Pathfinder</title>
+<style>
+  :root {
+    --bg: #eef1e7;
+    --surface: #ffffff;
+    --surface-2: #f2f5ea;
+    --border: #d7ddc7;
+    --border-strong: #c1c9ac;
+    --text: #1c2117;
+    --text-muted: #656d58;
+    --text-faint: #98a087;
+    --accent: #4c6b2f;
+    --accent-strong: #3a5322;
+    --accent-soft: #e3ead2;
+    --warp: #a8721f;
+    --warp-soft: #f1e2c2;
+    --ok: #2f7a42;
+    --ok-soft: #dcefe0;
+    --warn: #a1462c;
+    --warn-soft: #f4ded6;
+    --wall: #4a4f42;
+    --walk: #dfe4d2;
+    --grass: #93b06a;
+    --start-marker: #2f6fa8;
+    --goal-marker: #a1462c;
+    --path-marker: #c99a2e;
+    --shadow: 0 1px 2px rgba(28, 33, 23, 0.06), 0 4px 14px rgba(28, 33, 23, 0.06);
+    --focus: #2f6fa8;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #11150d;
+      --surface: #191f14;
+      --surface-2: #10130c;
+      --border: #2b3223;
+      --border-strong: #3c4630;
+      --text: #e7ebdc;
+      --text-muted: #99a186;
+      --text-faint: #656d55;
+      --accent: #8dc25a;
+      --accent-strong: #a6d879;
+      --accent-soft: #263420;
+      --warp: #dba648;
+      --warp-soft: #332a16;
+      --ok: #7bcb8e;
+      --ok-soft: #1c3324;
+      --warn: #e08a6c;
+      --warn-soft: #3a2119;
+      --wall: #050703;
+      --walk: #2b3223;
+      --grass: #4d7233;
+      --start-marker: #6fb2e8;
+      --goal-marker: #e08a6c;
+      --path-marker: #e6c565;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 6px 20px rgba(0, 0, 0, 0.35);
+      --focus: #6fb2e8;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #11150d;
+    --surface: #191f14;
+    --surface-2: #10130c;
+    --border: #2b3223;
+    --border-strong: #3c4630;
+    --text: #e7ebdc;
+    --text-muted: #99a186;
+    --text-faint: #656d55;
+    --accent: #8dc25a;
+    --accent-strong: #a6d879;
+    --accent-soft: #263420;
+    --warp: #dba648;
+    --warp-soft: #332a16;
+    --ok: #7bcb8e;
+    --ok-soft: #1c3324;
+    --warn: #e08a6c;
+    --warn-soft: #3a2119;
+    --wall: #050703;
+    --walk: #2b3223;
+    --grass: #4d7233;
+    --start-marker: #6fb2e8;
+    --goal-marker: #e08a6c;
+    --path-marker: #e6c565;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 6px 20px rgba(0, 0, 0, 0.35);
+    --focus: #6fb2e8;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text);
+  }
+
+  body {
+    font-family: ui-sans-serif, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .mono {
+    font-family: ui-monospace, "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    font-variant-numeric: tabular-nums;
+  }
+
+  h1, h2, h3 {
+    font-family: ui-monospace, "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    text-wrap: balance;
+    margin: 0;
+    letter-spacing: 0.01em;
+  }
+
+  a { color: var(--accent-strong); }
+
+  button, input {
+    font: inherit;
+    color: inherit;
+  }
+
+  ::selection { background: var(--accent-soft); }
+
+  :focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+  }
+
+  .shell {
+    display: grid;
+    grid-template-columns: 320px 1fr;
+    min-height: 100vh;
+  }
+
+  @media (max-width: 860px) {
+    .shell { grid-template-columns: 1fr; }
+  }
+
+  /* ---------- Header ---------- */
+
+  .topbar {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 18px 24px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+
+  .brand {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+
+  .brand-mark {
+    font-size: 20px;
+    line-height: 1;
+  }
+
+  .brand h1 {
+    font-size: 17px;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+  }
+
+  .brand .sub {
+    color: var(--text-muted);
+    font-size: 12.5px;
+  }
+
+  .topbar-stats {
+    display: flex;
+    gap: 20px;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .topbar-stats .stat-n {
+    color: var(--text);
+    font-weight: 600;
+  }
+
+  /* ---------- Sidebar ---------- */
+
+  .sidebar {
+    border-right: 1px solid var(--border);
+    background: var(--surface);
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+    align-self: start;
+    position: sticky;
+    top: 0;
+    max-height: 100vh;
+    overflow-y: auto;
+  }
+
+  @media (max-width: 860px) {
+    .sidebar { position: static; max-height: none; border-right: none; border-bottom: 1px solid var(--border); }
+  }
+
+  .field label {
+    display: block;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+  }
+
+  .combo { position: relative; }
+
+  .combo input {
+    width: 100%;
+    padding: 9px 11px;
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    background: var(--surface-2);
+    color: var(--text);
+  }
+
+  .combo input::placeholder { color: var(--text-faint); }
+
+  .combo-list {
+    position: absolute;
+    z-index: 20;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    max-height: 280px;
+    overflow-y: auto;
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    box-shadow: var(--shadow);
+    padding: 4px;
+    display: none;
+  }
+
+  .combo-list.open { display: block; }
+
+  .combo-opt {
+    padding: 7px 9px;
+    border-radius: 5px;
+    cursor: pointer;
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    font-size: 13px;
+  }
+
+  .combo-opt .name { color: var(--text); }
+  .combo-opt .meta { color: var(--text-faint); font-size: 11px; white-space: nowrap; }
+
+  .combo-opt:hover, .combo-opt.active { background: var(--accent-soft); }
+
+  .combo-opt.disabled { opacity: 0.4; cursor: not-allowed; }
+  .combo-opt.disabled:hover { background: none; }
+
+  .combo-opt.pinned .name::before {
+    content: "\2605  ";
+    color: var(--warp);
+  }
+
+  .swap-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    width: 100%;
+    padding: 7px;
+    border: 1px dashed var(--border-strong);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 12px;
+  }
+
+  .swap-btn:hover { border-color: var(--accent); color: var(--accent-strong); }
+
+  .stepper {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+  }
+
+  .stepper button {
+    flex: 1 1 auto;
+    padding: 6px 8px;
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    background: var(--surface-2);
+    color: var(--text);
+    cursor: pointer;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  .stepper button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent-strong); }
+
+  .stepper button:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+
+  .stepper-pos {
+    flex: none;
+    font-size: 11px;
+    color: var(--text-faint);
+    white-space: nowrap;
+  }
+
+  .legend {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .legend-row { display: flex; align-items: center; gap: 8px; }
+
+  .swatch {
+    width: 13px;
+    height: 13px;
+    border-radius: 3px;
+    flex: none;
+    border: 1px solid rgba(0,0,0,0.15);
+  }
+
+  .sidebar h2 {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-faint);
+  }
+
+  .note {
+    font-size: 12px;
+    color: var(--text-muted);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+  }
+
+  /* ---------- Main ---------- */
+
+  .main {
+    padding: 24px 28px 60px;
+    min-width: 0;
+  }
+
+  .result-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 22px;
+    padding: 14px 18px;
+    border-radius: 10px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow);
+    margin-bottom: 22px;
+  }
+
+  .result-bar .metric { display: flex; flex-direction: column; gap: 2px; }
+  .result-bar .metric .k { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-faint); }
+  .result-bar .metric .v { font-size: 15px; font-weight: 600; }
+  .result-bar .metric .v.mono { font-family: ui-monospace, "Cascadia Mono", "SFMono-Regular", Consolas, monospace; }
+
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-size: 11.5px;
+    font-weight: 600;
+  }
+
+  .pill.ok { background: var(--ok-soft); color: var(--ok); }
+  .pill.warn { background: var(--warn-soft); color: var(--warn); }
+
+  .route-chain {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    font-size: 12.5px;
+    color: var(--text-muted);
+  }
+
+  .route-chain .hop {
+    color: var(--text);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    padding: 2px 8px;
+    border-radius: 5px;
+  }
+
+  .empty-state {
+    padding: 60px 20px;
+    text-align: center;
+    color: var(--text-muted);
+  }
+
+  .empty-state .glyph { font-size: 30px; margin-bottom: 10px; }
+
+  .segments {
+    display: flex;
+    align-items: flex-start;
+    gap: 4px;
+    overflow-x: auto;
+    padding-bottom: 12px;
+  }
+
+  .segment-card {
+    flex: none;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+
+  .segment-head {
+    padding: 10px 13px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .segment-head .map-name {
+    font-size: 12.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .segment-head .map-meta {
+    font-size: 11px;
+    color: var(--text-faint);
+    font-family: ui-monospace, "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+  }
+
+  .segment-canvas-wrap {
+    padding: 10px;
+    background: var(--surface-2);
+    display: flex;
+  }
+
+  .connector {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--warp);
+    font-size: 18px;
+    align-self: center;
+    padding: 0 2px;
+  }
+
+  footer.credit {
+    margin-top: 30px;
+    font-size: 11.5px;
+    color: var(--text-faint);
+  }
+
+  .visually-hidden {
+    position: absolute;
+    width: 1px; height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .segment-card { transition: transform 120ms ease; }
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">&#129517;</span>
+      <div>
+        <h1>Kanto Pathfinder</h1>
+        <div class="sub">Statyczny graf świata Pokémon Red &mdash; najkrótsza trasa cel&ndash;do&ndash;celu</div>
+      </div>
+    </div>
+    <div class="topbar-stats">
+      <span><span class="stat-n" id="stat-maps"></span> map</span>
+      <span><span class="stat-n" id="stat-warps"></span> warpów</span>
+      <span><span class="stat-n" id="stat-goals"></span> celów curriculum</span>
+    </div>
+  </header>
+
+  <aside class="sidebar">
+    <div class="field">
+      <label for="start-input">Start</label>
+      <div class="combo" id="start-combo">
+        <input type="text" id="start-input" class="mono" autocomplete="off" placeholder="Szukaj mapy lub celu&hellip;" />
+        <div class="combo-list" id="start-list" role="listbox"></div>
+      </div>
+    </div>
+
+    <button class="swap-btn" id="swap-btn" title="Zamień start i cel">&#8645; zamień start / cel</button>
+
+    <div class="field">
+      <label for="goal-input">Cel</label>
+      <div class="combo" id="goal-combo">
+        <input type="text" id="goal-input" class="mono" autocomplete="off" placeholder="Szukaj celu&hellip;" />
+        <div class="combo-list" id="goal-list" role="listbox"></div>
+      </div>
+      <div class="stepper">
+        <button type="button" id="goal-prev" title="Poprzedni cel (Start też się przestawia)">&#8592; poprzedni</button>
+        <span class="stepper-pos mono" id="goal-pos"></span>
+        <button type="button" id="goal-next" title="Następny cel (Start też się przestawia)">następny &#8594;</button>
+      </div>
+    </div>
+
+    <div>
+      <h2>Legenda</h2>
+      <div class="legend" style="margin-top:8px;">
+        <div class="legend-row"><span class="swatch" style="background:var(--wall)"></span> ściana</div>
+        <div class="legend-row"><span class="swatch" style="background:var(--walk)"></span> chodliwe</div>
+        <div class="legend-row"><span class="swatch" style="background:var(--grass)"></span> trawa</div>
+        <div class="legend-row"><span class="swatch" style="background:var(--path-marker)"></span> trasa</div>
+        <div class="legend-row"><span class="swatch" style="background:var(--start-marker)"></span> start</div>
+        <div class="legend-row"><span class="swatch" style="background:var(--goal-marker)"></span> cel</div>
+      </div>
+    </div>
+
+    <div class="note">
+      Graf pokrywa tylko przejścia przez warpy (drzwi, schody, jaskinie) &mdash; nie
+      obejmuje jeszcze pieszych przejść Route&harr;City przez krawędź mapy.
+      Cele bez wejścia warpowego są wyszarzone.
+    </div>
+  </aside>
+
+  <main class="main">
+    <div id="result-bar" class="result-bar" style="display:none;"></div>
+    <div id="empty-state" class="empty-state">
+      <div class="glyph">&#129517;</div>
+      Wybierz start i cel, aby zobaczyć trasę.
+    </div>
+    <div id="segments" class="segments"></div>
+    <footer class="credit">Dane statyczne z pret/pokered &middot; wygenerowane przez tools/gen_map_collision.py, tools/gen_map_warps.py, tools/render_route.py --html</footer>
+  </main>
+</div>
+
+<script>
+const WORLD = {"maps":{"0":{"name":"PALLET_TOWN","w":20,"h":18,"walk":"9+0LwAD+/+fwcA4PZ3Jy/v/n/3/+A+cwcP4D5z9x/v/nP3AO/+fwfw7/xwAA","grass":"AAwAwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},"1":{"name":"VIRIDIAN_CITY","w":40,"h":36,"walk":"AAAOAAAAAAYAAAAADv8PAAAO/w/Av/8PDMAA/w8MQADuDwxAAO4HDUAADv8PQAAuAABAAP7/D0AA/v8PQAD+/w9AAA4AAH8ADv8PfwAu/w//AP8PD///DQ8P8P//Dw/w//8vD/D///8PAP///w/w/j/8D/D8P/wP8MA//A/wwL/8D/DA//8PAIAIAAD3////D/f/3/8P9////w8HADAAAP/ft+///9+37///37fv///ft+//","grass":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},"2":{"name":"PEWTER_CITY","w":40,"h":36,"walk":"//////8PAAAAAPADAP8H8AMA8AfwAwD7B/ADCPMH8AP89weAQACAAPD///8H8H///wfw////A/D///8D8P//DwPw//8vA/APPPwD8A88/APwDzz8//AHvfz/8P/7///w//v//fD/+/8DAAD4/wPwD///A/APP8AD8A/fvwPwL9+/A/D/37/38P/fv/cw/N+/97D8F4L38P////fw////9wAADADw/A8M/P//Dwz8//8PDPz/","grass":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},"3":{"name":"CERULEAN_CITY","w":40,"h":36,"walk":"AACwAwAAALADAAAAsAMAAAAwAAAAALADAAAAsAMAAACwAYAA/7f9gwD/t/2DAP+3/YMAAPADAxAC8AsDP////74/////vgAPwP++ACHA/z4A/8MA/wD/CwD/////AD///39AmOD///+37///97fvD//wt+8P//C37w8DALTvIwMCtO////+37////7cPAAMAsO9/+P+/7////7/v////v+97/96/D3gAHoD/e//e//97/97/","grass":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},"4":{"name":"LAVENDER_TOWN","w":20,"h":18,"walk":"wAMAPADDAzAcAMMDsDwE///z/x8//PNJP/8/8P8DAzywyAv///P/PwADADAA","grass":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},"5":{"name":"VERMILION_CITY","w":40,"h":36,"walk":"AAAM//8AAAz//wAADP//gAgMAPzA////+8D////7APz///sA/P//+wAA///7AAD///sAADz8+wAAPPz7wDA8/PNAsrwAAMD/////wP//3//AwD/AAMDAP8AAwEAwwAAAkLDAAMD/8MMAwP/wwwDA/wDAAMD/AMAAAAAAwAAAAADAAAAA/P8AAAD8/wAAAAwAAAAADAAAAAAMAAAAAAwAAAAAAAAAAAAMAAAAAAwAAAAADAAA","grass":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},"6":{"name":"CELADON_CITY","w":50,"h":36,"walk":"AAAAAAAA8P//////w///////H///w8AAcMA/MPD/vwH/wMD//wYAAAMAABsAAAwAAGwAADAAADAAAEAEAMjAA/z///8/D/D/////PMD///8/8BT/////wP//wP//A///AQAMAPz/7wEwAPH/vwfAAPT//wAAAxD//wOEDED8/w/8/3/x/z8AwADG//////8b//////9vAADAAwDAAQAADwAABwAAPAAAHAAE8CACcvz/w/////F/D////8f/P/z//x8IAPD//3/8/z8AAMDx////b//H//////wPAAAAAAQA","grass":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},"7":{"name":"FUCHSIA_CITY","w":40,"h":36,"walk":"AAAAAAAAAAAAAPz/wP8/DMDEADAEvH/PLwS8TM8v9Lx/zy8EgAMAIPz//f8//P/9/z8M/w0EOAwADPQ7DP8P9Dss/08AOPz/9/8/ANDH/A8P4PcD8A/g9///DuD3/z8OAPADPP7//w0Y/v//DRgCAAD9GwIAAP0bAgAA/RsCAAABGAoAQAMcKghIixz6/3/9G9r/f8EY+v9//x8CAQH/H/4D//4fAAD/ABD/A/8AAP8D/wAA","grass":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},"8":{"name":"CINNABAR_ISLAND","w":20,"h":18,"walk":"ADwAwAMAPADEQfD/D9//APwPwP8AAAwEwPADDJ/IwP8P/P8AAAAAAAAAAAAA","grass":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},"9":{"name":"INDIGO_PLATEAU","w":20,"h":18,"walk":"AAAAAAAAAAAAAD/A/2P8//avblcABgBgAP/2r25XAAYAYAD/9q9uVwAGAGAA","grass":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},"10":{"name":"SAFFRON_CITY","w":40,"h":36,"walk":"//c/APAAADwAAP7/PwAAAsA/BAQCwP//f4IA8MBA/v///3/+////f/7///B/DgD/AHAPAAAAcA8gAAJw//8A/3///wD/f///AP9///8A/38/wAAA8D/AAADwP8AAAPA8wAAAMD/AAABwDwAEAHD/////f/////9//v///3/+////f/7w/w9/DgAAD3AOAAAPcA4CACBw/v///3/+////f/D///8PAADwAAAAAPAAAAAAMAAA","grass":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},"12":{"name":"ROUTE_1","w":20,"h":36,"walk":"9+17wID3/3v/v/f9ewC89/1737/3/XvAv/f/e/+/9/97ALz3/3v/v/f/e/+/9/97IoD3/3v/v/f/ewCP9/97/7/3/3scgPf/e/+/9/97/78HDHjfvvfte9++","grass":"AAAAAAAAAAAAAAAAAAAAAPwDwD8A/APAPwAAAAAAAMADADwAwAMAPAAAAAAAAAAAAAAAAAAAAADwAAAPAPAAAA8AAAAAAMDDAzw88PAADw8ADADAAAAMAMAA"},"13":{"name":"ROUTE_2","w":20,"h":72,"walk":"AAMAMAD/+/+////7/7///wP8P8D/A/w/wQj8v37/w/8//P/D/48A/P/A/w/8/wAMAMj/wP8P/AAAAAD4AMAPAPwAwA8AIADADwD8AMAPACAAwA8A/ADADwAwAAAAAAAIALA+CMPDPzz8w8OPAAj/9/9////3D3D///f/fwj/9/9////v/wP8H+D/Af4/4P///v/v///+/O8PCAj878///vzvz/3+/O/P//78788/AIADADgA","grass":"AAAAAAD/APAPAP8A8A8A/wDwDwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADzADAPAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8AMAPwDwAwA/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},"14":{"name":"ROUTE_3","w":70,"h":18,"walk":"AAAAAAAAAP4AAAAAAAAAgD8AAAAAAAAA8A8AAAAAAAAA/AMA/P8P/P8DDwAA//8D///AAwDA3/fAAz/wAAAgACCAAAggAO//ff8/8AP/w/9/3/8P/MD88N/f9/8D//8/vAcC/P/A//8PAPx//z/w//8DAP/f/w/8//8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=","grass":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADwAwAAAAAAAAD8AAAA8P8DAMA/AAAA/P8AAPAPAAAA/z8AAPwDAADA/w8AAP8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="},"15":{"name":"ROUTE_4","w":90,"h":18,"walk":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAe737/v8PAAAAAADs9e77/z8A8MMAALDXu+/////DLxMEwEjvPgAAAAD///D//737//8PAMB/w/3/944AAAAA8P8P///f+////wDA/wAAIAAPgAAAAAD///D/////+3//PwD8w//////v//3/8P8PAAD8/7//9wDA/wAAACCAAP6f+A/8/wAAwP//+//vPwD/AwAA///v/7//wD8AAAAAAAAAAMADPwAAAAAAAAAAAA8=","grass":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8D8AAAAAAAAAAADA/wAAAAAAAAAAAAD/AwAAAAAAAAAAAPwPAAAAAAAAAAAA8D8AAAAAAAAAAADA/wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="},"16":{"name":"ROUTE_5","w":20,"h":36,"walk":"3r/n/Xvev+cBeN6/5/173r/nAXjev+f9e96/5wF43r/n/Xvev+cBeN6/5/173rDnDXvesOdNe96/5wF4/v/g/w/+/+D/L/72529fPsDnA3w9wBtAgP3/2/+/","grass":"AAAAAAAAAAAAAMA/APwDAAAAAADAPwD8AwAAAAAAwD8A/AMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},"17":{"name":"ROUTE_6","w":20,"h":36,"walk":"//X/X/8AAPAP/P/A/w/8/8CPQCD/////////AAgA///w/y//////f///////////////////////////AMAPAPwAwA8A/PD/f///9/9/8P8AAwCw/wD7D7D/","grass":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADPP/D8A8////z/z////P8PAPwAwP///P/PAMAMAMwAwAwAzAAADADAAPAPAP8AAAAAAAAAAAAA"},"18":{"name":"ROUTE_7","w":20,"h":18,"walk":"AAAAAAB///3333z/zffffP8N8d/8B8x/wAwPDBAADP9N8t/8/83/3wAAAAAA","grass":"AAAAAAAA/wDwDwA/APADAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},"19":{"name":"ROUTE_8","w":60,"h":18,"walk":"AAAAAAAAAAAAAAAAAAAAAAC///9/AAAAEvj//wcA4P+9//9/8AD+3/v//4cP4P+9//9/+AD+H/gD8IcPA/C93/9++D/w3/v974cPA//93/99+ADAH/z974cP4P//3//+/wD+///+7/8P4P//3//+/wD+///97/8PAAAAAAAAAAAAAAAAAAAA","grass":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD8AAAAAAADwAwAAAAAAAD8AAAAAAADwAwAAAAAAAD8AAAAAAADwAwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},"20":{"name":"ROUTE_9","w":60,"h":18,"walk":"AAAAAAAAAAAAAAAAAAAA3///w8P/D/D9/z88/P8A3//ww8M/DPD9DyAICAAA3//ww/8/DAAACB/8/8MA3z/wPwzD///+AwDCMPz/ADzwPwzDMPABAP8DIAAAH/z/8P/DMPABgAACAAAAH/z/8P//P/DB/w////8DHwAAAAAAAPABAAAAAAAA","grass":"AAAAAAAAAAAAAAAAAAAAwP8AwAMAAAD8DwA8AAAAwP8AAAAAAAD8DwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},"21":{"name":"ROUTE_10","w":20,"h":72,"walk":"AAAAAAAAAAAAAP//wAAA/3/w/wf/f/D/B/x/AAAC/H/A/wcAfADABwBAABAE/EHAoAT8fcDvB/x9wO8H/H3A7wf8f8D/B/x/wP8DAMAAAAwAwAAADADAAAAMAMAAAAwAwAAEDPzDwD0M/MPAPwz8/8D/DwAAAAAAAAAAAAAAAAAAAADAAxAs/P/D3z/8w8M/CAzAAwA8DMDDACD8/8P/PwD8A8A/AAwAgADADwD8AMADADwA","grass":"AAAAAAAAAAAAAAAAAAAA8D8A/wPwPwD/AwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},"22":{"name":"ROUTE_11","w":60,"h":18,"walk":"//7///////Dv//////8PA/7//////zDg//////8PA/7//////wDh/////+8P////////A/D//////wMAAP7/////Awzg/////z/AAP7///8//ADg//////8PAP7//////wDg//////8PAP7//////wDg//////8PAPz//////wDA//////8P","grass":"AAAAPwA8AAAAAPADwAMAAPA/P/88AAAA//PzzwMAAPA/P/8/AAAA//Pz/wMAAPAAP8A/AAAAD/AD/AMAAPA8P88PAAAAz/Pz/AAAAAA8AM8PAAAAwAPw/AAAAPz/P88PAADA///z/AAAAPD/P8APAAAA//8D/AAAAAAAAA8AAAAAAADwAAAA"},"23":{"name":"ROUTE_12","w":20,"h":108,"walk":"AAMAMAAAAwAwAAADADAAAAMAMAAAAwAwAPAPAP8AMPwDwz0wDADDADAAAAMAAAAAAAAAAABAAAAMAMAAAAwAwADw/wD/DwDAAAAMMPwAww8wDADDAPDPAP8MMMAAAwwwAAADAPD/AP8PMAMAMwAAPwDwAwDwAAAP8DMAPwMw8wAzDzD/APMPMAAAAwDw/wD/DwAMAMAAAAxQwAD/D6BAAAAMAMAAAAwAwAAADADAAAAMAMAAB/xwwA8HwHAADPfDcL8M9/9wAwA3AHADAPc/cP8DBwxwwAAHDHDHAHcPcPsAx/xwzw/3D3D/AAf8cMAPB8BwAAwH/HDfD/cxcB8D9zFwHwP3PXDfA/cNcN8A","grass":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPAAAA8A8AAADwDwAAAPAPAAAA8A"},"24":{"name":"ROUTE_13","w":60,"h":18,"walk":"/////w8ADPD///8/AMAA/////wMADAAAAAAA/88A////+/v/DQAAD7AA/98A///+/+P/DQDAIAAw/t8A/+//78P/DAADAsAyAMAAv////v//DwA4ACzA//8A/v/+/w8AACAMIAAAAAAAAAAAAAAAAAD/PwAAAAAAAAAAAAAAAAAAAAAAAAAA","grass":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMD/AAAAAAAA/A8AAAAAAMD/AAAAAAAA/A8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},"25":{"name":"ROUTE_14","w":20,"h":54,"walk":"9/9////3/38AAPf/fwMA9/9/AAz3/38MAPf/fwAD9/9//x/3f3D/B/d/cMAH93twvwf3e3C/B/d7cL8H13twgQfXe3C+B/f7cL8f9/txvx/393G/H/f7cb8f8PsBvx/w+wG/H/f/cf8f9/+B/x////H/H///8f8f///x/x8AAPD/P///8/8/","grass":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8AMAPwDwAwA/APADAD8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},"26":{"name":"ROUTE_15","w":60,"h":18,"walk":"//////////D///////8P/////////4D/AwAAAAAA8L///////w//+///////8ID//////w8AAAAAAAAA/8D///////8P/P//9///AL///////w//+///////8L///////w//+////////D8AAAAAAPD/////////////////////////////","grass":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD8wA/A8wMAwA/8ADw/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},"27":{"name":"ROUTE_16","w":40,"h":18,"walk":"/////w8AAAAAAP7/A/8P/v8D/w8+/AP/D778A/8P/v8D/w/+/wP/D/7/A/8HAAAAAAD+/wP///7/AwAA/v//AAD+//8AAP4PAAAA/u//AAD+LwAAAN4vAAAA","grass":"AAAAAAAAAAAAAAAAAPAPAAAA8A8AAADwDwAAAPAPAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},"28":{"name":"ROUTE_17","w":20,"h":144,"walk":"/i/g/wL+L+D/Av4P4P9//v/n/3/+/+f/f/7/5/9//v/n/3/+/+f/f/7/5/9//v/n/3/+/+f/f/7/5/9//v/n/3/+w+c/fP7D5z98/sPnP3z+w+c/fP7D5z98/sPnP3wOw+cwfA7D5zB8DsPnMHwOw+cwfA7D5zB8DsPnMHwOw+cQfA7D5zB8DsPnMHwOw+cwfA7D5zB8DsPnMHwOw+cQfA7D5zB8DsPnMHwOw+cwfA7D5zB8DsPnMHwOw+cQfA7D5zB8DsPnMHwOw+cwfA7D5zB8DsPnMHz+w+cffD7A5wN8PsDnA3w+wOcDfD7A5wN8PsDnA3w+wOcDfD7A5wN8PsDnA3w+wOcDfD7A5wN8PsDnA3z+/+fffz7A5wN8PsDnA3w+wOcDfP7/5/9//v/n/3/+/ycMQ8A/APwDwD8A/APAPwD8A8A/APwDwD8A/APAPwD8A8A/APwDwD8A/APAPwDcA8A/AEAA","grass":"AAAAAAAAAAAAAAAAAAAAAAAAAAAA8AMAPwDwAwA/APADAD8A8AMAPwDwAwA/APADAD8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},"29":{"name":"ROUTE_18","w":50,"h":18,"walk":"wD8A////A/8A/P//D/wD8P//P/APwP///8A/AP8D/wP/AAAA/A/8//8/8D/w////AADA////A/8D////D/wPAAAAAGAAAAAAAP59AAAAAPj3AQAAAODfBwAAAIB/HwAAAAD+fQAAAAD49wEAAAAAAAA=","grass":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPADAAAAAMAPAAAAAAA/AAAAAAD8AAAAAAAAAAAAAAAAAAA="},"30":{"name":"ROUTE_19","w":20,"h":54,"walk":"wC8AAALALwAAAsAvAAAC8D8A/wPwPwB/AwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","grass":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},"31":{"name":"ROUTE_20","w":100,"h":18,"walk":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPA/AAAAAAAAAAAAAAD/AwAAAAAAAAAAAADwPwAAAAAAAAAAAAAQ/wMAAAAAAAAAAADA/wAAAAAAAAAAAAAAfA8AAAAAAAAAAAAPwP8AAAAAAAAAAADwAPxPAAAAAAAAAAAAAAAAPwAAAAAAAAAAAAAA0AMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","grass":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},"32":{"name":"ROUTE_21","w":20,"h":90,"walk":"AABw8PsHv3/w+we/f/D7B79/8PsHv3/w+wcAcAAABwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8AAADwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAwAMAPAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMAMAA","grass":"AAAAAAAAAAAAAAA/APADAD8A8AMAPwDwAwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},"33":{"name":"ROUTE_22","w":40,"h":18,"walk":"AAAAAAAAAAAAAAAAAMAPAAAAAAIAAP//DwAB//8P/D8/wPP8PwCA+Pw/P8D7AAg/wPv8P//DOzwA/8M7/P//wz8AAAAAAvz///8//P///z8AAAAAAAAAAAAA","grass":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP8ADAAA/wAMAAD/AAwAAP8ADAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},"34":{"name":"ROUTE_23","w":20,"h":144,"walk":"AAYAYAAABgBgAAAGAGAAsP0A2w/QqwC9CuB2AG4HsNoAqw1g1QBWDdB2AG0Hr1b/avX/////////7//fAAAMAMAAAAwAwAAADADAAAAMAcT/wH8P/P/A/w/8/8D/D3z/APAPAP8A8A8A3gDgDQDA/A/M/8D5D5x7/z/w/wPeN+B9AwAwAAADADAAAAPAPwD8A8AsAMwCgD0A2AOAJQBYAsAsAMwCgDcAeAMA/w/w/wC/B/B7AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMAMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/ADADwD8AMAP/////////7/ffgMMMMAAAwwwwAD/////////77d3AAMAMAAAAwAwAP/////////v3m0AwAAADADAAAAM/////////++9f8ADADwAwAMAPAADwD8A/APAPwD8","grass":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADADAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADAAwA8AMAAAAwAADwAwAMAAAAAAMAAAAwAAAMAMAAAwA8A/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},"35":{"name":"ROUTE_24","w":20,"h":36,"walk":"AAAAAAAAAAAAAPDfDv/t8N8OBAzw/w////APAP/+8O8A/w7w7wD/DjDsAMMOMOwAww4w7ADDDjBsAMMGMGwAwwYwbADDBjBsAMMGMGwAwwYAbADABgBsAMAG","grass":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMAAAAwAwAAADADAAAAMAMAAAAwAwAAADADAAAAMAMAAAAwAAAAAAAAAAAAAA"},"36":{"name":"ROUTE_25","w":60,"h":18,"walk":"AAAAAADwAAAAAAAAAAAAAHTf998P/wBA9z3/AQIA//8fff//f/D/6t33//8H//PS////fwDg7v38//8H/8v+7z/wQPC/r//+Aw8EAAAAAADwQPD/////Aw8EAAAAAPD/fwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","grass":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/AAAAAAAAMAPAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},"37":{"name":"REDS_HOUSE_1F","w":8,"h":8,"walk":"APT//+fn//8=","grass":null},"38":{"name":"REDS_HOUSE_2F","w":8,"h":8,"walk":"APj///f3vr4=","grass":null},"39":{"name":"BLUES_HOUSE","w":8,"h":8,"walk":"AHz/5+f/fn4=","grass":null},"40":{"name":"OAKS_LAB","w":10,"h":12,"walk":"AMDw/4///w8DDP//////","grass":null},"41":{"name":"VIRIDIAN_POKECENTER","w":14,"h":8,"walk":"ABTGD4D8f/6//8/z8Dw=","grass":null},"42":{"name":"VIRIDIAN_MART","w":8,"h":8,"walk":"AAD/DAz9/P8=","grass":null},"43":{"name":"VIRIDIAN_SCHOOL_HOUSE","w":8,"h":8,"walk":"AH//5+f/fn4=","grass":null},"44":{"name":"VIRIDIAN_NICKNAME_HOUSE","w":8,"h":8,"walk":"AHz/5+f/fn4=","grass":null},"45":{"name":"VIRIDIAN_GYM","w":20,"h":18,"walk":"AADg/f/e/+9JwP72DdTfX4H99d9TPz3111N/PffXE8A////zfzsAtP//////","grass":null},"46":{"name":"DIGLETTS_CAVE_ROUTE_2","w":8,"h":8,"walk":"AAA+Pj4+Pgw=","grass":null},"47":{"name":"VIRIDIAN_FOREST_NORTH_GATE","w":10,"h":8,"walk":"IPzviy/++eKLfw==","grass":null},"48":{"name":"ROUTE_2_TRADE_HOUSE","w":8,"h":8,"walk":"AHz/5+f/fn4=","grass":null},"49":{"name":"ROUTE_2_GATE","w":10,"h":8,"walk":"IPzviy/++eKLfw==","grass":null},"50":{"name":"VIRIDIAN_FOREST_SOUTH_GATE","w":10,"h":8,"walk":"IPzviy/++eKLfw==","grass":null},"51":{"name":"VIRIDIAN_FOREST","w":34,"h":48,"walk":"BgAAAAj//P9n/PP/n/HPA3DGOQeAGeccAGaccwCYcc4BYMY5//8Z5/z/Z5xzYJxxzoFxxjkHxhnnHBhnnHNgnHHOgXHG+QfGGecfCGecf+Cfcf6Bf8YBAI4ZBwA45h8A4Jh/AIBj7h8Ajvl/ADgGgAHgGAAGgGMAGACOAWAAOOYfAOCYfwCAY8D/Bv4B/x/4Bxx44ABw4IEDwIEHDgAHHjgAHHjgAHDggQP+///++f/z/+f/z/+f////fwCABwAAAA4AAAB4AAAA4AEA","grass":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGCccwCAcc4BAMY5/wAY5/wDYJxzAJxxzgFwxjkHwBnnHABnnHMAnHHOAXDGOQfAGeccAGccAACAcQAAAMYBAA4YBwA44BwA4IBzAIADAAAADgAAADgAAADgAAAAgAMAAAAOAAAAOOAfAOCAfwCAAwD/BAIA/BMIABBIIABAIIEAAIEEAgAEEggAEEggAEAggQA+//zy+fzzz+cDAACfDwAAfAAAAAAAAAAAAAAAAAAAAAAA"},"52":{"name":"MUSEUM_1F","w":20,"h":8,"walk":"AADwfwDh9x5+///3H2744Z7373k=","grass":null},"53":{"name":"MUSEUM_2F","w":14,"h":8,"walk":"AMD/+D/+/+F/uP/v//s=","grass":null},"54":{"name":"PEWTER_GYM","w":10,"h":14,"walk":"APjnHwz+aeSfRv7BcPv///8P","grass":null},"55":{"name":"PEWTER_NIDORAN_HOUSE","w":8,"h":8,"walk":"AHz/5+f/fn4=","grass":null},"56":{"name":"PEWTER_MART","w":8,"h":8,"walk":"AAD/DAz9/P8=","grass":null},"57":{"name":"PEWTER_SPEECH_HOUSE","w":8,"h":8,"walk":"AHz/5+f/fn4=","grass":null},"58":{"name":"PEWTER_POKECENTER","w":14,"h":8,"walk":"ABTGD4D8f/6//8/z8Dw=","grass":null},"59":{"name":"MT_MOON_1F","w":40,"h":36,"walk":"+v////8CAAAAAP7v//+//u///7/+7///v/7v//+//u///7/+7///v/7vu/u//u8DwL/+7/v/v/7v+/+//u/7/77+7/P/vv7v+/++/s/7/7z+/7v/vv7/s/+++v67/74C/jv/vP76u/++/gKw/77+/r//vv58P/+8/v+//77+/z//vv7/5tu+/v8G27z+//bbv/7/9tu//tv227/+2/bDv/7b9v+//tv2/z/62+b//wDAAAAA","grass":null},"60":{"name":"MT_MOON_B1F","w":28,"h":28,"walk":"AAAAAAAAAAAA8A8AAP/wAAAADwAA8AAAAA8AAPDA/wMP/D/wwP8DD/w/8AAAAA8AAPAAAA8PAPDw/z8P///zAAAADwAA8AAAAA8AAPAAAAAPAADwAAAADwAA8AD8/w/A//8=","grass":null},"61":{"name":"MT_MOON_B2F","w":40,"h":36,"walk":"AAAAAPAAAAAA8Pj/AQDw+P8BAPD4/wEA8AgwcHjw/P5xe//8/nEz//z+cf8PALBx/w0Av3H/DwA/cP8PP//zn38/MPCffz8w8J9/PzDwDHO///P+d7//8/53v//z/ne/DwAAcL8PAABwvw+AB3C/z783f7/PPzN/v8//P3+/z/8/B7/P/z/3v8//P/e/DwAA978PAAD3vw8AAPe/////97/////3PwAAAPD/////////////","grass":null},"62":{"name":"CERULEAN_TRASHED_HOUSE","w":8,"h":8,"walk":"CPz/5+f//j4=","grass":null},"63":{"name":"CERULEAN_TRADE_HOUSE","w":8,"h":8,"walk":"AHz/5+f/fn4=","grass":null},"64":{"name":"CERULEAN_POKECENTER","w":14,"h":8,"walk":"ABTGD4D8f/6//8/z8Dw=","grass":null},"65":{"name":"CERULEAN_GYM","w":10,"h":14,"walk":"ADwfY7+B9ltiiT3GGGus//8P","grass":null},"66":{"name":"BIKE_SHOP","w":8,"h":8,"walk":"ANDQH/z8v38=","grass":null},"67":{"name":"CERULEAN_MART","w":8,"h":8,"walk":"AAD/DAz9/P8=","grass":null},"68":{"name":"MT_MOON_POKECENTER","w":14,"h":8,"walk":"ABTGD4D8f/6//8/z8Dw=","grass":null},"70":{"name":"ROUTE_5_GATE","w":8,"h":6,"walk":"PBhaWlo8","grass":null},"71":{"name":"UNDERGROUND_PATH_ROUTE_5","w":8,"h":8,"walk":"AH6Zvb29GH4=","grass":null},"72":{"name":"DAYCARE","w":8,"h":8,"walk":"AHz/5+f/fn4=","grass":null},"73":{"name":"ROUTE_6_GATE","w":8,"h":6,"walk":"PBhaWlo8","grass":null},"74":{"name":"UNDERGROUND_PATH_ROUTE_6","w":8,"h":8,"walk":"AH6Zvb29GH4=","grass":null},"76":{"name":"ROUTE_7_GATE","w":6,"h":8,"walk":"gBf+f+gB","grass":null},"79":{"name":"ROUTE_8_GATE","w":6,"h":8,"walk":"gBf+f+gB","grass":null},"80":{"name":"UNDERGROUND_PATH_ROUTE_8","w":8,"h":8,"walk":"AH6Zvb29GH4=","grass":null},"81":{"name":"ROCK_TUNNEL_POKECENTER","w":14,"h":8,"walk":"ABTGD4D8f/6//8/z8Dw=","grass":null},"82":{"name":"ROCK_TUNNEL_1F","w":40,"h":36,"walk":"5p7756kGHvjnAfbe++e99t4DADz23v//vvDA//+8/u///77+7///PP6v+7q//A/wALy+7/v/v77v+/8/vu/7/788z/P/v77/6+6uvv8DAAC+/7+/vzz/v7+//v+/v7/+/z8/P/7/v7+//P+/v7+6u7u/vwIAAD8//v//v7/8//+/v/7//7+//P//Pz/+/e/9v/717/2//v3v/b/+/e/9P/797/l//v3v+X/+AeD5fwAAAAAA","grass":null},"83":{"name":"POWER_PLANT","w":40,"h":36,"walk":"AAAAAAACAAAAAMISwAEAzh/8EQz+CIQZOP48jxkwMBiMMR7+GI8xHv4QnzkD/hCfOQP+eL+9B//4v70HAACE/X/ADo/BAPAev/9//B8AAGD8P/z/b/w+AANs4CAAAm/wIBMAbPxy//9v/P4DAGwGBv//bwYPAABgPjggQDD+OCNwPDBgf/wc/HB//x84/PNHADj880cAHAgAQAAcPADOAH48PPZnfvw8MkT+/v/+fzAAAAAA","grass":null},"84":{"name":"ROUTE_11_GATE_1F","w":8,"h":10,"walk":"AH4A/////yBuAA==","grass":null},"85":{"name":"DIGLETTS_CAVE_ROUTE_11","w":8,"h":8,"walk":"AAA+Pj4+Pgw=","grass":null},"86":{"name":"ROUTE_11_GATE_2F","w":8,"h":8,"walk":"AAC9/////v4=","grass":null},"87":{"name":"ROUTE_12_GATE_1F","w":10,"h":8,"walk":"eOChl1566KcXHg==","grass":null},"88":{"name":"BILLS_HOUSE","w":8,"h":8,"walk":"AAC9//n///8=","grass":null},"89":{"name":"VERMILION_POKECENTER","w":14,"h":8,"walk":"ABTGD4D8f/6//8/z8Dw=","grass":null},"90":{"name":"POKEMON_FAN_CLUB","w":8,"h":8,"walk":"AP/Dw8P///8=","grass":null},"91":{"name":"VERMILION_MART","w":8,"h":8,"walk":"AAD/DAz9/P8=","grass":null},"92":{"name":"VERMILION_GYM","w":10,"h":18,"walk":"APDADz8wwPB/Vf9X9X9V/99++////w8=","grass":null},"93":{"name":"VERMILION_PIDGEY_HOUSE","w":8,"h":8,"walk":"AHz/5+f/fn4=","grass":null},"94":{"name":"VERMILION_DOCK","w":28,"h":12,"walk":"/E/Pw//0PwBAAAwAAMAAAAAMAADAAAAADAAAwAAAAAwAAMAAAAAAAAAA","grass":null},"95":{"name":"SS_ANNE_1F","w":40,"h":18,"walk":"AAAADAAAAAAMAAAAAAwAAAAADAAAAAAMAAAAAAwA/P///z/8////P4yIiIAwDAAAADAMAAAAMAwAAAAwDAAAADAMAAAAMAwAAAAwDAAAADAIAAAAAAAAAAAA","grass":null},"96":{"name":"SS_ANNE_2F","w":40,"h":18,"walk":"AAAAAAAAAAAAAAAAAAAAAAAAAAAMAAAAMAwAAAAwDAAAADAMAAAAMAwAAAAwDAAAADAMAAAAPAwiIiI8/P///z/8////PwAAAAAAAAAAAAAAAAAAAAAAAAAA","grass":null},"97":{"name":"SS_ANNE_3F","w":20,"h":6,"walk":"AAAAAAD8//P//wAAAAAA","grass":null},"98":{"name":"SS_ANNE_B1F","w":30,"h":8,"walk":"AAAAAAAAAAAAAAAAIiIC/P//D////wMAAAAAAAAA","grass":null},"99":{"name":"SS_ANNE_BOW","w":20,"h":14,"walk":"AAAAAADgDwD/ALgPwPsA/j/g/wO8D4D7APAPAP4AAAAAAAA=","grass":null},"100":{"name":"SS_ANNE_KITCHEN","w":14,"h":16,"walk":"QMD/////////zDQzz0wz88w0M///////DwAAAA==","grass":null},"101":{"name":"SS_ANNE_CAPTAINS_ROOM","w":6,"h":8,"walk":"wIPj////","grass":null},"102":{"name":"SS_ANNE_1F_ROOMS","w":24,"h":16,"walk":"AQQQDzzwDzzwDzzwBxxwBBBAAAAAAAAAAAAAAAAAAQQQDzzwDzzwDzzwBxxwBBBA","grass":null},"103":{"name":"SS_ANNE_2F_ROOMS","w":24,"h":16,"walk":"AAAABBBABxxwDzzwDzzwDzzwAAAAAAAAAAAAAAAAAAAABBBABxxwDzzwDzzwDzzw","grass":null},"104":{"name":"SS_ANNE_B1F_ROOMS","w":24,"h":16,"walk":"AAAABBBABxxwDzzwDzzwDzzwAAAAAAAAAAAAAAAAAAAABBBABxxwDzzwDzzwDzzw","grass":null},"108":{"name":"VICTORY_ROAD_1F","w":20,"h":18,"walk":"AMjggBgM/sOBfe7/7f7f7P/NiMn4m8+uceQYwI457t1zAjQz/+E7H/wzADwA","grass":null},"113":{"name":"LANCES_ROOM","w":26,"h":26,"walk":"YABguB2gZW+An70BfvYG+Nkb4GdvgJa9ARj2BgDYGwBgbwCAvQEADgcAgAEAgB8AAH6Af/gB/uEH+Icf4B9+gAH4AQbgBxiAH2AA/v8B+P8HAAAAAA==","grass":null},"118":{"name":"HALL_OF_FAME","w":10,"h":8,"walk":"ADz//////////w==","grass":null},"120":{"name":"CHAMPIONS_ROOM","w":8,"h":8,"walk":"GFp+fn5+Whg=","grass":null},"121":{"name":"UNDERGROUND_PATH_WEST_EAST","w":50,"h":8,"walk":"AAAAAAAA8P//////w///////D///////P/z///////D//////wMAAAAAAAAAAAAAAAA=","grass":null},"122":{"name":"CELADON_MART_1F","w":20,"h":8,"walk":"AAAgAAG/9/x7/z/w//////////8=","grass":null},"123":{"name":"CELADON_MART_2F","w":20,"h":8,"walk":"AAAgABFv//82DA/D8P///8PwPww=","grass":null},"124":{"name":"CELADON_MART_3F","w":20,"h":8,"walk":"AAAgABH///P//4MP8P/+g+/w/w4=","grass":null},"125":{"name":"CELADON_MART_4F","w":20,"h":8,"walk":"AAAgABH//z/AwAMM/P//AAz838A=","grass":null},"126":{"name":"CELADON_MART_ROOF","w":20,"h":8,"walk":"AADAPwDMj8D8P/z8w88//P8DAAA=","grass":null},"127":{"name":"CELADON_MART_ELEVATOR","w":4,"h":4,"walk":"8P8=","grass":null},"128":{"name":"CELADON_MANSION_1F","w":8,"h":12,"walk":"ENzA0d/f3Nz/wP//","grass":null},"129":{"name":"CELADON_MANSION_2F","w":8,"h":12,"walk":"ANzAwN/cx8b+wP//","grass":null},"130":{"name":"CELADON_MANSION_3F","w":8,"h":12,"walk":"ANzAxN/f3N//wP//","grass":null},"131":{"name":"CELADON_MANSION_ROOF","w":8,"h":12,"walk":"AF5eXlBQUFReQH4A","grass":null},"132":{"name":"CELADON_MANSION_ROOF_HOUSE","w":8,"h":8,"walk":"AH//5+f/fn4=","grass":null},"133":{"name":"CELADON_POKECENTER","w":14,"h":8,"walk":"ABTGD4D8f/6//8/z8Dw=","grass":null},"134":{"name":"CELADON_GYM","w":10,"h":18,"walk":"APw/8N577733wDPP/J//M898++3//w8=","grass":null},"135":{"name":"GAME_CORNER","w":20,"h":18,"walk":"AAAAAAAAAAAAAAAAAvD//w8A8AD//8/zPDzPw/M8PM/D8zw8z8PzPP//////","grass":null},"136":{"name":"CELADON_MART_5F","w":20,"h":8,"walk":"AAAgABFv//82DA/D8P///8PwPww=","grass":null},"137":{"name":"GAME_CORNER_PRIZE_ROOM","w":10,"h":8,"walk":"AAAAwP///w8DDA==","grass":null},"138":{"name":"CELADON_DINER","w":10,"h":8,"walk":"APzOO++/887D/w==","grass":null},"139":{"name":"CELADON_CHIEF_HOUSE","w":8,"h":8,"walk":"AMP/w8P/PDw=","grass":null},"140":{"name":"CELADON_HOTEL","w":14,"h":8,"walk":"AMD/AwD8//6//8/z8Dw=","grass":null},"141":{"name":"LAVENDER_POKECENTER","w":14,"h":8,"walk":"ABTGD4D8f/6//8/z8Dw=","grass":null},"142":{"name":"POKEMON_TOWER_1F","w":20,"h":18,"walk":"AAAA4AEAPwD8D+D/Af4f8P+D/3/4/4f/f/j/B/8/8B8A/z3A3wD8DQAeAMAA","grass":null},"143":{"name":"POKEMON_TOWER_2F","w":20,"h":18,"walk":"AAAAAAAAPgDgDwD/AP4f8MCDz384DIfDcPj8B88/IPABAAPA/wDwAwAAAAAA","grass":null},"144":{"name":"POKEMON_TOWER_3F","w":20,"h":18,"walk":"AAAA4AEAPgDgD+D/AQYAcP+D92d4s4c3e3i/B/c7YIMA/j8APwDwAwAAAAAA","grass":null},"145":{"name":"POKEMON_TOWER_4F","w":20,"h":18,"walk":"AAAA4AEAPgDgD8A7AKYc8HuCZ3z4+4fMfPj2Bs8EoP8B1hnA9wDgAAAYAAAA","grass":null},"146":{"name":"POKEMON_TOWER_5F","w":20,"h":18,"walk":"AAAA4AEAPQDgDyAMAfgH8P+DD38YP4bxY9jPBz0/gH8AwhDA/wDwAwAeAAAA","grass":null},"147":{"name":"POKEMON_TOWER_6F","w":20,"h":18,"walk":"AAAAAAAAPAD4D0DMAP4c8M+A/3xAzwcEf/jwB/wI4L8BzAjAzwDAAAAeAAAA","grass":null},"148":{"name":"POKEMON_TOWER_7F","w":20,"h":18,"walk":"AAAAAAAADADAAAAeAOABAB4A4AEAHgDgAQAeAOABAB4AwAAADADAAAAeAAAA","grass":null},"149":{"name":"MR_FUJIS_HOUSE","w":8,"h":8,"walk":"AHz/5+f/fn4=","grass":null},"150":{"name":"LAVENDER_MART","w":8,"h":8,"walk":"AAD/DAz9/P8=","grass":null},"151":{"name":"LAVENDER_CUBONE_HOUSE","w":8,"h":8,"walk":"AHz/5+f/fn4=","grass":null},"152":{"name":"FUCHSIA_MART","w":8,"h":8,"walk":"AAD/DAz9/P8=","grass":null},"153":{"name":"FUCHSIA_BILLS_GRANDPAS_HOUSE","w":8,"h":8,"walk":"AHz/5+f/fn4=","grass":null},"154":{"name":"FUCHSIA_POKECENTER","w":14,"h":8,"walk":"ABTGD4D8f/6//8/z8Dw=","grass":null},"155":{"name":"WARDENS_HOUSE","w":10,"h":8,"walk":"APzPxFP//++ffw==","grass":null},"156":{"name":"SAFARI_ZONE_GATE","w":8,"h":6,"walk":"PBhaWlo8","grass":null},"157":{"name":"FUCHSIA_GYM","w":10,"h":18,"walk":"APw/99Nsvy2774P/vjfeA/9/++3//w8=","grass":null},"158":{"name":"FUCHSIA_MEETING_ROOM","w":14,"h":8,"walk":"AAD8/zF/zP8/A+D/+X8=","grass":null},"159":{"name":"SEAFOAM_ISLANDS_B1F","w":30,"h":18,"walk":"APgHAAD+AcC/f//w78k/7HnvD3ve+8Oe9/6w4b0/bH7vD4vfA8Dvf//w+98//P73D7+A/MP//v7wv78/AAAAAAAAAAA=","grass":null},"160":{"name":"SEAFOAM_ISLANDS_B2F","w":30,"h":18,"walk":"AAAAAAAAAMD//3vw//8e/Hu/B//ej8C/9/zw7z0/+P/fD/7/94P//3kAA34e/L+fB/+P4MH//3vw//0AAAAAAAAAAAA=","grass":null},"161":{"name":"SEAFOAM_ISLANDS_B3F","w":30,"h":18,"walk":"/inqn38A+OcfAP75B4B//vnhnzd+AOC9H/55b4J//h/gn/8HoOf/AeD5YQB4fvuHH8D+4fe3f/i9DwwA7/2D//v/4Q8=","grass":null},"162":{"name":"SEAFOAM_ISLANDS_B4F","w":30,"h":18,"walk":"4If/B/jh3wF++H8AAv4fAID/BwBgIAD4HwAA/gcAgP8BAOAfAAD4BwAAggEAAGAAAAAYAAD4fwAA9h8AiP+HCgAAAAA=","grass":null},"163":{"name":"VERMILION_OLD_ROD_HOUSE","w":8,"h":8,"walk":"AHz/5+f/fn4=","grass":null},"164":{"name":"FUCHSIA_GOOD_ROD_HOUSE","w":8,"h":8,"walk":"BP//Pz///38=","grass":null},"165":{"name":"POKEMON_MANSION_1F","w":30,"h":28,"walk":"AAAAgP///wf/Vf3A9/8/OP0/DE7/7+Pe//u5dwx+/tCPDAD3I2PvrXn4f2se9t4/n/8BwGBvP/z4388/9vb7n//9zGBvAzP438A49vb/nv/9v2dvA+/538B79vb/nP/9P+d//8/AAwAw","grass":null},"166":{"name":"CINNABAR_GYM","w":20,"h":18,"walk":"AAAgKP++vu/r+76+7+v7sDDMy/O+vu/r+76+7+vDsLDNy9u+vu/j+/6/7//7","grass":null},"167":{"name":"CINNABAR_LAB","w":18,"h":8,"walk":"AAAAAAAAgAcAPxH9////////","grass":null},"168":{"name":"CINNABAR_LAB_TRADE_ROOM","w":8,"h":8,"walk":"AH7/x8f/fn4=","grass":null},"169":{"name":"CINNABAR_LAB_METRONOME_ROOM","w":8,"h":8,"walk":"AAD//zw///8=","grass":null},"170":{"name":"CINNABAR_LAB_FOSSIL_ROOM","w":8,"h":8,"walk":"AAD//zA///8=","grass":null},"171":{"name":"CINNABAR_POKECENTER","w":14,"h":8,"walk":"ABTGD4D8f/6//8/z8Dw=","grass":null},"172":{"name":"CINNABAR_MART","w":8,"h":8,"walk":"AAD/DAz9/P8=","grass":null},"174":{"name":"INDIGO_PLATEAU_LOBBY","w":16,"h":12,"walk":"AAHwA/8DDAAMUI3xDCD/f/D/8P//D/8P","grass":null},"175":{"name":"COPYCATS_HOUSE_1F","w":8,"h":8,"walk":"APT//+fn//8=","grass":null},"176":{"name":"COPYCATS_HOUSE_2F","w":8,"h":8,"walk":"APj///f3vr4=","grass":null},"177":{"name":"FIGHTING_DOJO","w":10,"h":12,"walk":"ANhmm23++eeff7bZ5h8M","grass":null},"178":{"name":"SAFFRON_GYM","w":20,"h":18,"walk":"AADw+/2/3//7/b/f//v9AADw+/2/3//7/b/f//v9AADw+/2/3f/b/b/f//v9","grass":null},"179":{"name":"SAFFRON_PIDGEY_HOUSE","w":8,"h":8,"walk":"AHz/5+f/fn4=","grass":null},"180":{"name":"SAFFRON_MART","w":8,"h":8,"walk":"AAD/DAz9/P8=","grass":null},"181":{"name":"SILPH_CO_1F","w":30,"h":18,"walk":"AAAQhO///+f7/38BPs9f/ofhn/8A8KcfAHjpBwBe/gPAn/9h+Kf/PH/p//9f/v//n////yfw/wMJ/P9A/v//HwADAAA=","grass":null},"182":{"name":"SAFFRON_POKECENTER","w":14,"h":8,"walk":"ABTGD4D8f/6//8/z8Dw=","grass":null},"183":{"name":"MR_PSYCHICS_HOUSE","w":8,"h":8,"walk":"AHz/5+f/fn4=","grass":null},"184":{"name":"ROUTE_15_GATE_1F","w":8,"h":10,"walk":"AH4A/////yBuAA==","grass":null},"185":{"name":"ROUTE_15_GATE_2F","w":8,"h":8,"walk":"AAC9/////v4=","grass":null},"186":{"name":"ROUTE_16_GATE_1F","w":8,"h":14,"walk":"AAD//wB+AP////8gbgA=","grass":null},"187":{"name":"ROUTE_16_GATE_2F","w":8,"h":8,"walk":"AAC9/////v4=","grass":null},"188":{"name":"ROUTE_16_FLY_HOUSE","w":8,"h":8,"walk":"AHz/5+f/fn4=","grass":null},"189":{"name":"ROUTE_12_SUPER_ROD_HOUSE","w":8,"h":8,"walk":"AHz/5+f/fn4=","grass":null},"190":{"name":"ROUTE_18_GATE_1F","w":8,"h":10,"walk":"AH4A/////yBuAA==","grass":null},"191":{"name":"ROUTE_18_GATE_2F","w":8,"h":8,"walk":"AAC9/////v4=","grass":null},"192":{"name":"SEAFOAM_ISLANDS_1F","w":30,"h":18,"walk":"AAAAAAAAAID///fg//89+P9/D/4ByIN///7g378/+PfvD/79+4N///4Awz8A/P/vD///+8P///7w/78/MAAADAwAAAM=","grass":null},"193":{"name":"ROUTE_22_GATE","w":10,"h":8,"walk":"MNz+/////3/77Q==","grass":null},"194":{"name":"VICTORY_ROAD_2F","w":30,"h":18,"walk":"/L//n//v/+f9+//5//5/IL4Dnq/vv/fv+w/8+/7rbX///tvfv+cC9g/4u/3//O6/N7/77+3v/nfrO4LAHv7/PwD//w8=","grass":null},"195":{"name":"ROUTE_12_GATE_2F","w":8,"h":8,"walk":"AAC9/////v4=","grass":null},"196":{"name":"VERMILION_TRADE_HOUSE","w":8,"h":8,"walk":"AHz/5+f/fn4=","grass":null},"197":{"name":"DIGLETTS_CAVE","w":40,"h":36,"walk":"////////////////////h/////+3/////7f/////t/////+3/////7f/////t/////+3/////7f/////t/////83+P////f7////9/v////3+/////eD////f7////9/v////3+/////f7//////t/////+3/////7f/////NwD4///3//v///f/+///9//7///3/wOA//9//7///3//v/////+9/////73/////////////","grass":null},"198":{"name":"VICTORY_ROAD_3F","w":30,"h":18,"walk":"xP//H/P//8fvf/9Z+99v3v73mrOBPDds/w/42v97Pvbxnoj9hud2/705wH97/i/Anv/7v+f//u/5P/97/v//LgAAAAA=","grass":null},"199":{"name":"ROCKET_HIDEOUT_B1F","w":30,"h":28,"walk":"AAAAAAAAfgAAgB8AAOAHAADwAID//wfg//8B+P9/ABgeBoCf5wfg5/kB+Hl+AEKeEICQJwTA5/EB8Hl8AAAAA4D/3wfA//cBMPANAAx8AAADHwDAwAcAMPABAAx8AAD/HwDg/wcAAAAA","grass":null},"200":{"name":"ROCKET_HIDEOUT_B2F","w":30,"h":28,"walk":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD4/u99oqp5nv8PnodB/+fp3/95SnV8nkfdnwf/kP/5P+d/Ev8BgAd//ifun//5/+QNUn1/gF7QH2D1twdY/e0BVgd5gB9/HuAAgAcAAAAA","grass":null},"201":{"name":"ROCKET_HIDEOUT_B3F","w":30,"h":28,"walk":"AAAAAAAAAAAAAAAAAAAAAAAAAID//wfg//8B+P9/AADQH4D/BwcABv0B+H9/ABTDH4D/MAAgNf0BSH9/AP7HH4A88Qfgz/0B+HMAAJAYAIA3DwDgzwMA+PAAACB+AID/HwDg/wcAAAAA","grass":null},"202":{"name":"ROCKET_HIDEOUT_B4F","w":30,"h":24,"walk":"AAAAAACABwTA7/0B8H9/AMLfEICwNwTg7/kBAHh+AD6eD4CP5wMg5/0ByHkMADLeH4D88Qfgf/8B+N8NAABwAAAAHwDA/wcA8P8BAA54AIADHgDg/wcAAAAA","grass":null},"203":{"name":"ROCKET_HIDEOUT_ELEVATOR","w":6,"h":8,"walk":"AON5nucB","grass":null},"207":{"name":"SILPH_CO_2F","w":30,"h":18,"walk":"AAAQhQD9/+d////53/9/MAAAgz8A/Of////5//9//j8TgP/PJAADM/n430w+MjTznwzN/Cd/M8v53/9y/ve/HwAAAAA=","grass":null},"208":{"name":"SILPH_CO_3F","w":30,"h":18,"walk":"AAAQhf///+f////5//9/AAAcAHBMB8Df3/0w93c/zs//k/Pz/+Tc363593dr/v3dHwAAB+D////5//9//v//HwAAAAA=","grass":null},"209":{"name":"SILPH_CO_4F","w":30,"h":18,"walk":"AAAQhX8A/ifUv/8J9O9/Ag0Lg0DD+ifQv3pJ9K9SMjHonE4/Ouffv0r5969SMDDonP//O+f//0r5/79e/v/vHwAAAAA=","grass":null},"210":{"name":"SILPH_CO_5F","w":30,"h":18,"walk":"AAAQhdD//+d3/v/5nf9//n/AkP/f/+U38ED5DT1QfnP/FMDcP+W3/0/57f9TwnsPlPHeA+W09385DQBAfv//HwAAAAA=","grass":null},"211":{"name":"SILPH_CO_6F","w":26,"h":18,"walk":"AEAFQP//x/3/H/f/f/4ADPnD/8XM/xczA1DADkB5Oz8lzfyUNgNQ+gxAyfP/JQ0DkPX/f97//wEAAAA=","grass":null},"212":{"name":"SILPH_CO_7F","w":26,"h":18,"walk":"AABFOLz95/P2nw/4f44/MTj+9OfDkJ/vX06AfzkJMuXky5STL1N+pkwxmP715/vXnw9Af/7//QEAAAA=","grass":null},"213":{"name":"SILPH_CO_8F","w":26,"h":18,"walk":"AEAF+AH/5/f8n9Dzf0LfAAh9+yf0rZbQsFrC3/45f/vnNC2X37Rcft/+AQzDwP//H///f/7//wEAAAA=","grass":null},"214":{"name":"POKEMON_MANSION_2F","w":30,"h":28,"walk":"AAAAAHDfLwDfNzvA980//H8/Hv8fg+fa/we59v9B/h0MAADHz6D/8fvpf/x+fj68n58B7ABiwPPBGPB8HrQDgAft/w9w+/8D3f7/frf/v9/t/y/8+/8L3/7/frf/v9/t/+93+P8DwP//","grass":null},"215":{"name":"POKEMON_MANSION_3F","w":30,"h":18,"walk":"AAAAgP8QIOD/9Dv4P/0O+PnzB37+/AHA9/kB8H1+4GADH/gYACA/zvvJj/9+MjH7n0/AIgAP//vBw/9+PvC/HwD8DwA=","grass":null},"216":{"name":"POKEMON_MANSION_B1F","w":30,"h":28,"walk":"AAAAAEAA/MffP6rx949qzv33n3MMwOD////5//9/MAAAnH//fyfT/9/J9P93/v3/nX//fyfT/9/J9P93/h3jHQDHeOP//f75f79//t/sn/83++f///75/79//t/rn//3+uf//f4BAAAA","grass":null},"217":{"name":"SAFARI_ZONE_EAST","w":30,"h":26,"walk":"AAAAgP///+f///8B//9/v/v33//+/QeAf//5T8h//j//kP/Pv+R/AL/5H8B//v/4h/8//uF/gH/4H4AF/gdgH/AB2Ae4//cB7v99gPt/3+8ExPf77/99APh/////HwAAAAA=","grass":"AAAAAMD/8wPwP/4B+Md/AADwHwAA+AcAAP8AAIAWCAEAAMMAACAPAADIAwAA8vwAgDw/AMAwAAAgBAAAAAAAAAAAAAAAAAAAAAAAAAAABwAAwAMAwP8AAOAfAMD/AwAAAAA="},"218":{"name":"SAFARI_ZONE_NORTH","w":40,"h":36,"walk":"AAAAAAD8////P/7///9D/v///0v+BwDwb/73zP9//vf//3/+9///f/zw//9//PD//3/+8Pz/f/7wAAB//vD+/37+8P7/fg7//v9+Dv/+/2QO//7/bw7//v9vDv/+/28O//7/b96///1v3r///W/ev//9b96/R/xv3rD3+3/OsPf7f96w9/t/3jDxEwDe8P37P97w/f8/3v/9///e3/3//97//f8/3v/1/z8MAzAAAG37t///","grass":"AAAAAAAAAADAP5gBAOAD/AMA8AH8AwDwAPgBAPAA+AEA8AH8AwDgA/wAAMAHmAAAgA8AcAAADwDwAAAOAHAAAAAA8AAAAAD8AAAAAHwAAAAAPwAAAAAmAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAHgAAAMA/AAAAwDDwAQDAMPADAMAw8AMAwBDwAwDAAPwDAIAA+AMAAADwBwAAAPAPAAAAwA8AAABABgAAAAAAAAAAAAAA"},"219":{"name":"SAFARI_ZONE_WEST","w":30,"h":26,"walk":"PP8zDA8ADBP4/+8l/vd7vf//Wu//v9e/3+/17/d7/fv9Xv9gvxcA2O8FIPZ7Aaz9XgBvv8f/+/fx//597v9/n/t/yOf+3/85AfB//v/7n////uf/v+/7/+//APw8AP/A8A8=","grass":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIAAAAAwAAAA/P8DAP//AAD/DwCAnwEAAAAAAAAAAAA="},"220":{"name":"SAFARI_ZONE_CENTER","w":30,"h":26,"walk":"AcAAYP/8/+t////53/9//vf/n//9/+d////53/9//gDAjz8AAPAPP/z/ww///gDAnz8A8Oe/bf/5AMB/wP//H////+f/D//5/8t//v/7n////+f/+//5//9/ed++ZwAwAAg=","grass":"AAAAAAAAAAAGYAbAA/wD+IH/Af/w/8AP/D/gAZ4HsAAAADQAAAAMAAAAAwAAwADAASAA8AAAAHwAAAA+AADABwAA8AN+APjAPwAf8A+AA/gBcAD8Aw4AfsABAAAAAAAAAAA="},"221":{"name":"SAFARI_ZONE_CENTER_REST_HOUSE","w":8,"h":8,"walk":"AAf//x/fX18=","grass":null},"222":{"name":"SAFARI_ZONE_SECRET_HOUSE","w":8,"h":8,"walk":"AAA8PP////8=","grass":null},"223":{"name":"SAFARI_ZONE_WEST_REST_HOUSE","w":8,"h":8,"walk":"AAf//x/fX18=","grass":null},"224":{"name":"SAFARI_ZONE_EAST_REST_HOUSE","w":8,"h":8,"walk":"AAf//x/fX18=","grass":null},"225":{"name":"SAFARI_ZONE_NORTH_REST_HOUSE","w":8,"h":8,"walk":"AAf//x/fX18=","grass":null},"226":{"name":"CERULEAN_CAVE_2F","w":30,"h":18,"walk":"gAPgMf7+Tb6ASp/tr3bFASJh779/TggE0oX7PzQ7AuCAwv7vr90CAUi1X/9XA1QCtXm0X0lyCdTb0L5Fwi8gmB/++wM=","grass":null},"227":{"name":"CERULEAN_CAVE_B1F","w":30,"h":18,"walk":"/n+en/+f5+f/5zl5gCBOHjyPmef/YObpn5MB++ckeL75oYdoBrArmgEEiiQAp+IhnoEIiOc8AOK5AwAw/joAAB4AAAA=","grass":null},"228":{"name":"CERULEAN_CAVE_1F","w":30,"h":18,"walk":"7v+pH/h/4Af+H/gZACICvgIAACgAANALAD4cAIAPfvjngx/+meCHcwZ44JwAHvhkmCAiOXYOer89AMhvfoDjG/9/wAA=","grass":null},"229":{"name":"NAME_RATERS_HOUSE","w":8,"h":8,"walk":"AHz/5+f/fn4=","grass":null},"230":{"name":"CERULEAN_BADGE_HOUSE","w":8,"h":8,"walk":"BP//Pz///38=","grass":null},"232":{"name":"ROCK_TUNNEL_B1F","w":40,"h":36,"walk":"6u7u7u4CAAAAAL7v//6/vO///j++7//+vz7P//y/vu/7vr687/u+Pr7vq76+Ps8DPLz+7//+v/zv//4//u///r/+z//8v77/6+6/vP8LAD++//v/vz7/8/+/vu/7/7+8z/v/P77v+7u7Ps/zA4Cq7/77vwAP8Ps//u//+7/+7//zv/7v//u//M//+z+6+7v7vwLAA/C//v///7/8////P/7///+//P///7/u7u7urgAAAAAA","grass":null},"233":{"name":"SILPH_CO_9F","w":26,"h":18,"walk":"AEAF+N//53//n//9fwYwjNnf/mZD+5MN7Uw+oDP5m/5kb8KQvelfpr9wgf7CpWo7n6rtfP62/wEAAAA=","grass":null},"234":{"name":"SILPH_CO_10F","w":16,"h":18,"walk":"ABX+f/5//n9+DH5/fn5+fhgMfn9CT2JPRkNCc1pzTn9+fwAA","grass":null},"235":{"name":"SILPH_CO_11F","w":18,"h":18,"walk":"ACK4/+P+jwMwDsC4f+PCjQs3Lty4f+P+jfs37tM4e+Pvjb83/t4AAAA=","grass":null},"236":{"name":"SILPH_CO_ELEVATOR","w":4,"h":4,"walk":"8P8=","grass":null},"239":{"name":"TRADE_CENTER","w":10,"h":8,"walk":"APz////P/////w==","grass":null},"240":{"name":"COLOSSEUM","w":10,"h":8,"walk":"APz////P/////w==","grass":null},"245":{"name":"LORELEIS_ROOM","w":10,"h":12,"walk":"AMDADz/88AMDDDDAAAMM","grass":null},"246":{"name":"BRUNOS_ROOM","w":10,"h":12,"walk":"MPzPj//+4SEvD7zIWBM/","grass":null},"247":{"name":"AGATHAS_ROOM","w":10,"h":12,"walk":"MPzvF7908JKXrHTQIhcM","grass":null}},"warps":{"0":[[5,5,37,2,7],[13,5,39,2,7],[12,11,40,5,11]],"1":[[23,25,41,3,7],[29,19,42,3,7],[21,15,43,2,7],[21,9,44,2,7],[32,7,45,16,17]],"2":[[14,7,52,10,7],[19,5,52,16,7],[16,17,54,4,13],[29,13,55,2,7],[23,17,56,3,7],[7,29,57,2,7],[13,25,58,3,7]],"3":[[27,11,62,2,7],[13,15,63,2,7],[19,17,64,3,7],[30,19,65,4,13],[13,25,66,2,7],[25,25,67,3,7],[4,11,228,24,17],[27,9,62,3,0],[9,11,230,2,7],[9,9,230,2,0]],"4":[[3,5,141,3,7],[14,5,142,10,17],[7,9,149,2,7],[15,13,150,3,7],[3,13,151,2,7],[7,13,229,2,7]],"5":[[11,3,89,3,7],[9,13,90,2,7],[23,13,91,3,7],[12,19,92,4,17],[23,19,93,2,7],[18,31,94,14,0],[19,31,94,14,0],[15,13,196,2,7],[7,3,163,2,7]],"6":[[8,13,122,2,7],[10,13,122,16,7],[24,9,128,4,11],[24,3,128,4,0],[25,3,128,4,0],[41,9,133,3,7],[12,27,134,4,17],[28,19,135,15,17],[39,19,136,12,1],[33,19,137,4,7],[31,27,138,3,7],[35,27,139,2,7],[43,27,140,3,7]],"7":[[5,13,152,3,7],[11,27,153,2,7],[19,27,154,3,7],[27,27,155,4,7],[18,3,156,3,5],[5,27,157,4,17],[22,13,158,4,7],[31,27,164,2,7],[31,24,164,2,0]],"8":[[6,3,165,5,27],[18,3,166,16,17],[6,9,167,2,7],[11,11,171,3,7],[15,11,172,3,7]],"9":[[9,5,174,7,11],[10,5,174,7,11]],"10":[[7,5,175,2,7],[26,3,177,4,11],[34,3,178,8,17],[13,11,179,2,7],[25,11,180,3,7],[18,21,181,10,17],[9,29,182,3,7],[29,29,183,2,7]],"13":[[12,9,46,2,7],[3,11,47,5,0],[15,19,48,2,7],[16,35,49,5,0],[15,39,49,4,7],[3,43,50,4,7]],"15":[[11,5,68,3,7],[18,5,59,14,35],[24,5,60,27,3]],"16":[[10,29,70,4,0],[9,29,70,3,0],[10,33,70,3,5],[17,27,71,3,7],[10,21,72,2,7]],"17":[[9,1,73,3,0],[10,1,73,3,0],[10,7,73,3,5],[17,13,74,3,7]],"18":[[18,9,76,5,3],[18,10,76,5,4],[11,9,76,0,3],[11,10,76,0,4],[5,13,77,3,7]],"19":[[1,9,79,0,3],[1,10,79,0,4],[8,9,79,5,3],[8,10,79,5,4],[13,3,80,3,7]],"21":[[11,19,81,3,7],[8,17,82,15,3],[8,53,82,15,33],[6,39,83,4,35]],"22":[[49,8,84,0,4],[49,9,84,0,5],[58,8,84,7,4],[58,9,84,7,5],[4,5,85,2,7]],"23":[[10,15,87,4,0],[11,15,87,5,0],[10,21,87,4,7],[11,77,189,2,7]],"26":[[7,8,184,0,4],[7,9,184,0,5],[14,8,184,7,4],[14,9,184,7,5]],"27":[[17,10,186,0,8],[17,11,186,0,9],[24,10,186,7,8],[24,11,186,7,9],[17,4,186,0,2],[17,5,186,0,3],[24,4,186,7,2],[24,5,186,7,3],[7,5,188,2,7]],"29":[[33,8,190,0,4],[33,9,190,0,5],[40,8,190,7,4],[40,9,190,7,5]],"31":[[48,5,192,4,17],[58,9,192,26,17]],"33":[[8,5,193,4,7]],"34":[[7,139,193,4,0],[8,139,193,5,0],[4,31,108,8,17],[14,31,194,29,7]],"36":[[45,3,88,2,7]],"37":[[2,7,0,5,5],[3,7,0,5,5],[7,1,38,7,1]],"38":[[7,1,37,7,1]],"39":[[2,7,0,13,5],[3,7,0,13,5]],"40":[[4,11,0,12,11],[5,11,0,12,11]],"41":[[3,7,1,23,25],[4,7,1,23,25]],"42":[[3,7,1,29,19],[4,7,1,29,19]],"43":[[2,7,1,21,15],[3,7,1,21,15]],"44":[[2,7,1,21,9],[3,7,1,21,9]],"45":[[16,17,1,32,7],[17,17,1,32,7]],"46":[[2,7,13,12,9],[3,7,13,12,9],[4,4,197,5,5]],"47":[[4,0,13,3,11],[5,0,13,3,11],[4,7,51,1,0],[5,7,51,1,0]],"48":[[2,7,13,15,19],[3,7,13,15,19]],"49":[[4,0,13,16,35],[5,0,13,16,35],[4,7,13,15,39],[5,7,13,15,39]],"50":[[4,0,51,16,47],[5,0,51,17,47],[4,7,13,3,43],[5,7,13,3,43]],"51":[[1,0,47,4,7],[2,0,47,5,7],[15,47,50,5,0],[16,47,50,5,0],[17,47,50,5,0],[18,47,50,5,0]],"52":[[10,7,2,14,7],[11,7,2,14,7],[16,7,2,19,5],[17,7,2,19,5],[7,7,53,7,7]],"53":[[7,7,52,7,7]],"54":[[4,13,2,16,17],[5,13,2,16,17]],"55":[[2,7,2,29,13],[3,7,2,29,13]],"56":[[3,7,2,23,17],[4,7,2,23,17]],"57":[[2,7,2,7,29],[3,7,2,7,29]],"58":[[3,7,2,13,25],[4,7,2,13,25]],"59":[[14,35,15,18,5],[15,35,15,18,5],[5,5,60,5,5],[17,11,60,25,9],[25,15,60,25,15]],"60":[[5,5,59,5,5],[17,11,61,25,9],[25,9,59,17,11],[25,15,59,25,15],[21,17,61,21,17],[13,27,61,15,27],[23,3,61,5,7],[27,3,15,24,5]],"61":[[25,9,60,17,11],[21,17,60,21,17],[15,27,60,13,27],[5,7,60,23,3]],"62":[[2,7,3,27,11],[3,7,3,27,11],[3,0,3,27,9]],"63":[[2,7,3,13,15],[3,7,3,13,15]],"64":[[3,7,3,19,17],[4,7,3,19,17]],"65":[[4,13,3,30,19],[5,13,3,30,19]],"66":[[2,7,3,13,25],[3,7,3,13,25]],"67":[[3,7,3,25,25],[4,7,3,25,25]],"68":[[3,7,15,11,5],[4,7,15,11,5]],"70":[[3,5,16,10,33],[4,5,16,10,33],[3,0,16,9,29],[4,0,16,10,29]],"71":[[3,7,16,17,27],[4,7,16,17,27],[4,4,119,5,4]],"72":[[2,7,16,10,21],[3,7,16,10,21]],"73":[[3,5,17,10,7],[4,5,17,10,7],[3,0,17,10,1],[4,0,17,10,1]],"74":[[3,7,17,17,13],[4,7,17,17,13],[4,4,119,2,41]],"76":[[0,3,18,11,10],[0,4,18,11,10],[5,3,18,18,9],[5,4,18,18,10]],"77":[[4,4,121,2,5]],"79":[[0,3,19,1,9],[0,4,19,1,10],[5,3,19,8,9],[5,4,19,8,10]],"80":[[3,7,19,13,3],[4,7,19,13,3],[4,4,121,47,2]],"81":[[3,7,21,11,19],[4,7,21,11,19]],"82":[[15,3,21,8,17],[15,0,21,8,17],[15,33,21,8,53],[15,35,21,8,53],[37,3,232,33,25],[5,3,232,27,3],[17,11,232,23,11],[37,17,232,3,3]],"83":[[4,35,21,6,39],[5,35,21,6,39],[0,11,21,6,39]],"84":[[0,4,22,49,8],[0,5,22,49,9],[7,4,22,58,8],[7,5,22,58,9],[6,8,86,7,7]],"85":[[2,7,22,4,5],[3,7,22,4,5],[4,4,197,37,31]],"86":[[7,7,84,6,8]],"87":[[4,0,23,10,15],[5,0,23,11,15],[4,7,23,10,21],[5,7,23,10,21],[8,6,195,7,7]],"88":[[2,7,36,45,3],[3,7,36,45,3]],"89":[[3,7,5,11,3],[4,7,5,11,3]],"90":[[2,7,5,9,13],[3,7,5,9,13]],"91":[[3,7,5,23,13],[4,7,5,23,13]],"92":[[4,17,5,12,19],[5,17,5,12,19]],"93":[[2,7,5,23,19],[3,7,5,23,19]],"94":[[14,0,5,18,31],[14,2,95,27,0]],"95":[[26,0,94,14,2],[27,0,94,14,2],[31,8,102,0,0],[23,8,102,10,0],[19,8,102,20,0],[15,8,102,0,10],[11,8,102,10,10],[7,8,102,20,10],[2,6,96,2,4],[37,15,98,27,5],[3,16,100,6,0]],"96":[[9,11,103,2,5],[13,11,103,12,5],[17,11,103,22,5],[21,11,103,2,15],[25,11,103,12,15],[29,11,103,22,15],[2,4,95,2,6],[2,12,97,19,3],[36,4,101,0,7]],"97":[[0,3,99,13,6],[19,3,96,2,12]],"98":[[23,3,104,12,15],[19,3,104,2,15],[15,3,104,22,5],[11,3,104,12,5],[7,3,104,2,5],[27,5,95,37,15]],"99":[[13,6,97,0,3],[13,7,97,0,3]],"100":[[6,0,95,3,16]],"101":[[0,7,96,36,4]],"102":[[0,0,95,31,8],[10,0,95,23,8],[20,0,95,19,8],[0,10,95,15,8],[10,10,95,11,8],[20,10,95,7,8]],"103":[[2,5,96,9,11],[3,5,96,9,11],[12,5,96,13,11],[13,5,96,13,11],[22,5,96,17,11],[23,5,96,17,11],[2,15,96,21,11],[3,15,96,21,11],[12,15,96,25,11],[13,15,96,25,11],[22,15,96,29,11],[23,15,96,29,11]],"104":[[2,5,98,7,3],[3,5,98,7,3],[12,5,98,11,3],[13,5,98,11,3],[22,5,98,15,3],[23,5,98,15,3],[2,15,98,19,3],[3,15,98,19,3],[12,15,98,23,3],[13,15,98,23,3]],"108":[[8,17,34,4,31],[9,17,34,4,31],[1,1,194,0,8]],"113":[[24,16,247,4,0],[5,0,120,3,7],[6,0,120,3,7]],"118":[[4,7,120,3,0],[5,7,120,4,0]],"119":[[5,4,71,4,4],[2,41,74,4,4]],"120":[[3,7,113,5,0],[4,7,113,6,0],[3,0,118,4,7],[4,0,118,4,7]],"121":[[2,5,77,4,4],[47,2,80,4,4]],"122":[[2,7,6,8,13],[3,7,6,8,13],[16,7,6,10,13],[17,7,6,10,13],[12,1,123,12,1],[1,1,127,1,3]],"123":[[12,1,122,12,1],[16,1,124,16,1],[1,1,127,1,3]],"124":[[12,1,125,12,1],[16,1,123,16,1],[1,1,127,1,3]],"125":[[12,1,124,12,1],[16,1,136,16,1],[1,1,127,1,3]],"126":[[15,2,136,12,1]],"127":[[1,3,122,1,1],[2,3,122,1,1]],"128":[[4,11,6,24,9],[5,11,6,24,9],[4,0,6,25,3],[7,1,129,7,1],[2,1,129,2,1]],"129":[[6,1,130,6,1],[7,1,128,7,1],[2,1,128,2,1],[4,1,130,4,1]],"130":[[6,1,129,6,1],[7,1,131,6,1],[2,1,131,2,1],[4,1,129,4,1]],"131":[[6,1,130,7,1],[2,1,130,2,1],[2,7,132,2,7]],"132":[[2,7,131,2,7],[3,7,131,2,7]],"133":[[3,7,6,41,9],[4,7,6,41,9]],"134":[[4,17,6,12,27],[5,17,6,12,27]],"135":[[15,17,6,28,19],[16,17,6,28,19],[17,4,199,21,2]],"136":[[12,1,126,15,2],[16,1,125,16,1],[1,1,127,1,3]],"137":[[4,7,6,33,19],[5,7,6,33,19]],"138":[[3,7,6,31,27],[4,7,6,31,27]],"139":[[2,7,6,35,27],[3,7,6,35,27]],"140":[[3,7,6,43,27],[4,7,6,43,27]],"141":[[3,7,4,3,5],[4,7,4,3,5]],"142":[[10,17,4,14,5],[11,17,4,14,5],[18,9,143,18,9]],"143":[[3,9,144,3,9],[18,9,142,18,9]],"144":[[3,9,143,3,9],[18,9,145,18,9]],"145":[[3,9,146,3,9],[18,9,144,18,9]],"146":[[3,9,145,3,9],[18,9,147,18,9]],"147":[[18,9,146,18,9],[9,16,148,9,16]],"148":[[9,16,147,9,16]],"149":[[2,7,4,7,9],[3,7,4,7,9]],"150":[[3,7,4,15,13],[4,7,4,15,13]],"151":[[2,7,4,3,13],[3,7,4,3,13]],"152":[[3,7,7,5,13],[4,7,7,5,13]],"153":[[2,7,7,11,27],[3,7,7,11,27]],"154":[[3,7,7,19,27],[4,7,7,19,27]],"155":[[4,7,7,27,27],[5,7,7,27,27]],"156":[[3,5,7,18,3],[4,5,7,18,3],[3,0,220,14,25],[4,0,220,15,25]],"157":[[4,17,7,5,27],[5,17,7,5,27]],"158":[[4,7,7,22,13],[5,7,7,22,13]],"159":[[4,2,160,5,3],[7,5,192,7,5],[13,7,160,13,7],[19,15,160,19,15],[23,15,192,23,15],[25,11,160,25,11],[25,3,192,25,3]],"160":[[5,3,159,4,2],[5,13,161,5,12],[13,7,159,13,7],[19,15,159,19,15],[25,3,161,25,3],[25,11,159,25,11],[25,14,161,25,14]],"161":[[5,12,160,5,13],[8,6,162,11,7],[25,4,162,25,4],[25,3,160,25,3],[25,14,160,25,14],[20,17,162,20,17],[21,17,162,21,17]],"162":[[20,17,161,20,17],[21,17,161,21,17],[11,7,161,8,6],[25,4,161,25,4]],"163":[[2,7,5,7,3],[3,7,5,7,3]],"164":[[2,0,7,31,24],[2,7,7,31,27],[3,7,7,31,27]],"165":[[4,27,8,6,3],[5,27,8,6,3],[6,27,8,6,3],[7,27,8,6,3],[5,10,214,5,10],[21,23,216,23,22],[26,27,8,6,3],[27,27,8,6,3]],"166":[[16,17,8,18,3],[17,17,8,18,3]],"167":[[2,7,8,6,9],[3,7,8,6,9],[8,4,168,2,7],[12,4,169,2,7],[16,4,170,2,7]],"168":[[2,7,167,8,4],[3,7,167,8,4]],"169":[[2,7,167,12,4],[3,7,167,12,4]],"170":[[2,7,167,16,4],[3,7,167,16,4]],"171":[[3,7,8,11,11],[4,7,8,11,11]],"172":[[3,7,8,15,11],[4,7,8,15,11]],"174":[[7,11,9,9,5],[8,0,245,4,11]],"175":[[2,7,10,7,5],[3,7,10,7,5],[7,1,176,7,1]],"176":[[7,1,175,7,1]],"177":[[4,11,10,26,3],[5,11,10,26,3]],"178":[[8,17,10,34,3],[9,17,10,34,3],[1,3,178,15,5],[5,3,178,11,3],[1,5,178,11,11],[5,5,178,1,11],[1,9,178,19,11],[5,9,178,9,5],[1,11,178,5,5],[5,11,178,5,17],[1,15,178,19,5],[5,15,178,15,17],[1,17,178,11,5],[5,17,178,5,11],[9,3,178,15,11],[11,3,178,5,3],[9,5,178,5,9],[11,5,178,1,17],[11,11,178,1,5],[11,15,178,19,17],[15,3,178,15,9],[19,3,178,15,15],[15,5,178,1,3],[19,5,178,1,15],[15,9,178,15,3],[19,9,178,19,15],[15,11,178,9,3],[19,11,178,1,9],[15,15,178,19,3],[19,15,178,19,9],[15,17,178,5,15],[19,17,178,11,15]],"179":[[2,7,10,13,11],[3,7,10,13,11]],"180":[[3,7,10,25,11],[4,7,10,25,11]],"181":[[10,17,10,18,21],[11,17,10,18,21],[26,0,207,24,0],[20,0,236,1,3],[16,10,208,27,3]],"182":[[3,7,10,9,29],[4,7,10,9,29]],"183":[[2,7,10,29,29],[3,7,10,29,29]],"184":[[0,4,26,7,8],[0,5,26,7,9],[7,4,26,14,8],[7,5,26,14,9],[6,8,185,7,7]],"185":[[7,7,184,6,8]],"186":[[0,8,27,17,10],[0,9,27,17,11],[7,8,27,24,10],[7,9,27,24,10],[0,2,27,17,4],[0,3,27,17,5],[7,2,27,24,4],[7,3,27,24,5],[6,12,187,7,7]],"187":[[7,7,186,6,12]],"188":[[2,7,27,7,5],[3,7,27,7,5]],"189":[[2,7,23,11,77],[3,7,23,11,77]],"190":[[0,4,29,33,8],[0,5,29,33,9],[7,4,29,40,8],[7,5,29,40,9],[6,8,191,7,7]],"191":[[7,7,190,6,8]],"192":[[4,17,31,48,5],[5,17,31,48,5],[26,17,31,58,9],[27,17,31,58,9],[7,5,159,7,5],[25,3,159,25,3],[23,15,159,23,15]],"193":[[4,7,33,8,5],[4,0,34,7,139],[5,0,34,8,139]],"194":[[0,8,108,1,1],[29,7,34,14,31],[29,8,34,14,31],[23,7,198,23,7],[25,14,198,27,15],[27,7,198,26,8],[1,1,198,2,0]],"195":[[7,7,87,8,6]],"196":[[2,7,5,15,13],[3,7,5,15,13]],"197":[[5,5,46,4,4],[37,31,85,4,4]],"198":[[23,7,194,23,7],[26,8,194,27,7],[27,15,194,25,14],[2,0,194,1,1]],"199":[[23,2,200,27,8],[21,2,135,17,4],[24,19,203,2,1],[21,24,200,21,22],[25,19,203,3,1]],"200":[[27,8,199,23,2],[21,8,201,25,6],[24,19,203,2,1],[21,22,199,21,24],[25,19,203,3,1]],"201":[[25,6,200,21,8],[19,18,202,19,10]],"202":[[19,10,201,19,18],[24,15,203,2,1],[25,15,203,3,1]],"203":[[2,1,199,24,19],[3,1,199,25,19]],"207":[[24,0,181,26,0],[26,0,208,26,0],[20,0,236,1,3],[3,3,208,27,3],[13,3,213,3,15],[27,15,213,11,5],[9,15,211,23,3]],"208":[[26,0,207,26,0],[24,0,209,24,0],[20,0,236,1,3],[23,11,208,27,15],[3,3,210,11,5],[3,15,210,3,15],[27,3,207,3,3],[3,11,233,9,3],[11,11,212,5,3],[27,15,208,23,11]],"209":[[24,0,208,24,0],[26,0,210,26,0],[20,0,236,1,3],[11,7,234,9,11],[17,3,211,3,3],[3,15,234,13,15],[17,11,234,13,7]],"210":[[24,0,211,14,0],[26,0,209,26,0],[20,0,236,1,3],[27,3,212,21,15],[9,15,233,17,15],[11,5,208,3,3],[3,15,208,3,15]],"211":[[16,0,212,22,0],[14,0,210,24,0],[18,0,236,1,3],[3,3,209,17,3],[23,3,207,9,15]],"212":[[16,0,213,14,0],[22,0,211,16,0],[18,0,236,1,3],[5,7,235,3,2],[5,3,208,11,11],[21,15,210,27,3]],"213":[[16,0,233,16,0],[14,0,212,16,0],[18,0,236,1,3],[3,11,213,11,9],[3,15,207,13,3],[11,5,207,27,15],[11,9,213,3,11]],"214":[[5,10,165,5,10],[7,10,215,7,10],[25,14,215,25,14],[6,1,215,6,1]],"215":[[7,10,214,7,10],[6,1,214,6,1],[25,14,214,25,14]],"216":[[23,22,165,21,23]],"217":[[0,4,218,39,30],[0,5,218,39,31],[0,22,220,29,10],[0,23,220,29,10],[25,9,224,2,7]],"218":[[2,35,219,20,0],[3,35,219,21,0],[8,35,219,26,0],[9,35,219,27,0],[20,35,220,14,0],[21,35,220,15,0],[39,30,217,0,4],[39,31,217,0,5],[35,3,225,2,7]],"219":[[20,0,218,2,35],[21,0,218,3,35],[26,0,218,8,35],[27,0,218,9,35],[29,22,220,0,10],[29,23,220,0,11],[3,3,222,2,7],[11,11,223,2,7]],"220":[[14,25,156,3,0],[15,25,156,4,0],[0,10,219,29,22],[0,11,219,29,23],[14,0,218,20,35],[15,0,218,21,35],[29,10,217,0,22],[29,11,217,0,23],[17,19,221,2,7]],"221":[[2,7,220,17,19],[3,7,220,17,19]],"222":[[2,7,219,3,3],[3,7,219,3,3]],"223":[[2,7,219,11,11],[3,7,219,11,11]],"224":[[2,7,217,25,9],[3,7,217,25,9]],"225":[[2,7,218,35,3],[3,7,218,35,3]],"226":[[29,1,228,27,1],[22,6,228,23,7],[19,7,228,18,9],[9,1,228,7,1],[1,3,228,1,3],[3,11,228,3,11]],"227":[[3,6,228,0,6]],"228":[[24,17,3,4,11],[25,17,3,4,11],[27,1,226,29,1],[23,7,226,22,6],[18,9,226,19,7],[7,1,226,9,1],[1,3,226,1,3],[3,11,226,3,11],[0,6,227,3,6]],"229":[[2,7,4,7,13],[3,7,4,7,13]],"230":[[2,0,3,9,9],[2,7,3,9,11],[3,7,3,9,11]],"232":[[33,25,82,37,3],[27,3,82,5,3],[23,11,82,17,11],[3,3,82,37,17]],"233":[[14,0,234,8,0],[16,0,213,16,0],[18,0,236,1,3],[9,3,208,3,11],[17,15,210,9,15]],"234":[[8,0,233,14,0],[10,0,235,9,0],[12,0,236,1,3],[9,11,209,11,7],[13,15,209,3,15],[13,7,209,17,11]],"235":[[9,0,234,10,0],[13,0,236,1,3],[3,2,212,5,7]],"245":[[4,11,174,8,0],[5,11,174,8,0],[4,0,246,4,11],[5,0,246,5,11]],"246":[[4,11,245,4,0],[5,11,245,5,0],[4,0,247,4,11],[5,0,247,5,11]],"247":[[4,11,246,4,0],[5,11,246,5,0],[4,0,113,24,16],[5,0,113,24,16]]},"goals":[{"id":"EVENT_ENTERED_BLUES_HOUSE","desc":"Entered Blues House","order":0,"tile":[2,7,39]},{"id":"EVENT_FOLLOWED_OAK_INTO_LAB_2","desc":"Followed Oak Into Lab 2","order":1,"tile":[5,11,40]},{"id":"EVENT_OAK_ASKED_TO_CHOOSE_MON","desc":"Oak Asked To Choose Mon","order":2,"tile":[5,11,40]},{"id":"EVENT_GOT_STARTER","desc":"Got Starter","order":3,"tile":[5,11,40]},{"id":"EVENT_BATTLED_RIVAL_IN_OAKS_LAB","desc":"Battled Rival In Oaks Lab","order":4,"tile":[5,11,40]},{"id":"EVENT_GOT_POKEDEX","desc":"Got Pokedex","order":5,"tile":[5,11,40]},{"id":"EVENT_GOT_TOWN_MAP","desc":"Got Town Map","order":6,"tile":[2,7,39]},{"id":"EVENT_DAISY_WALKING","desc":"Daisy Walking","order":7,"tile":[5,5,0]},{"id":"EVENT_PALLET_AFTER_GETTING_POKEBALLS_2","desc":"Pallet After Getting Pokeballs 2","order":8,"tile":[5,5,0]},{"id":"EVENT_VIRIDIAN_GYM_OPEN","desc":"Viridian Gym Open","order":9,"tile":[23,25,1]},{"id":"EVENT_GOT_TM42","desc":"Got Tm42","order":10,"tile":[23,25,1]},{"id":"EVENT_OAK_GOT_PARCEL","desc":"Oak Got Parcel","order":11,"tile":[5,11,40]},{"id":"EVENT_GOT_OAKS_PARCEL","desc":"Got Oaks Parcel","order":12,"tile":[3,7,42]},{"id":"EVENT_GOT_TM27","desc":"Got Tm27","order":13,"tile":[16,17,45]},{"id":"EVENT_BEAT_VIRIDIAN_GYM_GIOVANNI","desc":"Beat Viridian Gym Giovanni","order":14,"tile":[16,17,45]},{"id":"badge8","desc":"Earn badge #8","order":15,"tile":[16,17,45]},{"id":"EVENT_BEAT_VIRIDIAN_GYM_TRAINER_0","desc":"Beat Viridian Gym Trainer 0","order":16,"tile":[16,17,45]},{"id":"EVENT_BEAT_VIRIDIAN_GYM_TRAINER_1","desc":"Beat Viridian Gym Trainer 1","order":17,"tile":[16,17,45]},{"id":"EVENT_BEAT_VIRIDIAN_GYM_TRAINER_2","desc":"Beat Viridian Gym Trainer 2","order":18,"tile":[16,17,45]},{"id":"EVENT_BEAT_VIRIDIAN_GYM_TRAINER_3","desc":"Beat Viridian Gym Trainer 3","order":19,"tile":[16,17,45]},{"id":"EVENT_BEAT_VIRIDIAN_GYM_TRAINER_4","desc":"Beat Viridian Gym Trainer 4","order":20,"tile":[16,17,45]},{"id":"EVENT_BEAT_VIRIDIAN_GYM_TRAINER_5","desc":"Beat Viridian Gym Trainer 5","order":21,"tile":[16,17,45]},{"id":"EVENT_BEAT_VIRIDIAN_GYM_TRAINER_6","desc":"Beat Viridian Gym Trainer 6","order":22,"tile":[16,17,45]},{"id":"EVENT_BEAT_VIRIDIAN_GYM_TRAINER_7","desc":"Beat Viridian Gym Trainer 7","order":23,"tile":[16,17,45]},{"id":"EVENT_GOT_OLD_AMBER","desc":"Got Old Amber","order":24,"tile":[10,7,52]},{"id":"EVENT_BEAT_PEWTER_GYM_TRAINER_0","desc":"Beat Pewter Gym Trainer 0","order":25,"tile":[4,13,54]},{"id":"EVENT_GOT_TM34","desc":"Got Tm34","order":26,"tile":[4,13,54]},{"id":"EVENT_BEAT_BROCK","desc":"Beat Brock","order":27,"tile":[4,13,54]},{"id":"badge1","desc":"Earn badge #1","order":28,"tile":[4,13,54]},{"id":"EVENT_BEAT_CERULEAN_RIVAL","desc":"Beat Cerulean Rival","order":29,"tile":[27,11,3]},{"id":"EVENT_BEAT_CERULEAN_ROCKET_THIEF","desc":"Beat Cerulean Rocket Thief","order":30,"tile":[27,11,3]},{"id":"EVENT_BEAT_CERULEAN_GYM_TRAINER_0","desc":"Beat Cerulean Gym Trainer 0","order":31,"tile":[4,13,65]},{"id":"EVENT_BEAT_CERULEAN_GYM_TRAINER_1","desc":"Beat Cerulean Gym Trainer 1","order":32,"tile":[4,13,65]},{"id":"EVENT_GOT_TM11","desc":"Got Tm11","order":33,"tile":[4,13,65]},{"id":"EVENT_BEAT_MISTY","desc":"Beat Misty","order":34,"tile":[4,13,65]},{"id":"badge2","desc":"Earn badge #2","order":35,"tile":[4,13,65]},{"id":"EVENT_GOT_BICYCLE","desc":"Got Bicycle","order":36,"tile":[2,7,66]},{"id":"EVENT_BEAT_POKEMON_TOWER_RIVAL","desc":"Beat Pokemon Tower Rival","order":37,"tile":[18,9,143]},{"id":"EVENT_BEAT_POKEMONTOWER_3_TRAINER_0","desc":"Beat Pokemontower 3 Trainer 0","order":38,"tile":[3,9,144]},{"id":"EVENT_BEAT_POKEMONTOWER_3_TRAINER_1","desc":"Beat Pokemontower 3 Trainer 1","order":39,"tile":[3,9,144]},{"id":"EVENT_BEAT_POKEMONTOWER_3_TRAINER_2","desc":"Beat Pokemontower 3 Trainer 2","order":40,"tile":[3,9,144]},{"id":"EVENT_BEAT_POKEMONTOWER_4_TRAINER_0","desc":"Beat Pokemontower 4 Trainer 0","order":41,"tile":[18,9,145]},{"id":"EVENT_BEAT_POKEMONTOWER_4_TRAINER_1","desc":"Beat Pokemontower 4 Trainer 1","order":42,"tile":[18,9,145]},{"id":"EVENT_BEAT_POKEMONTOWER_4_TRAINER_2","desc":"Beat Pokemontower 4 Trainer 2","order":43,"tile":[18,9,145]},{"id":"EVENT_BEAT_POKEMONTOWER_5_TRAINER_0","desc":"Beat Pokemontower 5 Trainer 0","order":44,"tile":[3,9,146]},{"id":"EVENT_BEAT_POKEMONTOWER_5_TRAINER_1","desc":"Beat Pokemontower 5 Trainer 1","order":45,"tile":[3,9,146]},{"id":"EVENT_BEAT_POKEMONTOWER_5_TRAINER_2","desc":"Beat Pokemontower 5 Trainer 2","order":46,"tile":[3,9,146]},{"id":"EVENT_BEAT_POKEMONTOWER_5_TRAINER_3","desc":"Beat Pokemontower 5 Trainer 3","order":47,"tile":[3,9,146]},{"id":"EVENT_BEAT_POKEMONTOWER_6_TRAINER_0","desc":"Beat Pokemontower 6 Trainer 0","order":48,"tile":[18,9,147]},{"id":"EVENT_BEAT_POKEMONTOWER_6_TRAINER_1","desc":"Beat Pokemontower 6 Trainer 1","order":49,"tile":[18,9,147]},{"id":"EVENT_BEAT_POKEMONTOWER_6_TRAINER_2","desc":"Beat Pokemontower 6 Trainer 2","order":50,"tile":[18,9,147]},{"id":"EVENT_BEAT_GHOST_MAROWAK","desc":"Beat Ghost Marowak","order":51,"tile":[18,9,147]},{"id":"EVENT_BEAT_POKEMONTOWER_7_TRAINER_0","desc":"Beat Pokemontower 7 Trainer 0","order":52,"tile":[9,16,148]},{"id":"EVENT_BEAT_POKEMONTOWER_7_TRAINER_1","desc":"Beat Pokemontower 7 Trainer 1","order":53,"tile":[9,16,148]},{"id":"EVENT_BEAT_POKEMONTOWER_7_TRAINER_2","desc":"Beat Pokemontower 7 Trainer 2","order":54,"tile":[9,16,148]},{"id":"EVENT_RESCUED_MR_FUJI_2","desc":"Rescued Mr Fuji 2","order":55,"tile":[9,16,148]},{"id":"EVENT_BEAT_VERMILION_GYM_TRAINER_0","desc":"Beat Vermilion Gym Trainer 0","order":56,"tile":[4,17,92]},{"id":"EVENT_BEAT_VERMILION_GYM_TRAINER_1","desc":"Beat Vermilion Gym Trainer 1","order":57,"tile":[4,17,92]},{"id":"EVENT_BEAT_VERMILION_GYM_TRAINER_2","desc":"Beat Vermilion Gym Trainer 2","order":58,"tile":[4,17,92]},{"id":"EVENT_GOT_TM24","desc":"Got Tm24","order":59,"tile":[4,17,92]},{"id":"EVENT_BEAT_LT_SURGE","desc":"Beat Lt Surge","order":60,"tile":[4,17,92]},{"id":"badge3","desc":"Earn badge #3","order":61,"tile":[4,17,92]},{"id":"EVENT_GOT_TM41","desc":"Got Tm41","order":62,"tile":[8,13,6]},{"id":"EVENT_GOT_TM49","desc":"Got Tm49","order":63,"tile":[15,2,126]},{"id":"EVENT_GOT_TM48","desc":"Got Tm48","order":64,"tile":[15,2,126]},{"id":"EVENT_GOT_TM13","desc":"Got Tm13","order":65,"tile":[15,2,126]},{"id":"EVENT_GOT_TM18","desc":"Got Tm18","order":66,"tile":[16,1,124]},{"id":"EVENT_GOT_TM21","desc":"Got Tm21","order":67,"tile":[4,17,134]},{"id":"EVENT_BEAT_ERIKA","desc":"Beat Erika","order":68,"tile":[4,17,134]},{"id":"badge4","desc":"Earn badge #4","order":69,"tile":[4,17,134]},{"id":"EVENT_BEAT_CELADON_GYM_TRAINER_0","desc":"Beat Celadon Gym Trainer 0","order":70,"tile":[4,17,134]},{"id":"EVENT_BEAT_CELADON_GYM_TRAINER_1","desc":"Beat Celadon Gym Trainer 1","order":71,"tile":[4,17,134]},{"id":"EVENT_BEAT_CELADON_GYM_TRAINER_2","desc":"Beat Celadon Gym Trainer 2","order":72,"tile":[4,17,134]},{"id":"EVENT_BEAT_CELADON_GYM_TRAINER_3","desc":"Beat Celadon Gym Trainer 3","order":73,"tile":[4,17,134]},{"id":"EVENT_BEAT_CELADON_GYM_TRAINER_4","desc":"Beat Celadon Gym Trainer 4","order":74,"tile":[4,17,134]},{"id":"EVENT_BEAT_CELADON_GYM_TRAINER_5","desc":"Beat Celadon Gym Trainer 5","order":75,"tile":[4,17,134]},{"id":"EVENT_BEAT_CELADON_GYM_TRAINER_6","desc":"Beat Celadon Gym Trainer 6","order":76,"tile":[4,17,134]},{"id":"EVENT_FOUND_ROCKET_HIDEOUT","desc":"Found Rocket Hideout","order":77,"tile":[15,17,135]},{"id":"EVENT_GOT_10_COINS","desc":"Got 10 Coins","order":78,"tile":[15,17,135]},{"id":"EVENT_GOT_20_COINS_2","desc":"Got 20 Coins 2","order":79,"tile":[15,17,135]},{"id":"EVENT_GOT_20_COINS","desc":"Got 20 Coins","order":80,"tile":[15,17,135]},{"id":"EVENT_GOT_COIN_CASE","desc":"Got Coin Case","order":81,"tile":[3,7,138]},{"id":"EVENT_GOT_TM06","desc":"Got Tm06","order":82,"tile":[4,17,157]},{"id":"EVENT_BEAT_KOGA","desc":"Beat Koga","order":83,"tile":[4,17,157]},{"id":"badge5","desc":"Earn badge #5","order":84,"tile":[4,17,157]},{"id":"EVENT_BEAT_FUCHSIA_GYM_TRAINER_0","desc":"Beat Fuchsia Gym Trainer 0","order":85,"tile":[4,17,157]},{"id":"EVENT_BEAT_FUCHSIA_GYM_TRAINER_1","desc":"Beat Fuchsia Gym Trainer 1","order":86,"tile":[4,17,157]},{"id":"EVENT_BEAT_FUCHSIA_GYM_TRAINER_2","desc":"Beat Fuchsia Gym Trainer 2","order":87,"tile":[4,17,157]},{"id":"EVENT_BEAT_FUCHSIA_GYM_TRAINER_3","desc":"Beat Fuchsia Gym Trainer 3","order":88,"tile":[4,17,157]},{"id":"EVENT_BEAT_FUCHSIA_GYM_TRAINER_4","desc":"Beat Fuchsia Gym Trainer 4","order":89,"tile":[4,17,157]},{"id":"EVENT_BEAT_FUCHSIA_GYM_TRAINER_5","desc":"Beat Fuchsia Gym Trainer 5","order":90,"tile":[4,17,157]},{"id":"EVENT_BEAT_MANSION_1_TRAINER_0","desc":"Beat Mansion 1 Trainer 0","order":91,"tile":[5,27,165]},{"id":"EVENT_GOT_TM38","desc":"Got Tm38","order":92,"tile":[16,17,166]},{"id":"EVENT_BEAT_BLAINE","desc":"Beat Blaine","order":93,"tile":[16,17,166]},{"id":"badge7","desc":"Earn badge #7","order":94,"tile":[16,17,166]},{"id":"EVENT_BEAT_CINNABAR_GYM_TRAINER_0","desc":"Beat Cinnabar Gym Trainer 0","order":95,"tile":[16,17,166]},{"id":"EVENT_BEAT_CINNABAR_GYM_TRAINER_1","desc":"Beat Cinnabar Gym Trainer 1","order":96,"tile":[16,17,166]},{"id":"EVENT_BEAT_CINNABAR_GYM_TRAINER_2","desc":"Beat Cinnabar Gym Trainer 2","order":97,"tile":[16,17,166]},{"id":"EVENT_BEAT_CINNABAR_GYM_TRAINER_3","desc":"Beat Cinnabar Gym Trainer 3","order":98,"tile":[16,17,166]},{"id":"EVENT_BEAT_CINNABAR_GYM_TRAINER_4","desc":"Beat Cinnabar Gym Trainer 4","order":99,"tile":[16,17,166]},{"id":"EVENT_BEAT_CINNABAR_GYM_TRAINER_5","desc":"Beat Cinnabar Gym Trainer 5","order":100,"tile":[16,17,166]},{"id":"EVENT_BEAT_CINNABAR_GYM_TRAINER_6","desc":"Beat Cinnabar Gym Trainer 6","order":101,"tile":[16,17,166]},{"id":"EVENT_GOT_TM35","desc":"Got Tm35","order":102,"tile":[2,7,169]},{"id":"EVENT_GOT_TM31","desc":"Got Tm31","order":103,"tile":[7,1,176]},{"id":"EVENT_DEFEATED_FIGHTING_DOJO","desc":"Defeated Fighting Dojo","order":104,"tile":[4,11,177]},{"id":"EVENT_BEAT_KARATE_MASTER","desc":"Beat Karate Master","order":105,"tile":[4,11,177]},{"id":"EVENT_BEAT_FIGHTING_DOJO_TRAINER_0","desc":"Beat Fighting Dojo Trainer 0","order":106,"tile":[4,11,177]},{"id":"EVENT_BEAT_FIGHTING_DOJO_TRAINER_1","desc":"Beat Fighting Dojo Trainer 1","order":107,"tile":[4,11,177]},{"id":"EVENT_BEAT_FIGHTING_DOJO_TRAINER_2","desc":"Beat Fighting Dojo Trainer 2","order":108,"tile":[4,11,177]},{"id":"EVENT_BEAT_FIGHTING_DOJO_TRAINER_3","desc":"Beat Fighting Dojo Trainer 3","order":109,"tile":[4,11,177]},{"id":"EVENT_GOT_TM46","desc":"Got Tm46","order":110,"tile":[8,17,178]},{"id":"EVENT_BEAT_SABRINA","desc":"Beat Sabrina","order":111,"tile":[8,17,178]},{"id":"badge6","desc":"Earn badge #6","order":112,"tile":[8,17,178]},{"id":"EVENT_BEAT_SAFFRON_GYM_TRAINER_0","desc":"Beat Saffron Gym Trainer 0","order":113,"tile":[8,17,178]},{"id":"EVENT_BEAT_SAFFRON_GYM_TRAINER_1","desc":"Beat Saffron Gym Trainer 1","order":114,"tile":[8,17,178]},{"id":"EVENT_BEAT_SAFFRON_GYM_TRAINER_2","desc":"Beat Saffron Gym Trainer 2","order":115,"tile":[8,17,178]},{"id":"EVENT_BEAT_SAFFRON_GYM_TRAINER_3","desc":"Beat Saffron Gym Trainer 3","order":116,"tile":[8,17,178]},{"id":"EVENT_BEAT_SAFFRON_GYM_TRAINER_4","desc":"Beat Saffron Gym Trainer 4","order":117,"tile":[8,17,178]},{"id":"EVENT_BEAT_SAFFRON_GYM_TRAINER_5","desc":"Beat Saffron Gym Trainer 5","order":118,"tile":[8,17,178]},{"id":"EVENT_BEAT_SAFFRON_GYM_TRAINER_6","desc":"Beat Saffron Gym Trainer 6","order":119,"tile":[8,17,178]},{"id":"EVENT_GOT_TM29","desc":"Got Tm29","order":120,"tile":[2,7,183]},{"id":"EVENT_GOT_POTION_SAMPLE","desc":"Got Potion Sample","order":121,"tile":null},{"id":"EVENT_GOT_HM05","desc":"Got Hm05","order":122,"tile":[5,0,49]},{"id":"EVENT_BEAT_ROUTE_3_TRAINER_0","desc":"Beat Route 3 Trainer 0","order":123,"tile":null},{"id":"EVENT_BEAT_ROUTE_3_TRAINER_1","desc":"Beat Route 3 Trainer 1","order":124,"tile":null},{"id":"EVENT_BEAT_ROUTE_3_TRAINER_2","desc":"Beat Route 3 Trainer 2","order":125,"tile":null},{"id":"EVENT_BEAT_ROUTE_3_TRAINER_3","desc":"Beat Route 3 Trainer 3","order":126,"tile":null},{"id":"EVENT_BEAT_ROUTE_3_TRAINER_4","desc":"Beat Route 3 Trainer 4","order":127,"tile":null},{"id":"EVENT_BEAT_ROUTE_3_TRAINER_5","desc":"Beat Route 3 Trainer 5","order":128,"tile":null},{"id":"EVENT_BEAT_ROUTE_3_TRAINER_6","desc":"Beat Route 3 Trainer 6","order":129,"tile":null},{"id":"EVENT_BEAT_ROUTE_3_TRAINER_7","desc":"Beat Route 3 Trainer 7","order":130,"tile":null},{"id":"EVENT_BEAT_ROUTE_4_TRAINER_0","desc":"Beat Route 4 Trainer 0","order":131,"tile":[18,5,15]},{"id":"EVENT_BOUGHT_MAGIKARP","desc":"Bought Magikarp","order":132,"tile":[3,7,68]},{"id":"EVENT_BEAT_ROUTE_6_TRAINER_0","desc":"Beat Route 6 Trainer 0","order":133,"tile":[10,7,17]},{"id":"EVENT_BEAT_ROUTE_6_TRAINER_1","desc":"Beat Route 6 Trainer 1","order":134,"tile":[10,7,17]},{"id":"EVENT_BEAT_ROUTE_6_TRAINER_2","desc":"Beat Route 6 Trainer 2","order":135,"tile":[10,7,17]},{"id":"EVENT_BEAT_ROUTE_6_TRAINER_3","desc":"Beat Route 6 Trainer 3","order":136,"tile":[10,7,17]},{"id":"EVENT_BEAT_ROUTE_6_TRAINER_4","desc":"Beat Route 6 Trainer 4","order":137,"tile":[10,7,17]},{"id":"EVENT_BEAT_ROUTE_6_TRAINER_5","desc":"Beat Route 6 Trainer 5","order":138,"tile":[10,7,17]},{"id":"EVENT_BEAT_ROUTE_8_TRAINER_0","desc":"Beat Route 8 Trainer 0","order":139,"tile":[1,9,19]},{"id":"EVENT_BEAT_ROUTE_8_TRAINER_1","desc":"Beat Route 8 Trainer 1","order":140,"tile":[1,9,19]},{"id":"EVENT_BEAT_ROUTE_8_TRAINER_2","desc":"Beat Route 8 Trainer 2","order":141,"tile":[1,9,19]},{"id":"EVENT_BEAT_ROUTE_8_TRAINER_3","desc":"Beat Route 8 Trainer 3","order":142,"tile":[1,9,19]},{"id":"EVENT_BEAT_ROUTE_8_TRAINER_4","desc":"Beat Route 8 Trainer 4","order":143,"tile":[1,9,19]},{"id":"EVENT_BEAT_ROUTE_8_TRAINER_5","desc":"Beat Route 8 Trainer 5","order":144,"tile":[1,9,19]},{"id":"EVENT_BEAT_ROUTE_8_TRAINER_6","desc":"Beat Route 8 Trainer 6","order":145,"tile":[1,9,19]},{"id":"EVENT_BEAT_ROUTE_8_TRAINER_7","desc":"Beat Route 8 Trainer 7","order":146,"tile":[1,9,19]},{"id":"EVENT_BEAT_ROUTE_8_TRAINER_8","desc":"Beat Route 8 Trainer 8","order":147,"tile":[1,9,19]},{"id":"EVENT_BEAT_ROUTE_9_TRAINER_0","desc":"Beat Route 9 Trainer 0","order":148,"tile":null},{"id":"EVENT_BEAT_ROUTE_9_TRAINER_1","desc":"Beat Route 9 Trainer 1","order":149,"tile":null},{"id":"EVENT_BEAT_ROUTE_9_TRAINER_2","desc":"Beat Route 9 Trainer 2","order":150,"tile":null},{"id":"EVENT_BEAT_ROUTE_9_TRAINER_3","desc":"Beat Route 9 Trainer 3","order":151,"tile":null},{"id":"EVENT_BEAT_ROUTE_9_TRAINER_4","desc":"Beat Route 9 Trainer 4","order":152,"tile":null},{"id":"EVENT_BEAT_ROUTE_9_TRAINER_5","desc":"Beat Route 9 Trainer 5","order":153,"tile":null},{"id":"EVENT_BEAT_ROUTE_9_TRAINER_6","desc":"Beat Route 9 Trainer 6","order":154,"tile":null},{"id":"EVENT_BEAT_ROUTE_9_TRAINER_7","desc":"Beat Route 9 Trainer 7","order":155,"tile":null},{"id":"EVENT_BEAT_ROUTE_9_TRAINER_8","desc":"Beat Route 9 Trainer 8","order":156,"tile":null},{"id":"EVENT_BEAT_ROUTE_10_TRAINER_0","desc":"Beat Route 10 Trainer 0","order":157,"tile":[11,19,21]},{"id":"EVENT_BEAT_ROUTE_10_TRAINER_1","desc":"Beat Route 10 Trainer 1","order":158,"tile":[11,19,21]},{"id":"EVENT_BEAT_ROUTE_10_TRAINER_2","desc":"Beat Route 10 Trainer 2","order":159,"tile":[11,19,21]},{"id":"EVENT_BEAT_ROUTE_10_TRAINER_3","desc":"Beat Route 10 Trainer 3","order":160,"tile":[11,19,21]},{"id":"EVENT_BEAT_ROUTE_10_TRAINER_4","desc":"Beat Route 10 Trainer 4","order":161,"tile":[11,19,21]},{"id":"EVENT_BEAT_ROUTE_10_TRAINER_5","desc":"Beat Route 10 Trainer 5","order":162,"tile":[11,19,21]},{"id":"EVENT_BEAT_ROCK_TUNNEL_1_TRAINER_0","desc":"Beat Rock Tunnel 1 Trainer 0","order":163,"tile":[15,3,82]},{"id":"EVENT_BEAT_ROCK_TUNNEL_1_TRAINER_1","desc":"Beat Rock Tunnel 1 Trainer 1","order":164,"tile":[15,3,82]},{"id":"EVENT_BEAT_ROCK_TUNNEL_1_TRAINER_2","desc":"Beat Rock Tunnel 1 Trainer 2","order":165,"tile":[15,3,82]},{"id":"EVENT_BEAT_ROCK_TUNNEL_1_TRAINER_3","desc":"Beat Rock Tunnel 1 Trainer 3","order":166,"tile":[15,3,82]},{"id":"EVENT_BEAT_ROCK_TUNNEL_1_TRAINER_4","desc":"Beat Rock Tunnel 1 Trainer 4","order":167,"tile":[15,3,82]},{"id":"EVENT_BEAT_ROCK_TUNNEL_1_TRAINER_5","desc":"Beat Rock Tunnel 1 Trainer 5","order":168,"tile":[15,3,82]},{"id":"EVENT_BEAT_ROCK_TUNNEL_1_TRAINER_6","desc":"Beat Rock Tunnel 1 Trainer 6","order":169,"tile":[15,3,82]},{"id":"EVENT_BEAT_POWER_PLANT_VOLTORB_0","desc":"Beat Power Plant Voltorb 0","order":170,"tile":[4,35,83]},{"id":"EVENT_BEAT_POWER_PLANT_VOLTORB_1","desc":"Beat Power Plant Voltorb 1","order":171,"tile":[4,35,83]},{"id":"EVENT_BEAT_POWER_PLANT_VOLTORB_2","desc":"Beat Power Plant Voltorb 2","order":172,"tile":[4,35,83]},{"id":"EVENT_BEAT_POWER_PLANT_VOLTORB_3","desc":"Beat Power Plant Voltorb 3","order":173,"tile":[4,35,83]},{"id":"EVENT_BEAT_POWER_PLANT_VOLTORB_4","desc":"Beat Power Plant Voltorb 4","order":174,"tile":[4,35,83]},{"id":"EVENT_BEAT_POWER_PLANT_VOLTORB_5","desc":"Beat Power Plant Voltorb 5","order":175,"tile":[4,35,83]},{"id":"EVENT_BEAT_POWER_PLANT_VOLTORB_6","desc":"Beat Power Plant Voltorb 6","order":176,"tile":[4,35,83]},{"id":"EVENT_BEAT_POWER_PLANT_VOLTORB_7","desc":"Beat Power Plant Voltorb 7","order":177,"tile":[4,35,83]},{"id":"EVENT_BEAT_ZAPDOS","desc":"Beat Zapdos","order":178,"tile":[4,35,83]},{"id":"EVENT_BEAT_ROUTE_11_TRAINER_0","desc":"Beat Route 11 Trainer 0","order":179,"tile":[49,8,22]},{"id":"EVENT_BEAT_ROUTE_11_TRAINER_1","desc":"Beat Route 11 Trainer 1","order":180,"tile":[49,8,22]},{"id":"EVENT_BEAT_ROUTE_11_TRAINER_2","desc":"Beat Route 11 Trainer 2","order":181,"tile":[49,8,22]},{"id":"EVENT_BEAT_ROUTE_11_TRAINER_3","desc":"Beat Route 11 Trainer 3","order":182,"tile":[49,8,22]},{"id":"EVENT_BEAT_ROUTE_11_TRAINER_4","desc":"Beat Route 11 Trainer 4","order":183,"tile":[49,8,22]},{"id":"EVENT_BEAT_ROUTE_11_TRAINER_5","desc":"Beat Route 11 Trainer 5","order":184,"tile":[49,8,22]},{"id":"EVENT_BEAT_ROUTE_11_TRAINER_6","desc":"Beat Route 11 Trainer 6","order":185,"tile":[49,8,22]},{"id":"EVENT_BEAT_ROUTE_11_TRAINER_7","desc":"Beat Route 11 Trainer 7","order":186,"tile":[49,8,22]},{"id":"EVENT_BEAT_ROUTE_11_TRAINER_8","desc":"Beat Route 11 Trainer 8","order":187,"tile":[49,8,22]},{"id":"EVENT_BEAT_ROUTE_11_TRAINER_9","desc":"Beat Route 11 Trainer 9","order":188,"tile":[49,8,22]},{"id":"EVENT_GOT_ITEMFINDER","desc":"Got Itemfinder","order":189,"tile":[7,7,86]},{"id":"EVENT_GOT_TM39","desc":"Got Tm39","order":190,"tile":[7,7,195]},{"id":"EVENT_BEAT_ROUTE_12_TRAINER_0","desc":"Beat Route 12 Trainer 0","order":191,"tile":[10,15,23]},{"id":"EVENT_BEAT_ROUTE_12_TRAINER_1","desc":"Beat Route 12 Trainer 1","order":192,"tile":[10,15,23]},{"id":"EVENT_BEAT_ROUTE_12_TRAINER_2","desc":"Beat Route 12 Trainer 2","order":193,"tile":[10,15,23]},{"id":"EVENT_BEAT_ROUTE_12_TRAINER_3","desc":"Beat Route 12 Trainer 3","order":194,"tile":[10,15,23]},{"id":"EVENT_BEAT_ROUTE_12_TRAINER_4","desc":"Beat Route 12 Trainer 4","order":195,"tile":[10,15,23]},{"id":"EVENT_BEAT_ROUTE_12_TRAINER_5","desc":"Beat Route 12 Trainer 5","order":196,"tile":[10,15,23]},{"id":"EVENT_BEAT_ROUTE_12_TRAINER_6","desc":"Beat Route 12 Trainer 6","order":197,"tile":[10,15,23]},{"id":"EVENT_BEAT_ROUTE_13_TRAINER_0","desc":"Beat Route 13 Trainer 0","order":198,"tile":null},{"id":"EVENT_BEAT_ROUTE_13_TRAINER_1","desc":"Beat Route 13 Trainer 1","order":199,"tile":null},{"id":"EVENT_BEAT_ROUTE_13_TRAINER_2","desc":"Beat Route 13 Trainer 2","order":200,"tile":null},{"id":"EVENT_BEAT_ROUTE_13_TRAINER_3","desc":"Beat Route 13 Trainer 3","order":201,"tile":null},{"id":"EVENT_BEAT_ROUTE_13_TRAINER_4","desc":"Beat Route 13 Trainer 4","order":202,"tile":null},{"id":"EVENT_BEAT_ROUTE_13_TRAINER_5","desc":"Beat Route 13 Trainer 5","order":203,"tile":null},{"id":"EVENT_BEAT_ROUTE_13_TRAINER_6","desc":"Beat Route 13 Trainer 6","order":204,"tile":null},{"id":"EVENT_BEAT_ROUTE_13_TRAINER_7","desc":"Beat Route 13 Trainer 7","order":205,"tile":null},{"id":"EVENT_BEAT_ROUTE_13_TRAINER_8","desc":"Beat Route 13 Trainer 8","order":206,"tile":null},{"id":"EVENT_BEAT_ROUTE_13_TRAINER_9","desc":"Beat Route 13 Trainer 9","order":207,"tile":null},{"id":"EVENT_BEAT_ROUTE_14_TRAINER_0","desc":"Beat Route 14 Trainer 0","order":208,"tile":null},{"id":"EVENT_BEAT_ROUTE_14_TRAINER_1","desc":"Beat Route 14 Trainer 1","order":209,"tile":null},{"id":"EVENT_BEAT_ROUTE_14_TRAINER_2","desc":"Beat Route 14 Trainer 2","order":210,"tile":null},{"id":"EVENT_BEAT_ROUTE_14_TRAINER_3","desc":"Beat Route 14 Trainer 3","order":211,"tile":null},{"id":"EVENT_BEAT_ROUTE_14_TRAINER_4","desc":"Beat Route 14 Trainer 4","order":212,"tile":null},{"id":"EVENT_BEAT_ROUTE_14_TRAINER_5","desc":"Beat Route 14 Trainer 5","order":213,"tile":null},{"id":"EVENT_BEAT_ROUTE_14_TRAINER_6","desc":"Beat Route 14 Trainer 6","order":214,"tile":null},{"id":"EVENT_BEAT_ROUTE_14_TRAINER_7","desc":"Beat Route 14 Trainer 7","order":215,"tile":null},{"id":"EVENT_BEAT_ROUTE_14_TRAINER_8","desc":"Beat Route 14 Trainer 8","order":216,"tile":null},{"id":"EVENT_BEAT_ROUTE_14_TRAINER_9","desc":"Beat Route 14 Trainer 9","order":217,"tile":null},{"id":"EVENT_GOT_EXP_ALL","desc":"Got Exp All","order":218,"tile":[7,7,185]},{"id":"EVENT_BEAT_ROUTE_15_TRAINER_0","desc":"Beat Route 15 Trainer 0","order":219,"tile":[7,8,26]},{"id":"EVENT_BEAT_ROUTE_15_TRAINER_1","desc":"Beat Route 15 Trainer 1","order":220,"tile":[7,8,26]},{"id":"EVENT_BEAT_ROUTE_15_TRAINER_2","desc":"Beat Route 15 Trainer 2","order":221,"tile":[7,8,26]},{"id":"EVENT_BEAT_ROUTE_15_TRAINER_3","desc":"Beat Route 15 Trainer 3","order":222,"tile":[7,8,26]},{"id":"EVENT_BEAT_ROUTE_15_TRAINER_4","desc":"Beat Route 15 Trainer 4","order":223,"tile":[7,8,26]},{"id":"EVENT_BEAT_ROUTE_15_TRAINER_5","desc":"Beat Route 15 Trainer 5","order":224,"tile":[7,8,26]},{"id":"EVENT_BEAT_ROUTE_15_TRAINER_6","desc":"Beat Route 15 Trainer 6","order":225,"tile":[7,8,26]},{"id":"EVENT_BEAT_ROUTE_15_TRAINER_7","desc":"Beat Route 15 Trainer 7","order":226,"tile":[7,8,26]},{"id":"EVENT_BEAT_ROUTE_15_TRAINER_8","desc":"Beat Route 15 Trainer 8","order":227,"tile":[7,8,26]},{"id":"EVENT_BEAT_ROUTE_15_TRAINER_9","desc":"Beat Route 15 Trainer 9","order":228,"tile":[7,8,26]},{"id":"EVENT_BEAT_ROUTE_16_TRAINER_0","desc":"Beat Route 16 Trainer 0","order":229,"tile":[17,10,27]},{"id":"EVENT_BEAT_ROUTE_16_TRAINER_1","desc":"Beat Route 16 Trainer 1","order":230,"tile":[17,10,27]},{"id":"EVENT_BEAT_ROUTE_16_TRAINER_2","desc":"Beat Route 16 Trainer 2","order":231,"tile":[17,10,27]},{"id":"EVENT_BEAT_ROUTE_16_TRAINER_3","desc":"Beat Route 16 Trainer 3","order":232,"tile":[17,10,27]},{"id":"EVENT_BEAT_ROUTE_16_TRAINER_4","desc":"Beat Route 16 Trainer 4","order":233,"tile":[17,10,27]},{"id":"EVENT_BEAT_ROUTE_16_TRAINER_5","desc":"Beat Route 16 Trainer 5","order":234,"tile":[17,10,27]},{"id":"EVENT_GOT_HM02","desc":"Got Hm02","order":235,"tile":[2,7,188]},{"id":"EVENT_RESCUED_MR_FUJI","desc":"Rescued Mr Fuji","order":236,"tile":[9,16,148]},{"id":"EVENT_GOT_POKE_FLUTE","desc":"Got Poke Flute","order":237,"tile":[2,7,149]},{"id":"EVENT_BEAT_ROUTE_17_TRAINER_0","desc":"Beat Route 17 Trainer 0","order":238,"tile":null},{"id":"EVENT_BEAT_ROUTE_17_TRAINER_1","desc":"Beat Route 17 Trainer 1","order":239,"tile":null},{"id":"EVENT_BEAT_ROUTE_17_TRAINER_2","desc":"Beat Route 17 Trainer 2","order":240,"tile":null},{"id":"EVENT_BEAT_ROUTE_17_TRAINER_3","desc":"Beat Route 17 Trainer 3","order":241,"tile":null},{"id":"EVENT_BEAT_ROUTE_17_TRAINER_4","desc":"Beat Route 17 Trainer 4","order":242,"tile":null},{"id":"EVENT_BEAT_ROUTE_17_TRAINER_5","desc":"Beat Route 17 Trainer 5","order":243,"tile":null},{"id":"EVENT_BEAT_ROUTE_17_TRAINER_6","desc":"Beat Route 17 Trainer 6","order":244,"tile":null},{"id":"EVENT_BEAT_ROUTE_17_TRAINER_7","desc":"Beat Route 17 Trainer 7","order":245,"tile":null},{"id":"EVENT_BEAT_ROUTE_17_TRAINER_8","desc":"Beat Route 17 Trainer 8","order":246,"tile":null},{"id":"EVENT_BEAT_ROUTE_17_TRAINER_9","desc":"Beat Route 17 Trainer 9","order":247,"tile":null},{"id":"EVENT_BEAT_ROUTE_18_TRAINER_0","desc":"Beat Route 18 Trainer 0","order":248,"tile":[33,8,29]},{"id":"EVENT_BEAT_ROUTE_18_TRAINER_1","desc":"Beat Route 18 Trainer 1","order":249,"tile":[33,8,29]},{"id":"EVENT_BEAT_ROUTE_18_TRAINER_2","desc":"Beat Route 18 Trainer 2","order":250,"tile":[33,8,29]},{"id":"EVENT_BEAT_ROUTE_19_TRAINER_0","desc":"Beat Route 19 Trainer 0","order":251,"tile":null},{"id":"EVENT_BEAT_ROUTE_19_TRAINER_1","desc":"Beat Route 19 Trainer 1","order":252,"tile":null},{"id":"EVENT_BEAT_ROUTE_19_TRAINER_2","desc":"Beat Route 19 Trainer 2","order":253,"tile":null},{"id":"EVENT_BEAT_ROUTE_19_TRAINER_3","desc":"Beat Route 19 Trainer 3","order":254,"tile":null},{"id":"EVENT_BEAT_ROUTE_19_TRAINER_4","desc":"Beat Route 19 Trainer 4","order":255,"tile":null},{"id":"EVENT_BEAT_ROUTE_19_TRAINER_5","desc":"Beat Route 19 Trainer 5","order":256,"tile":null},{"id":"EVENT_BEAT_ROUTE_19_TRAINER_6","desc":"Beat Route 19 Trainer 6","order":257,"tile":null},{"id":"EVENT_BEAT_ROUTE_19_TRAINER_7","desc":"Beat Route 19 Trainer 7","order":258,"tile":null},{"id":"EVENT_BEAT_ROUTE_19_TRAINER_8","desc":"Beat Route 19 Trainer 8","order":259,"tile":null},{"id":"EVENT_BEAT_ROUTE_19_TRAINER_9","desc":"Beat Route 19 Trainer 9","order":260,"tile":null},{"id":"EVENT_SEAFOAM1_BOULDER1_DOWN_HOLE","desc":"Seafoam1 Boulder1 Down Hole","order":261,"tile":[4,17,192]},{"id":"EVENT_SEAFOAM1_BOULDER2_DOWN_HOLE","desc":"Seafoam1 Boulder2 Down Hole","order":262,"tile":[4,17,192]},{"id":"EVENT_BEAT_ROUTE_21_TRAINER_0","desc":"Beat Route 21 Trainer 0","order":263,"tile":null},{"id":"EVENT_BEAT_ROUTE_21_TRAINER_1","desc":"Beat Route 21 Trainer 1","order":264,"tile":null},{"id":"EVENT_BEAT_ROUTE_21_TRAINER_2","desc":"Beat Route 21 Trainer 2","order":265,"tile":null},{"id":"EVENT_BEAT_ROUTE_21_TRAINER_3","desc":"Beat Route 21 Trainer 3","order":266,"tile":null},{"id":"EVENT_BEAT_ROUTE_21_TRAINER_4","desc":"Beat Route 21 Trainer 4","order":267,"tile":null},{"id":"EVENT_BEAT_ROUTE_21_TRAINER_5","desc":"Beat Route 21 Trainer 5","order":268,"tile":null},{"id":"EVENT_BEAT_ROUTE_21_TRAINER_6","desc":"Beat Route 21 Trainer 6","order":269,"tile":null},{"id":"EVENT_BEAT_ROUTE_21_TRAINER_7","desc":"Beat Route 21 Trainer 7","order":270,"tile":null},{"id":"EVENT_BEAT_ROUTE_21_TRAINER_8","desc":"Beat Route 21 Trainer 8","order":271,"tile":null},{"id":"EVENT_BEAT_ROUTE22_RIVAL_1ST_BATTLE","desc":"Beat Route22 Rival 1St Battle","order":272,"tile":[8,5,33]},{"id":"EVENT_BEAT_ROUTE22_RIVAL_2ND_BATTLE","desc":"Beat Route22 Rival 2Nd Battle","order":273,"tile":[8,5,33]},{"id":"EVENT_BEAT_VICTORY_ROAD_2_TRAINER_0","desc":"Beat Victory Road 2 Trainer 0","order":274,"tile":[29,7,194]},{"id":"EVENT_BEAT_VICTORY_ROAD_2_TRAINER_1","desc":"Beat Victory Road 2 Trainer 1","order":275,"tile":[29,7,194]},{"id":"EVENT_BEAT_VICTORY_ROAD_2_TRAINER_2","desc":"Beat Victory Road 2 Trainer 2","order":276,"tile":[29,7,194]},{"id":"EVENT_BEAT_VICTORY_ROAD_2_TRAINER_3","desc":"Beat Victory Road 2 Trainer 3","order":277,"tile":[29,7,194]},{"id":"EVENT_BEAT_VICTORY_ROAD_2_TRAINER_4","desc":"Beat Victory Road 2 Trainer 4","order":278,"tile":[29,7,194]},{"id":"EVENT_BEAT_MOLTRES","desc":"Beat Moltres","order":279,"tile":[29,7,194]},{"id":"EVENT_GOT_NUGGET","desc":"Got Nugget","order":280,"tile":null},{"id":"EVENT_BEAT_ROUTE24_ROCKET","desc":"Beat Route24 Rocket","order":281,"tile":null},{"id":"EVENT_BEAT_ROUTE_24_TRAINER_0","desc":"Beat Route 24 Trainer 0","order":282,"tile":null},{"id":"EVENT_BEAT_ROUTE_24_TRAINER_1","desc":"Beat Route 24 Trainer 1","order":283,"tile":null},{"id":"EVENT_BEAT_ROUTE_24_TRAINER_2","desc":"Beat Route 24 Trainer 2","order":284,"tile":null},{"id":"EVENT_BEAT_ROUTE_24_TRAINER_3","desc":"Beat Route 24 Trainer 3","order":285,"tile":null},{"id":"EVENT_BEAT_ROUTE_24_TRAINER_4","desc":"Beat Route 24 Trainer 4","order":286,"tile":null},{"id":"EVENT_BEAT_ROUTE_24_TRAINER_5","desc":"Beat Route 24 Trainer 5","order":287,"tile":null},{"id":"EVENT_MET_BILL","desc":"Met Bill","order":288,"tile":[2,7,88]},{"id":"EVENT_GOT_SS_TICKET","desc":"Got Ss Ticket","order":289,"tile":[2,7,88]},{"id":"EVENT_BEAT_ROUTE_25_TRAINER_0","desc":"Beat Route 25 Trainer 0","order":290,"tile":[45,3,36]},{"id":"EVENT_BEAT_ROUTE_25_TRAINER_1","desc":"Beat Route 25 Trainer 1","order":291,"tile":[45,3,36]},{"id":"EVENT_BEAT_ROUTE_25_TRAINER_2","desc":"Beat Route 25 Trainer 2","order":292,"tile":[45,3,36]},{"id":"EVENT_BEAT_ROUTE_25_TRAINER_3","desc":"Beat Route 25 Trainer 3","order":293,"tile":[45,3,36]},{"id":"EVENT_BEAT_ROUTE_25_TRAINER_4","desc":"Beat Route 25 Trainer 4","order":294,"tile":[45,3,36]},{"id":"EVENT_BEAT_ROUTE_25_TRAINER_5","desc":"Beat Route 25 Trainer 5","order":295,"tile":[45,3,36]},{"id":"EVENT_BEAT_ROUTE_25_TRAINER_6","desc":"Beat Route 25 Trainer 6","order":296,"tile":[45,3,36]},{"id":"EVENT_BEAT_ROUTE_25_TRAINER_7","desc":"Beat Route 25 Trainer 7","order":297,"tile":[45,3,36]},{"id":"EVENT_BEAT_ROUTE_25_TRAINER_8","desc":"Beat Route 25 Trainer 8","order":298,"tile":[45,3,36]},{"id":"EVENT_BEAT_VIRIDIAN_FOREST_TRAINER_0","desc":"Beat Viridian Forest Trainer 0","order":299,"tile":[1,0,51]},{"id":"EVENT_BEAT_VIRIDIAN_FOREST_TRAINER_1","desc":"Beat Viridian Forest Trainer 1","order":300,"tile":[1,0,51]},{"id":"EVENT_BEAT_VIRIDIAN_FOREST_TRAINER_2","desc":"Beat Viridian Forest Trainer 2","order":301,"tile":[1,0,51]},{"id":"EVENT_BEAT_MT_MOON_1_TRAINER_0","desc":"Beat Mt Moon 1 Trainer 0","order":302,"tile":[14,35,59]},{"id":"EVENT_BEAT_MT_MOON_1_TRAINER_1","desc":"Beat Mt Moon 1 Trainer 1","order":303,"tile":[14,35,59]},{"id":"EVENT_BEAT_MT_MOON_1_TRAINER_2","desc":"Beat Mt Moon 1 Trainer 2","order":304,"tile":[14,35,59]},{"id":"EVENT_BEAT_MT_MOON_1_TRAINER_3","desc":"Beat Mt Moon 1 Trainer 3","order":305,"tile":[14,35,59]},{"id":"EVENT_BEAT_MT_MOON_1_TRAINER_4","desc":"Beat Mt Moon 1 Trainer 4","order":306,"tile":[14,35,59]},{"id":"EVENT_BEAT_MT_MOON_1_TRAINER_5","desc":"Beat Mt Moon 1 Trainer 5","order":307,"tile":[14,35,59]},{"id":"EVENT_BEAT_MT_MOON_1_TRAINER_6","desc":"Beat Mt Moon 1 Trainer 6","order":308,"tile":[14,35,59]},{"id":"EVENT_BEAT_MT_MOON_3_TRAINER_0","desc":"Beat Mt Moon 3 Trainer 0","order":309,"tile":[25,9,61]},{"id":"EVENT_BEAT_MT_MOON_3_TRAINER_1","desc":"Beat Mt Moon 3 Trainer 1","order":310,"tile":[25,9,61]},{"id":"EVENT_BEAT_MT_MOON_3_TRAINER_2","desc":"Beat Mt Moon 3 Trainer 2","order":311,"tile":[25,9,61]},{"id":"EVENT_BEAT_MT_MOON_3_TRAINER_3","desc":"Beat Mt Moon 3 Trainer 3","order":312,"tile":[25,9,61]},{"id":"EVENT_GOT_HELIX_FOSSIL","desc":"Got Helix Fossil","order":313,"tile":[25,9,61]},{"id":"EVENT_BEAT_SS_ANNE_5_TRAINER_0","desc":"Beat Ss Anne 5 Trainer 0","order":314,"tile":[13,6,99]},{"id":"EVENT_BEAT_SS_ANNE_5_TRAINER_1","desc":"Beat Ss Anne 5 Trainer 1","order":315,"tile":[13,6,99]},{"id":"EVENT_WALKED_PAST_GUARD_AFTER_SS_ANNE_LEFT","desc":"Walked Past Guard After Ss Anne Left","order":316,"tile":[11,3,5]},{"id":"EVENT_BEAT_SS_ANNE_8_TRAINER_0","desc":"Beat Ss Anne 8 Trainer 0","order":317,"tile":[0,0,102]},{"id":"EVENT_BEAT_SS_ANNE_8_TRAINER_1","desc":"Beat Ss Anne 8 Trainer 1","order":318,"tile":[0,0,102]},{"id":"EVENT_BEAT_SS_ANNE_8_TRAINER_2","desc":"Beat Ss Anne 8 Trainer 2","order":319,"tile":[0,0,102]},{"id":"EVENT_BEAT_SS_ANNE_8_TRAINER_3","desc":"Beat Ss Anne 8 Trainer 3","order":320,"tile":[0,0,102]},{"id":"EVENT_BEAT_SS_ANNE_9_TRAINER_0","desc":"Beat Ss Anne 9 Trainer 0","order":321,"tile":[2,5,103]},{"id":"EVENT_BEAT_SS_ANNE_9_TRAINER_1","desc":"Beat Ss Anne 9 Trainer 1","order":322,"tile":[2,5,103]},{"id":"EVENT_BEAT_SS_ANNE_9_TRAINER_2","desc":"Beat Ss Anne 9 Trainer 2","order":323,"tile":[2,5,103]},{"id":"EVENT_BEAT_SS_ANNE_9_TRAINER_3","desc":"Beat Ss Anne 9 Trainer 3","order":324,"tile":[2,5,103]},{"id":"EVENT_BEAT_SS_ANNE_10_TRAINER_0","desc":"Beat Ss Anne 10 Trainer 0","order":325,"tile":[12,15,104]},{"id":"EVENT_BEAT_SS_ANNE_10_TRAINER_1","desc":"Beat Ss Anne 10 Trainer 1","order":326,"tile":[12,15,104]},{"id":"EVENT_BEAT_SS_ANNE_10_TRAINER_2","desc":"Beat Ss Anne 10 Trainer 2","order":327,"tile":[12,15,104]},{"id":"EVENT_BEAT_SS_ANNE_10_TRAINER_3","desc":"Beat Ss Anne 10 Trainer 3","order":328,"tile":[12,15,104]},{"id":"EVENT_BEAT_SS_ANNE_10_TRAINER_4","desc":"Beat Ss Anne 10 Trainer 4","order":329,"tile":[12,15,104]},{"id":"EVENT_BEAT_SS_ANNE_10_TRAINER_5","desc":"Beat Ss Anne 10 Trainer 5","order":330,"tile":[12,15,104]},{"id":"EVENT_BEAT_VICTORY_ROAD_3_TRAINER_0","desc":"Beat Victory Road 3 Trainer 0","order":331,"tile":[23,7,198]},{"id":"EVENT_BEAT_VICTORY_ROAD_3_TRAINER_1","desc":"Beat Victory Road 3 Trainer 1","order":332,"tile":[23,7,198]},{"id":"EVENT_BEAT_VICTORY_ROAD_3_TRAINER_2","desc":"Beat Victory Road 3 Trainer 2","order":333,"tile":[23,7,198]},{"id":"EVENT_BEAT_VICTORY_ROAD_3_TRAINER_3","desc":"Beat Victory Road 3 Trainer 3","order":334,"tile":[23,7,198]},{"id":"EVENT_ENTERED_ROCKET_HIDEOUT","desc":"Entered Rocket Hideout","order":335,"tile":[21,2,199]},{"id":"EVENT_BEAT_ROCKET_HIDEOUT_1_TRAINER_4","desc":"Beat Rocket Hideout 1 Trainer 4","order":336,"tile":[21,2,199]},{"id":"EVENT_BEAT_ROCKET_HIDEOUT_1_TRAINER_0","desc":"Beat Rocket Hideout 1 Trainer 0","order":337,"tile":[21,2,199]},{"id":"EVENT_BEAT_ROCKET_HIDEOUT_1_TRAINER_1","desc":"Beat Rocket Hideout 1 Trainer 1","order":338,"tile":[21,2,199]},{"id":"EVENT_BEAT_ROCKET_HIDEOUT_1_TRAINER_2","desc":"Beat Rocket Hideout 1 Trainer 2","order":339,"tile":[21,2,199]},{"id":"EVENT_BEAT_ROCKET_HIDEOUT_1_TRAINER_3","desc":"Beat Rocket Hideout 1 Trainer 3","order":340,"tile":[21,2,199]},{"id":"EVENT_BEAT_ROCKET_HIDEOUT_2_TRAINER_0","desc":"Beat Rocket Hideout 2 Trainer 0","order":341,"tile":[27,8,200]},{"id":"EVENT_BEAT_ROCKET_HIDEOUT_3_TRAINER_0","desc":"Beat Rocket Hideout 3 Trainer 0","order":342,"tile":[25,6,201]},{"id":"EVENT_BEAT_ROCKET_HIDEOUT_3_TRAINER_1","desc":"Beat Rocket Hideout 3 Trainer 1","order":343,"tile":[25,6,201]},{"id":"EVENT_BEAT_ROCKET_HIDEOUT_4_TRAINER_2","desc":"Beat Rocket Hideout 4 Trainer 2","order":344,"tile":[19,10,202]},{"id":"EVENT_ROCKET_DROPPED_LIFT_KEY","desc":"Rocket Dropped Lift Key","order":345,"tile":[19,10,202]},{"id":"EVENT_BEAT_ROCKET_HIDEOUT_GIOVANNI","desc":"Beat Rocket Hideout Giovanni","order":346,"tile":[19,10,202]},{"id":"EVENT_BEAT_SILPH_CO_2F_TRAINER_0","desc":"Beat Silph Co 2F Trainer 0","order":347,"tile":[24,0,207]},{"id":"EVENT_BEAT_SILPH_CO_2F_TRAINER_1","desc":"Beat Silph Co 2F Trainer 1","order":348,"tile":[24,0,207]},{"id":"EVENT_BEAT_SILPH_CO_2F_TRAINER_2","desc":"Beat Silph Co 2F Trainer 2","order":349,"tile":[24,0,207]},{"id":"EVENT_BEAT_SILPH_CO_2F_TRAINER_3","desc":"Beat Silph Co 2F Trainer 3","order":350,"tile":[24,0,207]},{"id":"EVENT_GOT_TM36","desc":"Got Tm36","order":351,"tile":[24,0,207]},{"id":"EVENT_BEAT_SILPH_CO_3F_TRAINER_0","desc":"Beat Silph Co 3F Trainer 0","order":352,"tile":[27,3,208]},{"id":"EVENT_BEAT_SILPH_CO_3F_TRAINER_1","desc":"Beat Silph Co 3F Trainer 1","order":353,"tile":[27,3,208]},{"id":"EVENT_BEAT_SILPH_CO_4F_TRAINER_0","desc":"Beat Silph Co 4F Trainer 0","order":354,"tile":[24,0,209]},{"id":"EVENT_BEAT_SILPH_CO_4F_TRAINER_1","desc":"Beat Silph Co 4F Trainer 1","order":355,"tile":[24,0,209]},{"id":"EVENT_BEAT_SILPH_CO_4F_TRAINER_2","desc":"Beat Silph Co 4F Trainer 2","order":356,"tile":[24,0,209]},{"id":"EVENT_BEAT_SILPH_CO_5F_TRAINER_0","desc":"Beat Silph Co 5F Trainer 0","order":357,"tile":[11,5,210]},{"id":"EVENT_BEAT_SILPH_CO_5F_TRAINER_1","desc":"Beat Silph Co 5F Trainer 1","order":358,"tile":[11,5,210]},{"id":"EVENT_BEAT_SILPH_CO_5F_TRAINER_2","desc":"Beat Silph Co 5F Trainer 2","order":359,"tile":[11,5,210]},{"id":"EVENT_BEAT_SILPH_CO_5F_TRAINER_3","desc":"Beat Silph Co 5F Trainer 3","order":360,"tile":[11,5,210]},{"id":"EVENT_SILPH_CO_6_UNLOCKED_DOOR","desc":"Silph Co 6 Unlocked Door","order":361,"tile":[23,3,211]},{"id":"EVENT_BEAT_SILPH_CO_6F_TRAINER_0","desc":"Beat Silph Co 6F Trainer 0","order":362,"tile":[23,3,211]},{"id":"EVENT_BEAT_SILPH_CO_6F_TRAINER_1","desc":"Beat Silph Co 6F Trainer 1","order":363,"tile":[23,3,211]},{"id":"EVENT_BEAT_SILPH_CO_6F_TRAINER_2","desc":"Beat Silph Co 6F Trainer 2","order":364,"tile":[23,3,211]},{"id":"EVENT_BEAT_SILPH_CO_RIVAL","desc":"Beat Silph Co Rival","order":365,"tile":[5,3,212]},{"id":"EVENT_BEAT_SILPH_CO_7F_TRAINER_0","desc":"Beat Silph Co 7F Trainer 0","order":366,"tile":[5,3,212]},{"id":"EVENT_BEAT_SILPH_CO_7F_TRAINER_1","desc":"Beat Silph Co 7F Trainer 1","order":367,"tile":[5,3,212]},{"id":"EVENT_BEAT_SILPH_CO_7F_TRAINER_2","desc":"Beat Silph Co 7F Trainer 2","order":368,"tile":[5,3,212]},{"id":"EVENT_BEAT_SILPH_CO_7F_TRAINER_3","desc":"Beat Silph Co 7F Trainer 3","order":369,"tile":[5,3,212]},{"id":"EVENT_SILPH_CO_8_UNLOCKED_DOOR","desc":"Silph Co 8 Unlocked Door","order":370,"tile":[3,15,213]},{"id":"EVENT_BEAT_SILPH_CO_8F_TRAINER_0","desc":"Beat Silph Co 8F Trainer 0","order":371,"tile":[3,15,213]},{"id":"EVENT_BEAT_SILPH_CO_8F_TRAINER_1","desc":"Beat Silph Co 8F Trainer 1","order":372,"tile":[3,15,213]},{"id":"EVENT_BEAT_SILPH_CO_8F_TRAINER_2","desc":"Beat Silph Co 8F Trainer 2","order":373,"tile":[3,15,213]},{"id":"EVENT_BEAT_SILPH_CO_9F_TRAINER_0","desc":"Beat Silph Co 9F Trainer 0","order":374,"tile":[9,3,233]},{"id":"EVENT_BEAT_SILPH_CO_9F_TRAINER_1","desc":"Beat Silph Co 9F Trainer 1","order":375,"tile":[9,3,233]},{"id":"EVENT_BEAT_SILPH_CO_9F_TRAINER_2","desc":"Beat Silph Co 9F Trainer 2","order":376,"tile":[9,3,233]},{"id":"EVENT_SILPH_CO_10_UNLOCKED_DOOR","desc":"Silph Co 10 Unlocked Door","order":377,"tile":[9,11,234]},{"id":"EVENT_BEAT_SILPH_CO_10F_TRAINER_0","desc":"Beat Silph Co 10F Trainer 0","order":378,"tile":[9,11,234]},{"id":"EVENT_BEAT_SILPH_CO_10F_TRAINER_1","desc":"Beat Silph Co 10F Trainer 1","order":379,"tile":[9,11,234]},{"id":"EVENT_BEAT_SILPH_CO_11F_TRAINER_0","desc":"Beat Silph Co 11F Trainer 0","order":380,"tile":[3,2,235]},{"id":"EVENT_BEAT_SILPH_CO_11F_TRAINER_1","desc":"Beat Silph Co 11F Trainer 1","order":381,"tile":[3,2,235]},{"id":"EVENT_SILPH_CO_11_UNLOCKED_DOOR","desc":"Silph Co 11 Unlocked Door","order":382,"tile":[3,2,235]},{"id":"EVENT_GOT_MASTER_BALL","desc":"Got Master Ball","order":383,"tile":[3,2,235]},{"id":"EVENT_BEAT_SILPH_CO_GIOVANNI","desc":"Beat Silph Co Giovanni","order":384,"tile":[3,2,235]},{"id":"EVENT_SILPH_CO_RECEPTIONIST_AT_DESK","desc":"Silph Co Receptionist At Desk","order":385,"tile":[10,17,181]},{"id":"EVENT_BEAT_MANSION_2_TRAINER_0","desc":"Beat Mansion 2 Trainer 0","order":386,"tile":[5,10,214]},{"id":"EVENT_BEAT_MANSION_3_TRAINER_0","desc":"Beat Mansion 3 Trainer 0","order":387,"tile":[7,10,215]},{"id":"EVENT_BEAT_MANSION_3_TRAINER_1","desc":"Beat Mansion 3 Trainer 1","order":388,"tile":[7,10,215]},{"id":"EVENT_BEAT_MANSION_4_TRAINER_0","desc":"Beat Mansion 4 Trainer 0","order":389,"tile":[23,22,216]},{"id":"EVENT_BEAT_MANSION_4_TRAINER_1","desc":"Beat Mansion 4 Trainer 1","order":390,"tile":[23,22,216]},{"id":"EVENT_GOT_HM03","desc":"Got Hm03","order":391,"tile":[2,7,222]},{"id":"EVENT_BEAT_MEWTWO","desc":"Beat Mewtwo","order":392,"tile":[3,6,227]},{"id":"EVENT_BEAT_LANCE","desc":"Beat Lance","order":393,"tile":[5,0,113]},{"id":"EVENT_LANCES_ROOM_LOCK_DOOR","desc":"Lances Room Lock Door","order":394,"tile":[5,0,113]},{"id":"EVENT_BEAT_LANCES_ROOM_TRAINER_0","desc":"Beat Lances Room Trainer 0","order":395,"tile":[5,0,113]},{"id":"EVENT_BEAT_CHAMPION_RIVAL","desc":"Beat Champion Rival","order":396,"tile":[3,7,120]},{"id":"EVENT_BEAT_VICTORY_ROAD_1_TRAINER_0","desc":"Beat Victory Road 1 Trainer 0","order":397,"tile":[8,17,108]},{"id":"EVENT_BEAT_VICTORY_ROAD_1_TRAINER_1","desc":"Beat Victory Road 1 Trainer 1","order":398,"tile":[8,17,108]},{"id":"EVENT_BEAT_ROCK_TUNNEL_2_TRAINER_0","desc":"Beat Rock Tunnel 2 Trainer 0","order":399,"tile":[33,25,232]},{"id":"EVENT_BEAT_ROCK_TUNNEL_2_TRAINER_1","desc":"Beat Rock Tunnel 2 Trainer 1","order":400,"tile":[33,25,232]},{"id":"EVENT_BEAT_ROCK_TUNNEL_2_TRAINER_2","desc":"Beat Rock Tunnel 2 Trainer 2","order":401,"tile":[33,25,232]},{"id":"EVENT_BEAT_ROCK_TUNNEL_2_TRAINER_3","desc":"Beat Rock Tunnel 2 Trainer 3","order":402,"tile":[33,25,232]},{"id":"EVENT_BEAT_ROCK_TUNNEL_2_TRAINER_4","desc":"Beat Rock Tunnel 2 Trainer 4","order":403,"tile":[33,25,232]},{"id":"EVENT_BEAT_ROCK_TUNNEL_2_TRAINER_5","desc":"Beat Rock Tunnel 2 Trainer 5","order":404,"tile":[33,25,232]},{"id":"EVENT_BEAT_ROCK_TUNNEL_2_TRAINER_6","desc":"Beat Rock Tunnel 2 Trainer 6","order":405,"tile":[33,25,232]},{"id":"EVENT_BEAT_ROCK_TUNNEL_2_TRAINER_7","desc":"Beat Rock Tunnel 2 Trainer 7","order":406,"tile":[33,25,232]},{"id":"EVENT_SEAFOAM2_BOULDER1_DOWN_HOLE","desc":"Seafoam2 Boulder1 Down Hole","order":407,"tile":[4,2,159]},{"id":"EVENT_SEAFOAM2_BOULDER2_DOWN_HOLE","desc":"Seafoam2 Boulder2 Down Hole","order":408,"tile":[4,2,159]},{"id":"EVENT_SEAFOAM3_BOULDER1_DOWN_HOLE","desc":"Seafoam3 Boulder1 Down Hole","order":409,"tile":[5,3,160]},{"id":"EVENT_SEAFOAM3_BOULDER2_DOWN_HOLE","desc":"Seafoam3 Boulder2 Down Hole","order":410,"tile":[5,3,160]},{"id":"EVENT_SEAFOAM4_BOULDER1_DOWN_HOLE","desc":"Seafoam4 Boulder1 Down Hole","order":411,"tile":[5,12,161]},{"id":"EVENT_SEAFOAM4_BOULDER2_DOWN_HOLE","desc":"Seafoam4 Boulder2 Down Hole","order":412,"tile":[5,12,161]},{"id":"EVENT_BEAT_ROUTE_20_TRAINER_0","desc":"Beat Route 20 Trainer 0","order":413,"tile":[48,5,31]},{"id":"EVENT_BEAT_ROUTE_20_TRAINER_1","desc":"Beat Route 20 Trainer 1","order":414,"tile":[48,5,31]},{"id":"EVENT_BEAT_ROUTE_20_TRAINER_2","desc":"Beat Route 20 Trainer 2","order":415,"tile":[48,5,31]},{"id":"EVENT_BEAT_ROUTE_20_TRAINER_3","desc":"Beat Route 20 Trainer 3","order":416,"tile":[48,5,31]},{"id":"EVENT_BEAT_ROUTE_20_TRAINER_4","desc":"Beat Route 20 Trainer 4","order":417,"tile":[48,5,31]},{"id":"EVENT_BEAT_ROUTE_20_TRAINER_5","desc":"Beat Route 20 Trainer 5","order":418,"tile":[48,5,31]},{"id":"EVENT_BEAT_ROUTE_20_TRAINER_6","desc":"Beat Route 20 Trainer 6","order":419,"tile":[48,5,31]},{"id":"EVENT_BEAT_ROUTE_20_TRAINER_7","desc":"Beat Route 20 Trainer 7","order":420,"tile":[48,5,31]},{"id":"EVENT_BEAT_ROUTE_20_TRAINER_8","desc":"Beat Route 20 Trainer 8","order":421,"tile":[48,5,31]},{"id":"EVENT_BEAT_ROUTE_20_TRAINER_9","desc":"Beat Route 20 Trainer 9","order":422,"tile":[48,5,31]},{"id":"EVENT_BEAT_ARTICUNO","desc":"Beat Articuno","order":423,"tile":[11,7,162]}]};
+const INITIAL = {"start_label":"Start gry (pok\u00f3j Reda)","start_tile":[7,1,38],"goal_key":null};
+
+// ---------- decode base64 -> bit-test helpers ----------
+function b64ToBytes(b64) {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+const mapCache = new Map();
+function getMap(mapId) {
+  if (mapCache.has(mapId)) return mapCache.get(mapId);
+  const m = WORLD.maps[mapId];
+  const entry = {
+    name: m.name,
+    w: m.w,
+    h: m.h,
+    walk: b64ToBytes(m.walk),
+    grass: m.grass ? b64ToBytes(m.grass) : null,
+  };
+  mapCache.set(mapId, entry);
+  return entry;
+}
+
+function bitAt(bytes, idx) {
+  return (bytes[idx >> 3] & (1 << (idx & 7))) !== 0;
+}
+
+function isWalkable(mapId, x, y) {
+  const m = getMap(mapId);
+  if (!m || x < 0 || y < 0 || x >= m.w || y >= m.h) return false;
+  return bitAt(m.walk, y * m.w + x);
+}
+
+function isGrass(mapId, x, y) {
+  const m = getMap(mapId);
+  if (!m || !m.grass || x < 0 || y < 0 || x >= m.w || y >= m.h) return false;
+  return bitAt(m.grass, y * m.w + x);
+}
+
+function warpsFrom(mapId) {
+  return WORLD.warps[mapId] || [];
+}
+
+// ---------- BFS over (x, y, mapId) ----------
+function posKey(x, y, mapId) { return x + "," + y + "," + mapId; }
+
+function neighbors(x, y, mapId) {
+  const out = [];
+  const deltas = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  for (const [dx, dy] of deltas) {
+    const nx = x + dx, ny = y + dy;
+    if (isWalkable(mapId, nx, ny)) out.push([nx, ny, mapId]);
+  }
+  for (const [wx, wy, destMap, dx, dy] of warpsFrom(mapId)) {
+    if (wx === x && wy === y) out.push([dx, dy, destMap]);
+  }
+  return out;
+}
+
+function shortestPath(start, goal) {
+  const startKey = posKey(...start);
+  const goalKey = posKey(...goal);
+  if (startKey === goalKey) return [start];
+  const prev = new Map();
+  const seen = new Set([startKey]);
+  let queue = [start];
+  let qi = 0;
+  while (qi < queue.length) {
+    const cur = queue[qi++];
+    for (const nxt of neighbors(...cur)) {
+      const k = posKey(...nxt);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      prev.set(k, cur);
+      if (k === goalKey) {
+        const path = [nxt];
+        let ck = k;
+        while (ck !== startKey) {
+          const p = prev.get(ck);
+          path.push(p);
+          ck = posKey(...p);
+        }
+        path.reverse();
+        return path;
+      }
+      queue.push(nxt);
+    }
+  }
+  return null;
+}
+
+// ---------- goal/start option list ----------
+function mapIdByName(name) {
+  for (const id in WORLD.maps) if (WORLD.maps[id].name === name) return Number(id);
+  return null;
+}
+
+const START_PIN = {
+  key: "__start__",
+  name: INITIAL.start_label,
+  desc: "Punkt startowy",
+  tile: INITIAL.start_tile,
+  pinned: true,
+};
+
+const GOAL_OPTS = WORLD.goals.map(g => ({
+  key: g.id,
+  name: g.id,
+  desc: g.desc,
+  tile: g.tile,
+  pinned: false,
+}));
+
+const ALL_OPTS = [START_PIN, ...GOAL_OPTS];
+
+// ---------- searchable combobox ----------
+function setupCombo(inputEl, listEl, opts, onPick, initial) {
+  let filtered = opts;
+  let activeIdx = -1;
+  let selected = initial || null;
+
+  function render() {
+    listEl.innerHTML = "";
+    filtered.forEach((opt, i) => {
+      const div = document.createElement("div");
+      div.className = "combo-opt" + (opt.tile === null ? " disabled" : "") + (opt.pinned ? " pinned" : "") + (i === activeIdx ? " active" : "");
+      div.setAttribute("role", "option");
+      const nameSpan = document.createElement("span");
+      nameSpan.className = "name";
+      nameSpan.textContent = opt.name + (opt.desc && opt.desc !== opt.name ? " — " + opt.desc : "");
+      const metaSpan = document.createElement("span");
+      metaSpan.className = "meta";
+      metaSpan.textContent = opt.tile === null ? "brak wejścia" : (WORLD.maps[opt.tile[2]] ? WORLD.maps[opt.tile[2]].name : "");
+      div.appendChild(nameSpan);
+      div.appendChild(metaSpan);
+      if (opt.tile !== null) {
+        div.addEventListener("mousedown", (e) => {
+          e.preventDefault();
+          pick(opt);
+        });
+      }
+      listEl.appendChild(div);
+    });
+  }
+
+  function pick(opt) {
+    selected = opt;
+    inputEl.value = opt.name;
+    listEl.classList.remove("open");
+    onPick(opt);
+  }
+
+  function filter() {
+    const q = inputEl.value.trim().toLowerCase();
+    filtered = !q ? opts : opts.filter(o =>
+      o.name.toLowerCase().includes(q) || (o.desc || "").toLowerCase().includes(q)
+    );
+    activeIdx = -1;
+    render();
+  }
+
+  inputEl.addEventListener("focus", () => { filter(); listEl.classList.add("open"); });
+  inputEl.addEventListener("input", () => { filter(); listEl.classList.add("open"); });
+  inputEl.addEventListener("blur", () => { setTimeout(() => listEl.classList.remove("open"), 120); });
+  inputEl.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown") { e.preventDefault(); activeIdx = Math.min(activeIdx + 1, filtered.length - 1); render(); scrollActive(); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); activeIdx = Math.max(activeIdx - 1, 0); render(); scrollActive(); }
+    else if (e.key === "Enter") { e.preventDefault(); if (filtered[activeIdx] && filtered[activeIdx].tile !== null) pick(filtered[activeIdx]); }
+    else if (e.key === "Escape") { listEl.classList.remove("open"); inputEl.blur(); }
+  });
+
+  function scrollActive() {
+    const el = listEl.children[activeIdx];
+    if (el) el.scrollIntoView({ block: "nearest" });
+  }
+
+  if (initial) inputEl.value = initial.name;
+
+  return {
+    setSelected(opt) { selected = opt; inputEl.value = opt.name; },
+    getSelected() { return selected; },
+  };
+}
+
+// ---------- rendering ----------
+const CELL_MAX = 13;
+const CELL_MIN = 3;
+
+function cssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+function renderSegmentCanvas(mapId, cellsOnPath, startXY, goalXY) {
+  const m = getMap(mapId);
+  const cell = Math.max(CELL_MIN, Math.min(CELL_MAX, Math.floor(720 / Math.max(m.w, m.h))));
+  const canvas = document.createElement("canvas");
+  canvas.width = m.w * cell;
+  canvas.height = m.h * cell;
+  canvas.style.width = canvas.width + "px";
+  canvas.style.height = canvas.height + "px";
+  canvas.style.borderRadius = "4px";
+  const ctx = canvas.getContext("2d");
+
+  const wall = cssVar("--wall"), walk = cssVar("--walk"), grass = cssVar("--grass");
+  const pathC = cssVar("--path-marker"), startC = cssVar("--start-marker"), goalC = cssVar("--goal-marker");
+
+  for (let y = 0; y < m.h; y++) {
+    for (let x = 0; x < m.w; x++) {
+      let fill = wall;
+      if (isGrass(mapId, x, y)) fill = grass;
+      else if (isWalkable(mapId, x, y)) fill = walk;
+      ctx.fillStyle = fill;
+      ctx.fillRect(x * cell, y * cell, cell, cell);
+    }
+  }
+
+  ctx.fillStyle = pathC;
+  for (const [x, y] of cellsOnPath) {
+    const pad = Math.max(1, Math.floor(cell * 0.22));
+    ctx.fillRect(x * cell + pad, y * cell + pad, cell - pad * 2, cell - pad * 2);
+  }
+
+  function marker(xy, color) {
+    if (!xy) return;
+    const [x, y] = xy;
+    ctx.beginPath();
+    ctx.arc(x * cell + cell / 2, y * cell + cell / 2, Math.max(1.6, cell * 0.42), 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.lineWidth = Math.max(1, cell * 0.12);
+    ctx.strokeStyle = cssVar("--surface");
+    ctx.stroke();
+  }
+  marker(startXY, startC);
+  marker(goalXY, goalC);
+
+  return canvas;
+}
+
+function segmentsFromPath(path) {
+  const out = [];
+  for (const pos of path) {
+    if (out.length && out[out.length - 1][out[out.length - 1].length - 1][2] === pos[2]) {
+      out[out.length - 1].push(pos);
+    } else {
+      out.push([pos]);
+    }
+  }
+  return out;
+}
+
+function renderResult(startOpt, goalOpt) {
+  const resultBar = document.getElementById("result-bar");
+  const emptyState = document.getElementById("empty-state");
+  const segmentsEl = document.getElementById("segments");
+  segmentsEl.innerHTML = "";
+
+  if (!startOpt || !goalOpt) {
+    resultBar.style.display = "none";
+    emptyState.style.display = "block";
+    return;
+  }
+
+  const path = shortestPath(startOpt.tile, goalOpt.tile);
+  emptyState.style.display = "none";
+  resultBar.style.display = "flex";
+
+  if (!path) {
+    resultBar.innerHTML = `
+      <span class="pill warn">brak trasy</span>
+      <div class="metric"><span class="k">Powód</span><span class="v">graf nie obejmuje pieszych przejść Route&harr;City</span></div>
+    `;
+    return;
+  }
+
+  const segs = segmentsFromPath(path);
+  const steps = path.length - 1;
+
+  const chainHtml = segs.map(seg => `<span class="hop">${getMap(seg[0][2]).name}</span>`).join(
+    `<span aria-hidden="true">&rarr;</span>`
+  );
+
+  resultBar.innerHTML = `
+    <span class="pill ok">trasa znaleziona</span>
+    <div class="metric"><span class="k">Kroki</span><span class="v mono">${steps}</span></div>
+    <div class="metric"><span class="k">Mapy</span><span class="v mono">${segs.length}</span></div>
+    <div class="metric" style="flex:1 1 auto;"><span class="k">Przez</span><span class="route-chain">${chainHtml}</span></div>
+  `;
+
+  segs.forEach((seg, i) => {
+    const card = document.createElement("div");
+    card.className = "segment-card";
+    const mapId = seg[0][2];
+    const m = getMap(mapId);
+
+    const head = document.createElement("div");
+    head.className = "segment-head";
+    head.innerHTML = `<span class="map-name">${m.name}</span><span class="map-meta">id ${mapId} &middot; ${m.w}&times;${m.h} &middot; ${seg.length} kafelek trasy</span>`;
+    card.appendChild(head);
+
+    const wrap = document.createElement("div");
+    wrap.className = "segment-canvas-wrap";
+    const cellsOnPath = seg.map(p => [p[0], p[1]]);
+    const startXY = i === 0 ? [seg[0][0], seg[0][1]] : null;
+    const goalXY = i === segs.length - 1 ? [seg[seg.length - 1][0], seg[seg.length - 1][1]] : null;
+    wrap.appendChild(renderSegmentCanvas(mapId, cellsOnPath, startXY, goalXY));
+    card.appendChild(wrap);
+
+    segmentsEl.appendChild(card);
+
+    if (i < segs.length - 1) {
+      const conn = document.createElement("div");
+      conn.className = "connector";
+      conn.innerHTML = "&#8594;";
+      segmentsEl.appendChild(conn);
+    }
+  });
+}
+
+// ---------- wire up ----------
+document.getElementById("stat-maps").textContent = Object.keys(WORLD.maps).length;
+document.getElementById("stat-warps").textContent = Object.values(WORLD.warps).reduce((a, b) => a + b.length, 0);
+document.getElementById("stat-goals").textContent = WORLD.goals.length;
+
+let currentStart = START_PIN;
+let currentGoal = GOAL_OPTS.find(g => g.key === INITIAL.goal_key) || GOAL_OPTS.find(g => g.tile !== null) || null;
+
+const startCombo = setupCombo(
+  document.getElementById("start-input"),
+  document.getElementById("start-list"),
+  ALL_OPTS,
+  (opt) => { currentStart = opt; renderResult(currentStart, currentGoal); },
+  currentStart
+);
+
+const goalCombo = setupCombo(
+  document.getElementById("goal-input"),
+  document.getElementById("goal-list"),
+  GOAL_OPTS,
+  (opt) => { currentGoal = opt; updateStepperUI(); renderResult(currentStart, currentGoal); },
+  currentGoal
+);
+
+document.getElementById("swap-btn").addEventListener("click", () => {
+  const s = currentStart, g = currentGoal;
+  if (!g || g.tile === null) return;
+  currentStart = { key: g.key, name: g.name, desc: g.desc, tile: g.tile, pinned: false };
+  currentGoal = ALL_OPTS.find(o => o.tile && s.tile && o.tile[0] === s.tile[0] && o.tile[1] === s.tile[1] && o.tile[2] === s.tile[2]) ||
+                { key: s.key, name: s.name, desc: s.desc, tile: s.tile, pinned: false };
+  startCombo.setSelected(currentStart);
+  goalCombo.setSelected(currentGoal);
+  updateStepperUI();
+  renderResult(currentStart, currentGoal);
+});
+
+// ---------- prev/next goal stepper (walks pokemon.goal_positions.unlock_order,
+// skipping goals with no resolvable tile -- same list the combobox already
+// disables them in) ----------
+const RESOLVABLE_GOALS = GOAL_OPTS.filter(g => g.tile !== null);
+
+function resolvableIndex(goal) {
+  return RESOLVABLE_GOALS.findIndex(g => g.key === (goal && goal.key));
+}
+
+function updateStepperUI() {
+  const idx = resolvableIndex(currentGoal);
+  const posEl = document.getElementById("goal-pos");
+  const prevBtn = document.getElementById("goal-prev");
+  const nextBtn = document.getElementById("goal-next");
+  if (idx === -1) {
+    posEl.textContent = "";
+    prevBtn.disabled = true;
+    nextBtn.disabled = true;
+    return;
+  }
+  posEl.textContent = (idx + 1) + " / " + RESOLVABLE_GOALS.length;
+  prevBtn.disabled = idx <= 0;
+  nextBtn.disabled = idx >= RESOLVABLE_GOALS.length - 1;
+}
+
+// Start is derived from the new goal's position, not stored separately: the
+// tile you'd actually be standing on after this many hops is "whatever goal
+// sits right before it" (or the pinned game-start for position 0). Deriving
+// it from the index this way -- instead of chaining off whatever currentStart
+// happened to be -- makes Next/Previous exact inverses of each other with no
+// history stack: same tour pokemon.goal_positions.unlock_order() walks in
+// --auto, just steppable one leg at a time instead of dumped all at once.
+function stepGoal(delta) {
+  const idx = resolvableIndex(currentGoal);
+  const base = idx === -1 ? 0 : idx;
+  const next = Math.max(0, Math.min(RESOLVABLE_GOALS.length - 1, base + delta));
+  currentGoal = RESOLVABLE_GOALS[next];
+  currentStart = next > 0 ? RESOLVABLE_GOALS[next - 1] : START_PIN;
+  startCombo.setSelected(currentStart);
+  goalCombo.setSelected(currentGoal);
+  updateStepperUI();
+  renderResult(currentStart, currentGoal);
+}
+
+document.getElementById("goal-prev").addEventListener("click", () => stepGoal(-1));
+document.getElementById("goal-next").addEventListener("click", () => stepGoal(1));
+
+updateStepperUI();
+renderResult(currentStart, currentGoal);
+</script>
+</body>
+</html>
