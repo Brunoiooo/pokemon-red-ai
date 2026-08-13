@@ -42,6 +42,9 @@ _VECTOR_FLOAT_KEYS = (
     "dialog_id_visit_counts",
     "map_id_visit_counts",
     "reward_component_sums",
+    "map_budget_progress",
+    "stuck_tile_progress",
+    "loop_streak_progress",
 )
 _ID_SCALAR_KEYS = (
     "map_id",
@@ -69,7 +72,16 @@ _ID_SEQ_KEYS = (
 # +len(REWARD_COMPONENT_NAMES) for reward_component_sums: cumulative
 # per-episode sum of each named reward sub-component, incl. "total" (see
 # Data.reward_component_vector / REWARD_COMPONENT_NAMES).
-_BASE_VECTOR_DIM = 798 + 256 + 256 + len(REWARD_COMPONENT_NAMES)
+# +256 for map_budget_progress: episode-wide per-map_id histogram of
+# world_map_step_counts / map_truncate_budget, the map_budget truncate
+# cause's "distance to fuse" (see Data.map_budget_progress).
+# +1 for stuck_tile_progress: current tile's visited_positions / the
+# stuck_tile truncate fuse (max_useless_ticks) (see Data.stuck_tile_progress).
+# +1 for loop_streak_progress: loop_streak / the loop_streak truncate fuse
+# (max_loop_streak) (see Data.loop_streak_progress).
+_BASE_VECTOR_DIM = (
+    798 + 256 + 256 + len(REWARD_COMPONENT_NAMES) + 256 + 1 + 1
+)
 VECTOR_DIM = _BASE_VECTOR_DIM + N_GOALS
 VISIT_MASK_SIZE = 2 * 5 + 1  # map_vision_radius default
 
@@ -279,6 +291,22 @@ class PokemonRedEnv(gym.Env):
             data.battle_outcome_counts.clear()
             data.milestone_hit_counts.clear()
             data.dialog_hit_counts.clear()
+            data.truncate_hit_counts.clear()
+            # Reward/truncation-affecting, same "fresh pressure" reasoning as
+            # position_visit_counts above -- without this a map budget or
+            # loop streak partly spent on the previous curriculum leg would
+            # ramp/trip a penalty attributed to the brand-new goal.
+            data.world_map_step_counts.clear()
+            data.dialog_id_visit_counts.clear()
+            # Reward-affecting too (reward_new_map_presence) despite reading
+            # like a purely informational dwell histogram -- same "fresh
+            # pressure toward the new goal" reasoning as the counters above;
+            # previously missing here, so a map visited heavily on the prior
+            # curriculum leg kept its reward_new_map_presence bonus suppressed
+            # into the new leg instead of resetting like its siblings.
+            data.map_id_visit_counts.clear()
+            data.menu_noop_streak = 0
+            data.dialog_wrong_streak = 0
             data._last_heatmap_pos = None
             data.recent_positions.clear()
             data.recent_actions.clear()
@@ -464,6 +492,18 @@ class PokemonRedEnv(gym.Env):
             if not truncate_causes:
                 truncate_causes.add("max_steps")
 
+        # --heatmap "truncations" overlay: where episodes actually run out,
+        # not just where time is spent. Attributed here (not in Data.truncated
+        # itself) since "max_steps" above is only known at this level. Same
+        # _last_heatmap_pos anchor as the other mid-dialog-safe overlays —
+        # a stuck_dialog ending has no reliable is_world() position of its own.
+        if truncated and self.collect_heatmap:
+            pos = self.emu.data._last_heatmap_pos
+            if pos is not None:
+                self.emu.data.truncate_hit_counts[pos] = (
+                    self.emu.data.truncate_hit_counts.get(pos, 0) + 1
+                )
+
         goal_success = False
         cleared_stage: str | None = None
         # (positions, directions, transitions, rewards, steps) snapshot of the
@@ -471,7 +511,7 @@ class PokemonRedEnv(gym.Env):
         # (auto_advance clears visits mid-episode on goal success). Grabbed
         # before Data.clean()/clear_visits wipes them, so it's the "last X
         # frames" heatmap unit.
-        heatmap_run: tuple[dict, dict, dict, dict, dict, dict, dict, int] | None = None
+        heatmap_run: tuple[dict, dict, dict, dict, dict, dict, dict, dict, int] | None = None
         # Train/eval parity: success advances in-place instead of ending the episode.
         if terminated and self.auto_advance and not truncated:
             if self.collect_heatmap:
@@ -483,6 +523,7 @@ class PokemonRedEnv(gym.Env):
                     dict(self.emu.data.battle_outcome_counts),
                     dict(self.emu.data.milestone_hit_counts),
                     dict(self.emu.data.dialog_hit_counts),
+                    dict(self.emu.data.truncate_hit_counts),
                     self._step_count,
                 )
             advanced, cleared_stage = self._advance_after_goal()
@@ -501,6 +542,7 @@ class PokemonRedEnv(gym.Env):
                 dict(self.emu.data.battle_outcome_counts),
                 dict(self.emu.data.milestone_hit_counts),
                 dict(self.emu.data.dialog_hit_counts),
+                dict(self.emu.data.truncate_hit_counts),
                 self._step_count,
             )
 
@@ -521,7 +563,7 @@ class PokemonRedEnv(gym.Env):
         truncated: bool,
         goal_success: bool = False,
         cleared_stage: str | None = None,
-        heatmap_run: tuple[dict, dict, dict, dict, dict, dict, dict, int] | None = None,
+        heatmap_run: tuple[dict, dict, dict, dict, dict, dict, dict, dict, int] | None = None,
         truncate_causes: set[str] | None = None,
     ) -> dict[str, Any]:
         data: Data = self.emu.data
@@ -555,7 +597,8 @@ class PokemonRedEnv(gym.Env):
             "heatmap_battle_outcomes": heatmap_run[4] if heatmap_run else None,
             "heatmap_milestones": heatmap_run[5] if heatmap_run else None,
             "heatmap_dialogs": heatmap_run[6] if heatmap_run else None,
-            "heatmap_steps": heatmap_run[7] if heatmap_run else None,
+            "heatmap_truncations": heatmap_run[7] if heatmap_run else None,
+            "heatmap_steps": heatmap_run[8] if heatmap_run else None,
             "party_count": party_count,
             "party_avg_level": party_avg_level,
             "badges": int(sum(badges)),

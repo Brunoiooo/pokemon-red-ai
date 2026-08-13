@@ -208,6 +208,7 @@ def run(args):
                     info.get("heatmap_battle_outcomes"),
                     info.get("heatmap_milestones"),
                     info.get("heatmap_dialogs"),
+                    info.get("heatmap_truncations"),
                     info.get("heatmap_steps") or 0,
                     info.get("stage", stage),
                     info.get("party_count"),
@@ -250,17 +251,19 @@ def run(args):
             last_has_active_event = has_active_event
 
             # -v: size-scaled per-map step budget flip (see
-            # Data.map_step_budget/map_budget_exceeded) — exceeding this both
-            # penalizes every step and truncates the episode, unlike the old
-            # flat/informational-only map_dwell_budget this replaces.
+            # Data.map_step_budget/map_budget_exceeded) — exceeding this
+            # ramps a per-step penalty; the episode is only truncated at 2x
+            # that, Data.map_truncate_budget, unlike the old flat/
+            # informational-only map_dwell_budget this replaces.
             if verbose and map_id is not None:
                 budget = data.map_step_budget(int(map_id))
+                truncate_budget = data.map_truncate_budget(int(map_id))
                 used = data.world_map_step_counts.get(int(map_id), 0)
                 over_budget = used > budget
                 if over_budget != last_over_map_budget:
                     print(
                         f"  [map-budget] step={steps:4d} map={map_id} "
-                        f"used={used}/{budget} "
+                        f"used={used}/{budget}(/{truncate_budget}) "
                         f"-> {'OVER BUDGET' if over_budget else 'within budget'}"
                     )
                 last_over_map_budget = over_budget
@@ -311,12 +314,22 @@ def run(args):
             )
             if show_step:
                 aname = ACTION_NAMES[action_i] if 0 <= action_i < len(ACTION_NAMES) else str(action_i)
+                # -vv only: current map's world_map_step_counts vs its step/
+                # truncate budget (see Data.map_step_budget/map_truncate_budget),
+                # every step -- same counter as the [map-budget] transition log
+                # above and debug_play.py's map_counter_str, but unconditional.
+                map_ctr = ""
+                if verbose >= 2 and map_id is not None:
+                    ctr_budget = data.map_step_budget(int(map_id))
+                    ctr_truncate_budget = data.map_truncate_budget(int(map_id))
+                    ctr_used = data.world_map_step_counts.get(int(map_id), 0)
+                    map_ctr = f" map_ctr={ctr_used}/{ctr_budget}(/{ctr_truncate_budget})"
                 print(
                     f"  [step] {steps:4d} act={aname:6s} rew={reward:+.4f} "
                     f"total={total:7.2f} map={map_id} mode={_mode_flags(raw.emu):9s} "
                     f"loop={int(bool(info.get('loop_flag')))} "
                     f"in_goal_map={int(has_active_event)} "
-                    f"ms={info.get('milestone')}"
+                    f"ms={info.get('milestone')}{map_ctr}"
                 )
 
             # -vv: per-hit damage-reward scale (which levels it's judged against),
@@ -531,6 +544,7 @@ def run_batch(args):
             info.get("heatmap_battle_outcomes"),
             info.get("heatmap_milestones"),
             info.get("heatmap_dialogs"),
+            info.get("heatmap_truncations"),
             info.get("heatmap_steps") or 0,
             info.get("party_count"),
             info.get("party_avg_level"),
@@ -543,7 +557,7 @@ def run_batch(args):
         if heatmap_queue is not None:
             from utils.PositionHeatmap import push_episode
 
-            push_episode(heatmap_queue, *payload[:8], stage_label, *payload[8:])
+            push_episode(heatmap_queue, *payload[:9], stage_label, *payload[9:])
 
     runs_done = 0
     goal_successes = 0
@@ -680,7 +694,7 @@ def main():
         "--batch-metrics", nargs="+",
         choices=[
             "ticks", "reward", "winrate", "fleerate", "recency", "dialog_recency",
-            "milestones",
+            "milestones", "truncations",
         ],
         default=["ticks"],
         help="Which heatmap metric(s) to render in --batch mode (default: ticks)",

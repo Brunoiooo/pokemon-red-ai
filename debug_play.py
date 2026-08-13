@@ -193,6 +193,18 @@ def bag_line(emu: Emulator) -> str:
     )
 
 
+def map_counter_str(emu: Emulator) -> str:
+    """Current map's world_map_step_counts vs its step/truncate budget (see
+    Data.map_step_budget / Data.map_truncate_budget) -- the same per-map
+    dwell counter Data.clean() / set_curriculum(clear_visits=True) zero out."""
+    data = emu.data
+    mid = data.map_id(emu.pyboy.memory)
+    budget = data.map_step_budget(mid)
+    truncate_budget = data.map_truncate_budget(mid)
+    used = data.world_map_step_counts.get(mid, 0)
+    return f"{used}/{budget}(/{truncate_budget})"
+
+
 def fuse_line(emu: Emulator) -> str:
     data = emu.data
     pos = data.get_position()
@@ -205,13 +217,12 @@ def fuse_line(emu: Emulator) -> str:
         f"loop={data.loop_streak}/{data.max_loop_streak}"
     )
     # Size-scaled per-map world-step budget (see Data.map_step_budget) —
-    # exceeding this both penalizes every step and truncates the episode
-    # (Data.map_budget_exceeded), unlike the old flat/informational-only
+    # exceeding it ramps a per-step penalty (Data.reward_map_budget); the
+    # episode is only truncated at 2x that, Data.map_truncate_budget (see
+    # Data.map_truncate_exceeded), unlike the old flat/informational-only
     # map_dwell_budget display this replaces.
     mid = data.map_id(emu.pyboy.memory)
-    budget = data.map_step_budget(mid)
-    used = data.world_map_step_counts.get(mid, 0)
-    line += f" map_budget={used}/{budget}"
+    line += f" map_budget[{mid}]={map_counter_str(emu)}"
     return line
 
 
@@ -272,6 +283,16 @@ def _clear_visits(data) -> None:
     data.direction_counts.clear()
     data.map_transitions.clear()
     data.reward_sums.clear()
+    data.reward_component_sums.clear()
+    data.battle_outcome_counts.clear()
+    data.milestone_hit_counts.clear()
+    data.dialog_hit_counts.clear()
+    data.truncate_hit_counts.clear()
+    data.world_map_step_counts.clear()
+    data.dialog_id_visit_counts.clear()
+    data.map_id_visit_counts.clear()
+    data.menu_noop_streak = 0
+    data.dialog_wrong_streak = 0
     data._last_heatmap_pos = None
     data.recent_positions.clear()
     data.recent_actions.clear()
@@ -447,6 +468,10 @@ def run(args: argparse.Namespace) -> None:
         )
         step_i += 1
         total_reward += float(reward)
+
+        # Always shown, every environment step (not gated by --all-steps /
+        # "interesting", unlike the rest of this log) -- see map_counter_str.
+        print(f"       map={map_counter_str(emulator)}")
 
         cleared_goal: str | None = None
         advanced = False

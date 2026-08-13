@@ -323,6 +323,13 @@ class Data:
     # has no world position of its own, so it's anchored on the last known
     # world tile.
     dialog_hit_counts: dict[tuple[int, int, int], int] = field(default_factory=dict)
+    # Truncation endings per (x, y, map_id) tile, for --heatmap's
+    # "truncations" overlay — where episodes actually run out (a stuck
+    # fuse, a map/step budget, ...; see TRUNCATE_CAUSES), not just where
+    # time is spent. Populated by PokemonRedEnv.step() itself (not here),
+    # since the "max_steps" cause is only known at the env level — same
+    # _last_heatmap_pos attribution as the other mid-dialog-safe overlays.
+    truncate_hit_counts: dict[tuple[int, int, int], int] = field(default_factory=dict)
     _last_heatmap_pos: tuple[int, int, int] | None = None
     # Per-(map_id, dialog_id) step counter — dialog_id is read from a single
     # byte (0-255), so this backs a 256-wide per-map histogram exposed to the
@@ -334,15 +341,20 @@ class Data:
     # map_id_visit_grid): how long (in steps) the agent has spent on each map
     # this episode, the map analogue of dialog_id_visit_counts. Increments
     # every step regardless of mode (world/dialog/battle/menu) — a gym
-    # battle or a long dialog on a map is still time spent on that map.
+    # battle or a long dialog on a map is still time spent on that map. Also
+    # drives reward_new_map_presence's decay (see below) -- NOT purely
+    # informational despite map_visit_grid_cap's comment (that one is about
+    # the grid's normalization cap specifically); reset alongside
+    # world_map_step_counts/dialog_id_visit_counts in
+    # PokemonRedEnv.set_curriculum(clear_visits=True)/debug_play._clear_visits.
     map_id_visit_counts: dict[int, int] = field(default_factory=dict)
     # Normalization cap for map_id_visit_grid — same "distinguish low counts,
     # saturate the tail" shape as visit_mask_grid's fixed 10, but map dwell
     # times run for whole episodes rather than single tile visits, so the cap
     # is much larger. Tied to MAP_DWELL_BUDGET instead of its own constant —
-    # this is purely informational input for the model (there is no reward
-    # penalty tied to it), so the cap just needs a sensible whole-episode
-    # scale, and MAP_DWELL_BUDGET already is one.
+    # this cap itself is purely a display/normalization scale for the grid
+    # input, not a reward threshold — but the underlying map_id_visit_counts
+    # it normalizes *is* reward-affecting (see reward_new_map_presence).
     map_visit_grid_cap: int = MAP_DWELL_BUDGET
     # Per-map step allowance used to derive curriculum_config's episode
     # max_steps (see MAP_DWELL_BUDGET) and shown by debug_play.py/
@@ -355,9 +367,11 @@ class Data:
     # from pret/pokered's map_const macro) — no extra multiplier, so the
     # budget is literally the map's block area. Only fills while is_world()
     # (see _tick_map_budget) — dialog/battle/menu time on a map doesn't
-    # consume it — but once exceeded, the penalty applies every step
+    # consume it — but once exceeded, a per-step penalty ramps up every step
     # regardless of mode (see map_budget_exceeded/reward_map_budget), so
-    # ducking into a menu can't dodge it.
+    # ducking into a menu can't dodge it. The episode itself isn't truncated
+    # until double that budget (see map_truncate_budget/truncated) — the
+    # ramp gets a full budget's worth of room to bite before the hard cutoff.
     world_map_step_counts: dict[int, int] = field(default_factory=dict)
     map_budget_penalty: float = -0.02
 
@@ -519,6 +533,7 @@ class Data:
         self._prev_satisfied_events = frozenset()
         self.battle_outcome_counts = {}
         self.milestone_hit_counts = {}
+        self.truncate_hit_counts = {}
         self._last_heatmap_pos = None
         self.recent_actions.clear()
         self.recent_positions.clear()
@@ -829,6 +844,43 @@ class Data:
         cap = self.map_visit_grid_cap
         return [min(self.map_id_visit_counts.get(m, 0), cap) / cap for m in range(256)]
 
+    def map_budget_progress(self) -> list[float]:
+        """Episode-wide histogram, one entry per possible map_id byte value
+        (0-255), of world_map_step_counts[m] / map_truncate_budget(m) -- how
+        close each map the agent has spent time on is to the map_budget
+        truncate cause, the same per-map_id histogram shape as
+        map_id_visit_grid/dialog_id_visit_grid. Unclamped per entry (no
+        min()-cap) -- truncated()'s check runs every step regardless of
+        mode, so the *current* map's entry can only ever land marginally
+        over 1.0 for the single step before the episode actually ends; maps
+        no longer occupied are frozen wherever they were left.
+        """
+        return [
+            self.world_map_step_counts.get(m, 0) / self.map_truncate_budget(m)
+            for m in range(256)
+        ]
+
+    def stuck_tile_progress(self) -> list[float]:
+        """Current tile's visited_positions duration as a fraction of the
+        stuck_tile truncate fuse (max_useless_ticks) -- the same "distance to
+        the fuse" signal core_data already gives for in_battle_ticks/
+        in_menu_ticks/in_dialog_ticks, for the one fuse (stuck_tile) that
+        previously had no direct normalized input; visit_mask_grid/
+        position_visit_counts is a different counter (revisit frequency, cap
+        10) and does not track this. Unclamped like core_data's ratios.
+        """
+        return self.data_normalizer(
+            [self.visited_positions.get(self.get_position(), 0)],
+            max=self.max_useless_ticks,
+        )
+
+    def loop_streak_progress(self) -> list[float]:
+        """loop_streak as a fraction of the loop_streak truncate fuse
+        (max_loop_streak) -- previously not exposed to the model at all.
+        Unclamped like core_data's tick ratios.
+        """
+        return self.data_normalizer([self.loop_streak], max=self.max_loop_streak)
+
     def inputs(self):
         r = self.map_vision_radius
         return {
@@ -872,6 +924,15 @@ class Data:
             ),
             "reward_component_sums": torch.tensor(
                 self.reward_component_vector(), dtype=torch.float32
+            ),
+            "map_budget_progress": torch.tensor(
+                self.map_budget_progress(), dtype=torch.float32
+            ),
+            "stuck_tile_progress": torch.tensor(
+                self.stuck_tile_progress(), dtype=torch.float32
+            ),
+            "loop_streak_progress": torch.tensor(
+                self.loop_streak_progress(), dtype=torch.float32
             ),
             "index_of_current_pokemon_send_out": torch.tensor(
                 self.index_of_current_pokemon_send_out(self.pyboy.memory),
@@ -1207,7 +1268,18 @@ class Data:
                     penalty += self.action_pattern_penalty
                     causes.add("action_pattern")
         if len(actions) >= 8 and len(set(actions[-8:])) == 1:
-            if not interacting or not (in_dialog or in_battle):
+            # Same talk-to-NPC exemption as check 1: is_world() implies
+            # neither in_dialog nor in_battle, so "not (in_dialog or
+            # in_battle)" was always True there regardless of `interacting` —
+            # repeated A/B while still in world mode (waiting for a textbox
+            # to open, or for a trainer's sight-triggered forced walk to
+            # kick in) got flagged as a stuck loop exactly like holding a
+            # movement button into a wall, even though the agent has no way
+            # to speed either of those up. Once a real dialog/battle opens,
+            # is_world() goes False and this check applies normally again
+            # (see the dialog_wrong / in-battle turn-spam handling below).
+            world_interact_wait = interacting and self.is_world(self.pyboy.memory)
+            if not world_interact_wait and (not interacting or not (in_dialog or in_battle)):
                 net_stuck = True
                 if self.is_world(self.pyboy.memory) and len(self.recent_positions) >= 8:
                     net_stuck = self.recent_positions[-8] == self.get_position()
@@ -1633,13 +1705,30 @@ class Data:
         return bool(memory[addr] & (1 << bit))
 
     def map_step_budget(self, map_id: int) -> int:
-        """Size-scaled world-step allowance for one map this episode: the
-        map's own width*height in blocks, no multiplier. Floor of 64 so a
-        degenerate/UNUSED_MAP entry (width=height=0 in map_constants.py)
-        still gets a usable budget.
+        """Size-scaled world-step allowance for one map this episode before
+        reward_map_budget's per-step penalty starts ramping: half of
+        map_truncate_budget (see there for the area*new_position_decay_visits
+        derivation) -- derived from it, not independently floored, so the two
+        never drift out of their exact 1:2 ratio.
+        """
+        return self.map_truncate_budget(map_id) // 2
+
+    def map_truncate_budget(self, map_id: int) -> int:
+        """Hard step cutoff that ends the episode (see truncated()) -- the
+        map's own width*height in blocks (floor of 64 so a degenerate/
+        UNUSED_MAP entry with width=height=0 in map_constants.py still gets a
+        usable budget), scaled by new_position_decay_visits.
+
+        That reuses the same "how many times can one tile be walked before
+        it's stale" constant reward_position's exploration_reward decays
+        against, instead of an unrelated hand-picked multiplier: the budget
+        is exactly the step count it'd take to visit every tile on the map
+        new_position_decay_visits times each. map_step_budget (half of this)
+        is where reward_map_budget's ramp starts; this is where it tops out
+        and truncated() ends the episode.
         """
         area = _map_constants.map_area_blocks(map_id)
-        return max(64, area)
+        return max(64, area) * self.new_position_decay_visits
 
     def _tick_map_budget(self, memory: PyBoyMemoryView | bytes) -> None:
         """Advance the current map's world-step counter. Called once per step
@@ -1652,7 +1741,10 @@ class Data:
         self.world_map_step_counts[mid] = self.world_map_step_counts.get(mid, 0) + 1
 
     def map_budget_exceeded(self, memory: PyBoyMemoryView | bytes | None = None) -> bool:
-        """True once the current map's size-scaled step budget is used up.
+        """True once the current map's step count has passed map_step_budget
+        -- the point reward_map_budget's per-step penalty ramp starts. Does
+        NOT by itself end the episode; see map_truncate_exceeded for the (2x
+        higher) hard cutoff checked by truncated().
 
         Checked every step regardless of mode: a policy stuck cycling through
         a menu or a battle on an already-overstayed map should not be able to
@@ -1664,8 +1756,32 @@ class Data:
         mid = self.map_id(memory)
         return self.world_map_step_counts.get(mid, 0) > self.map_step_budget(mid)
 
+    def map_truncate_exceeded(self, memory: PyBoyMemoryView | bytes | None = None) -> bool:
+        """True once the current map's step count has passed
+        map_truncate_budget (2x map_step_budget) -- the hard cutoff checked
+        by truncated(), same every-mode gating as map_budget_exceeded."""
+        if memory is None:
+            memory = self.pyboy.memory
+        mid = self.map_id(memory)
+        return self.world_map_step_counts.get(mid, 0) > self.map_truncate_budget(mid)
+
     def reward_map_budget(self, memory: PyBoyMemoryView | bytes | None = None) -> float:
-        return self.map_budget_penalty if self.map_budget_exceeded(memory) else 0.0
+        """Per-step penalty once map_step_budget is exceeded, ramping linearly
+        from map_budget_penalty at the budget up to 10x that at
+        map_truncate_budget (2x budget) -- same ramp shape as
+        reward_position/reward_dialog/reward_battle's waste_factor, capped at
+        the point truncated() ends the episode instead of growing forever.
+        """
+        if memory is None:
+            memory = self.pyboy.memory
+        mid = self.map_id(memory)
+        budget = self.map_step_budget(mid)
+        steps = self.world_map_step_counts.get(mid, 0)
+        if steps <= budget:
+            return 0.0
+        ramp_span = self.map_truncate_budget(mid) - budget
+        waste_factor = min(steps - budget, ramp_span) / ramp_span
+        return self.map_budget_penalty * (1.0 + waste_factor * 9.0)
 
     def active_map_events(
         self, map_id: int | None = None, memory: PyBoyMemoryView | bytes | None = None
@@ -1805,9 +1921,11 @@ class Data:
         stuck_loop = self.loop_streak >= self.max_loop_streak
         stuck_battle = self.max_useless_battle_ticks <= self.in_battle_ticks
         stuck_menu = self.max_useless_ticks <= self.in_menu_ticks
-        # Size-scaled per-map budget (see map_budget_exceeded) — checked in
-        # every mode, same as its per-step penalty in reward().
-        map_budget = self.map_budget_exceeded(self.pyboy.memory)
+        # Size-scaled per-map hard cutoff (see map_truncate_exceeded) — 2x
+        # map_step_budget, checked in every mode same as reward_map_budget's
+        # ramp. The lower map_step_budget threshold only starts that ramping
+        # per-step penalty; it does not truncate by itself.
+        map_budget = self.map_truncate_exceeded(self.pyboy.memory)
 
         causes: set[str] = set()
         if stuck_tile:

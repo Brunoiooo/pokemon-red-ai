@@ -55,6 +55,7 @@ class HeatmapCallback(BaseCallback):
                     info.get("heatmap_battle_outcomes"),
                     info.get("heatmap_milestones"),
                     info.get("heatmap_dialogs"),
+                    info.get("heatmap_truncations"),
                     info.get("heatmap_steps") or 0,
                     info.get("stage"),
                     info.get("party_count"),

@@ -4,10 +4,11 @@ training/eval. Opt-in via --heatmap on train_ppo.py / run_eval_ppo.py.
 
 Data flow: PokemonRedEnv snapshots Data.visited_positions / direction_counts
 / map_transitions / reward_sums / battle_outcome_counts / milestone_hit_counts
-at every "run" boundary (episode end, or a mid-episode curriculum-leg clear)
-into info["heatmap_positions"/"heatmap_directions"/"heatmap_transitions"/
+/ dialog_hit_counts / truncate_hit_counts at every "run" boundary (episode
+end, or a mid-episode curriculum-leg clear) into
+info["heatmap_positions"/"heatmap_directions"/"heatmap_transitions"/
 "heatmap_rewards"/"heatmap_battle_outcomes"/"heatmap_milestones"/
-"heatmap_steps"].
+"heatmap_dialogs"/"heatmap_truncations"/"heatmap_steps"].
 A callback (training) or the eval loop (eval) forwards those snapshots
 through a multiprocessing.Queue to _run_window, which runs in a separate
 process and owns the matplotlib window.
@@ -39,7 +40,7 @@ Two view modes (toggle with 'c'):
     color scale. Beyond that cap, the remainder are just named in the last
     slot's text instead of rendered.
 
-Six color metrics (cycle with 'r'), independent of the view mode:
+Seven color metrics (cycle with 'r'), independent of the view mode:
   - ticks: avg ticks/run per tile (time spent) — the original view.
   - reward: avg reward/run per tile — where reward is actually earned, not
     just where time is spent. A battle-won/lost payout is attributed to the
@@ -68,6 +69,13 @@ Six color metrics (cycle with 'r'), independent of the view mode:
   - milestones: avg story-milestone hits/run per tile — how much of the
     curriculum's critical path actually lines up with where the agent
     spends time, same attribution as reward.
+  - truncations: avg episode-ending truncations/run per tile — where runs
+    actually run out (a stuck fuse, a map/step budget, ...; see
+    Data.TRUNCATE_CAUSES), not just where time is spent. Same attribution
+    as reward/milestones. A camping/farming spot that never gets punished
+    stays quiet here even if it's hot on the ticks view; a spot where the
+    policy reliably gets stuck shows up bright regardless of how much
+    total time it accumulates.
   Rate metrics (winrate/fleerate) are left blank on tiles with too few
   recorded battles (< _MIN_BATTLE_SAMPLES) rather than shown at a noisy
   100%/0%.
@@ -186,6 +194,7 @@ class RollingHeatmapAggregator:
                 dict[tuple[int, int, int], float],
                 dict[tuple[int, int, int], dict[str, int]],
                 dict[tuple[int, int, int], int],
+                dict[tuple[int, int, int], int],
             ]
         ] = deque()
         self.total_frames = 0
@@ -201,6 +210,9 @@ class RollingHeatmapAggregator:
         self.sum_battle_outcomes: dict[int, dict[tuple[int, int], dict[str, int]]] = {}
         # map_id -> {(x, y): summed story-milestone hit count across runs in window}
         self.sum_milestones: dict[int, dict[tuple[int, int], int]] = {}
+        # map_id -> {(x, y): summed truncation-ending count across runs in
+        # window} — same piggyback-on-ticks eviction as sum_milestones.
+        self.sum_truncations: dict[int, dict[tuple[int, int], int]] = {}
         # map_id -> {(x, y): total_episodes value as of the last run that
         # touched this tile} — permanent, never evicted (like
         # transition_votes), so "recency" can keep pointing at how long ago
@@ -238,6 +250,7 @@ class RollingHeatmapAggregator:
         battle_outcomes: dict[tuple[int, int, int], dict[str, int]] | None,
         milestones: dict[tuple[int, int, int], int] | None,
         dialogs: dict[tuple[int, int, int], int] | None,
+        truncations: dict[tuple[int, int, int], int] | None,
         steps: int,
         party_count: int | None = None,
         party_avg_level: float | None = None,
@@ -250,6 +263,7 @@ class RollingHeatmapAggregator:
         battle_outcomes = battle_outcomes or {}
         milestones = milestones or {}
         dialogs = dialogs or {}
+        truncations = truncations or {}
         for (x, y, map_id) in dialogs:
             self.last_dialog_seen.setdefault(map_id, {})[(x, y)] = self.total_episodes
         if party_count is not None and party_avg_level is not None:
@@ -258,7 +272,10 @@ class RollingHeatmapAggregator:
             self._party_history.append((party_count, party_avg_level))
         if self.window_frames is not None:
             self._runs.append(
-                (steps, positions, directions, rewards, battle_outcomes, milestones)
+                (
+                    steps, positions, directions, rewards, battle_outcomes,
+                    milestones, truncations,
+                )
             )
         self.total_frames += steps
         touched_maps = set()
@@ -287,6 +304,9 @@ class RollingHeatmapAggregator:
         for (x, y, map_id), n in milestones.items():
             grid = self.sum_milestones.setdefault(map_id, {})
             grid[(x, y)] = grid.get((x, y), 0) + n
+        for (x, y, map_id), n in truncations.items():
+            grid = self.sum_truncations.setdefault(map_id, {})
+            grid[(x, y)] = grid.get((x, y), 0) + n
         for key, votes in (transitions or {}).items():
             dest = self.transition_votes.setdefault(key, {})
             for delta, c in votes.items():
@@ -296,7 +316,7 @@ class RollingHeatmapAggregator:
 
     def _evict(self) -> None:
         while self._runs and self.total_frames > self.window_frames:
-            steps, positions, directions, rewards, battle_outcomes, milestones = (
+            steps, positions, directions, rewards, battle_outcomes, milestones, truncations = (
                 self._runs.popleft()
             )
             self.total_frames -= steps
@@ -374,6 +394,19 @@ class RollingHeatmapAggregator:
                     grid.pop((x, y), None)
                 if not grid:
                     self.sum_milestones.pop(map_id, None)
+            for (x, y, map_id), n in truncations.items():
+                grid = self.sum_truncations.get(map_id)
+                if grid is None:
+                    continue
+                # Same piggyback-on-ticks rule as milestones.
+                still_ticked = (x, y) in self.sum_ticks.get(map_id, {})
+                remaining = grid.get((x, y), 0) - n
+                if still_ticked:
+                    grid[(x, y)] = remaining
+                else:
+                    grid.pop((x, y), None)
+                if not grid:
+                    self.sum_truncations.pop(map_id, None)
             # transition_votes is intentionally NOT evicted here — map
             # connectivity is structural, not recent-behavior traffic.
 
@@ -395,6 +428,8 @@ class RollingHeatmapAggregator:
             return self.sum_rewards
         if metric == "milestones":
             return self.sum_milestones
+        if metric == "truncations":
+            return self.sum_truncations
         return self.sum_ticks
 
     @staticmethod
@@ -411,18 +446,20 @@ class RollingHeatmapAggregator:
 
     def average_grid(self, map_id: int, metric: str = "ticks"):
         """(grid, x0, y0): grid[y - y0, x - x0] = avg value/run for
-        ``metric`` ("ticks" or "reward"), a rate in [0, 1] for "winrate"
-        (win / (win+loss)) or "fleerate" (smart / (smart+coward)), or
-        episodes-since-last-visit for "recency" / episodes-since-last-dialog
-        for "dialog_recency", NaN where unvisited (or, for the rate metrics,
-        under-sampled; for dialog_recency, never dialog-triggered) in the
-        current window. None if the map isn't in the window.
+        ``metric`` ("ticks", "reward", "milestones", or "truncations"), a
+        rate in [0, 1] for "winrate" (win / (win+loss)) or "fleerate"
+        (smart / (smart+coward)), or episodes-since-last-visit for
+        "recency" / episodes-since-last-dialog for "dialog_recency", NaN
+        where unvisited (or, for the rate metrics, under-sampled; for
+        dialog_recency, never dialog-triggered) in the current window. None
+        if the map isn't in the window.
 
         The footprint (bounding box + which cells are "visited") always
-        follows the ticks grid — reward/winrate/fleerate are attributed to a
-        subset of the tiles visited_positions tracks, so ticks is the
-        authoritative visited-set; a tile with exactly zero net reward is
-        still "visited", not NaN.
+        follows the ticks grid — reward/winrate/fleerate/milestones/
+        truncations are attributed to a subset of the tiles
+        visited_positions tracks, so ticks is the authoritative
+        visited-set; a tile with exactly zero net reward is still
+        "visited", not NaN.
         """
         grid_ticks = self.sum_ticks.get(map_id)
         n_runs = self.run_count.get(map_id, 0)
@@ -606,7 +643,7 @@ class RollingHeatmapAggregator:
         """Stitches every map reachable from ``anchor`` (default: the
         most-visited map in the current window) into one canvas, colored by
         ``metric`` ("ticks", "reward", "winrate", "fleerate", "recency",
-        "dialog_recency", or "milestones").
+        "dialog_recency", "milestones", or "truncations").
 
         Returns (grid, x0, y0, offsets, connected_maps, unconnected_maps) or
         None if there's nothing in the window yet.
@@ -874,9 +911,14 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
     # avg/run convention as reward — distinct colormap from ticks/recency.
     milestones_cmap = plt.get_cmap("plasma").copy()
     milestones_cmap.set_bad(color="#111111")
+    # truncations: same non-negative sparse-count shape as milestones (most
+    # tiles are 0, a hit means a run actually ended there) — distinct
+    # colormap so it doesn't read as the same metric at a glance.
+    truncations_cmap = plt.get_cmap("magma").copy()
+    truncations_cmap.set_bad(color="#111111")
     _METRICS = (
         "ticks", "reward", "winrate", "fleerate", "recency", "dialog_recency",
-        "milestones",
+        "milestones", "truncations",
     )
 
     fig = plt.figure(figsize=(11, 8))
@@ -1190,8 +1232,8 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
         finite = grid[~np.isnan(grid)]
         if state["metric"] == "reward":
             im.set_cmap(reward_cmap)
-            vmax = float(np.abs(finite).max()) if finite.size else 1.0
-            vmax = max(vmax, 1.0)
+            vmax = float(np.abs(finite).max()) if finite.size else 0.0
+            vmax = vmax if vmax > 0 else 1.0
             im.set_clim(-vmax, vmax)
             cbar.set_label("avg reward / run")
         elif state["metric"] == "winrate":
@@ -1204,23 +1246,28 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
             cbar.set_label("flee smart-rate (smart / smart+coward)")
         elif state["metric"] == "recency":
             im.set_cmap(recency_cmap)
-            vmax = float(finite.max()) if finite.size else 1.0
-            im.set_clim(0, max(vmax, 1.0))
+            vmax = float(finite.max()) if finite.size else 0.0
+            im.set_clim(0, vmax if vmax > 0 else 1.0)
             cbar.set_label("episodes since last visit")
         elif state["metric"] == "dialog_recency":
             im.set_cmap(dialog_recency_cmap)
-            vmax = float(finite.max()) if finite.size else 1.0
-            im.set_clim(0, max(vmax, 1.0))
+            vmax = float(finite.max()) if finite.size else 0.0
+            im.set_clim(0, vmax if vmax > 0 else 1.0)
             cbar.set_label("episodes since last dialog")
         elif state["metric"] == "milestones":
             im.set_cmap(milestones_cmap)
-            vmax = float(finite.max()) if finite.size else 1.0
-            im.set_clim(0, max(vmax, 1.0))
+            vmax = float(finite.max()) if finite.size else 0.0
+            im.set_clim(0, vmax if vmax > 0 else 1.0)
             cbar.set_label("avg milestone hits / run")
+        elif state["metric"] == "truncations":
+            im.set_cmap(truncations_cmap)
+            vmax = float(finite.max()) if finite.size else 0.0
+            im.set_clim(0, vmax if vmax > 0 else 1.0)
+            cbar.set_label("avg truncations / run")
         else:
             im.set_cmap(ticks_cmap)
-            vmax = float(finite.max()) if finite.size else 1.0
-            im.set_clim(0, max(vmax, 1.0))
+            vmax = float(finite.max()) if finite.size else 0.0
+            im.set_clim(0, vmax if vmax > 0 else 1.0)
             cbar.set_label("avg ticks / run")
 
     def _apply_extent(x0: int, y0: int, grid) -> None:
@@ -1437,12 +1484,12 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
                     return
                 (
                     positions, directions, transitions, rewards,
-                    battle_outcomes, milestones, dialogs, steps, stage,
-                    party_count, party_avg_level,
+                    battle_outcomes, milestones, dialogs, truncations, steps,
+                    stage, party_count, party_avg_level,
                 ) = item
                 agg_all.add_episode(
                     positions, directions, transitions, rewards,
-                    battle_outcomes, milestones, dialogs, steps,
+                    battle_outcomes, milestones, dialogs, truncations, steps,
                     party_count, party_avg_level,
                 )
                 stage_label = stage or "unknown"
@@ -1451,7 +1498,7 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
                     stage_label, RollingHeatmapAggregator(window_frames)
                 ).add_episode(
                     positions, directions, transitions, rewards,
-                    battle_outcomes, milestones, dialogs, steps,
+                    battle_outcomes, milestones, dialogs, truncations, steps,
                     party_count, party_avg_level,
                 )
                 if is_new_stage:
@@ -1494,6 +1541,7 @@ def push_episode(
     battle_outcomes: dict | None,
     milestones: dict | None,
     dialogs: dict | None,
+    truncations: dict | None,
     steps: int,
     stage: str | None = None,
     party_count: int | None = None,
@@ -1505,8 +1553,8 @@ def push_episode(
         q.put_nowait(
             (
                 positions, directions, transitions, rewards,
-                battle_outcomes, milestones, dialogs, steps, stage,
-                party_count, party_avg_level,
+                battle_outcomes, milestones, dialogs, truncations, steps,
+                stage, party_count, party_avg_level,
             )
         )
     except _queue_mod.Full:
@@ -1561,6 +1609,7 @@ def save_heatmap_images(
         "recency": plt.get_cmap("viridis").copy(),
         "dialog_recency": plt.get_cmap("cividis").copy(),
         "milestones": plt.get_cmap("plasma").copy(),
+        "truncations": plt.get_cmap("magma").copy(),
     }
     for cmap in cmap_of.values():
         cmap.set_bad(color="#111111")
@@ -1572,24 +1621,26 @@ def save_heatmap_images(
         "recency": "episodes since last visit",
         "dialog_recency": "episodes since last dialog",
         "milestones": "avg milestone hits / run",
+        "truncations": "avg truncations / run",
     }
 
     def _clim(grid, metric: str) -> tuple[float, float]:
         finite = grid[~np.isnan(grid)]
         if metric == "reward":
-            vmax = float(np.abs(finite).max()) if finite.size else 1.0
-            return -max(vmax, 1.0), max(vmax, 1.0)
+            vmax = float(np.abs(finite).max()) if finite.size else 0.0
+            vmax = vmax if vmax > 0 else 1.0
+            return -vmax, vmax
         if metric in ("winrate", "fleerate"):
             return 0.0, 1.0
-        vmax = float(finite.max()) if finite.size else 1.0
-        return 0.0, max(vmax, 1.0)
+        vmax = float(finite.max()) if finite.size else 0.0
+        return 0.0, vmax if vmax > 0 else 1.0
 
     def _value_fmt(metric: str) -> str:
         if metric == "reward":
             return "{:+.2f}"
         if metric in ("winrate", "fleerate"):
             return "{:.0%}"
-        if metric == "milestones":
+        if metric in ("milestones", "truncations"):
             return "{:.2f}"
         return "{:.0f}"
 

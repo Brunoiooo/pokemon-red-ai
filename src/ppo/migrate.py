@@ -132,6 +132,43 @@ NEW_BASE_BLOCKS_SINCE: list[dict] = [
             "Data.reward_component_vector / REWARD_COMPONENT_NAMES)."
         ),
     },
+    {
+        "name": "map_budget_progress",
+        # Episode-wide per-map_id histogram, same 256-wide byte-range shape
+        # as dialog_id_visit_counts/map_id_visit_counts above (not a single
+        # scalar -- see Data.map_budget_progress).
+        "width": 256,
+        # Same skeleton offset as the three blocks above (all four splice in
+        # right before "map_id"); declared after them so the offset
+        # tie-break orders it right after, matching env.pokemon_red_env's
+        # _VECTOR_FLOAT_KEYS tuple order.
+        "offset": 733,
+        "note": (
+            "2026-08-13: per-map_id world_map_step_counts / "
+            "map_truncate_budget histogram added to the observation (see "
+            "Data.map_budget_progress)."
+        ),
+    },
+    {
+        "name": "stuck_tile_progress",
+        "width": 1,
+        "offset": 733,
+        "note": (
+            "2026-08-13: current tile's visited_positions / max_useless_ticks "
+            "(stuck_tile truncate fuse) ratio added to the observation (see "
+            "Data.stuck_tile_progress)."
+        ),
+    },
+    {
+        "name": "loop_streak_progress",
+        "width": 1,
+        "offset": 733,
+        "note": (
+            "2026-08-13: loop_streak / max_loop_streak (loop_streak truncate "
+            "fuse) ratio added to the observation (see "
+            "Data.loop_streak_progress)."
+        ),
+    },
 ]
 
 
