@@ -386,10 +386,11 @@ class Data:
 
     # Per-step shaping toward whichever map currently has an unfinished,
     # reachable event (see active_map_events): small reward for being on a
-    # map with one pending, small penalty for loitering on a map with none —
-    # two sides of the same signal, not two independent knobs.
+    # map with one pending. No penalty for being on a map with none —
+    # an active-but-actually-unreachable event (e.g. its parent event_graph
+    # edge is wrong) turned that into a tax on every other map, which made
+    # the policy camp the falsely-"active" map instead of exploring.
     active_map_event_reward: float = 0.01
-    inactive_map_event_penalty: float = -0.005
 
     # Generic regression safety net over GOAL_CANDIDATES (see
     # reward_generic_progress). Should rarely fire — event_graph's auto
@@ -1870,10 +1871,9 @@ class Data:
 
     def reward_active_map_presence(self, memory: PyBoyMemoryView | bytes | None = None) -> float:
         """Small shaping signal toward maps with unfinished, reachable
-        progress and away from maps with none — see active_map_event_reward/
-        inactive_map_event_penalty. World-mode only: presence doesn't mean
-        much mid-dialog/battle, and reward_position already covers movement
-        shaping there.
+        progress — see active_map_event_reward. World-mode only: presence
+        doesn't mean much mid-dialog/battle, and reward_position already
+        covers movement shaping there.
 
         active_map_event_reward decays with the same per-tile visit curve as
         reward_position's exploration_reward (new_position_decay_visits) —
@@ -1882,16 +1882,18 @@ class Data:
         punish camping one tile) explicitly exempts A/B ("that is the
         talk-to-NPC attempt" — see its comment), so holding B in place on
         any map with an unsatisfied event paid out forever, completely
-        immune to the anti-loop camping penalty. inactive_map_event_penalty
-        is left flat: it is a penalty, not a payout, so there is nothing to
-        farm by camping on a map with no active event.
+        immune to the anti-loop camping penalty. No penalty for maps with no
+        active event: has_active_map_event depends on event_graph's inferred
+        parent edges, which can be wrong (an event marked "active" that isn't
+        actually reachable yet) — taxing every other map for that made the
+        policy stack onto the falsely-active map instead of exploring.
         """
         if memory is None:
             memory = self.pyboy.memory
         if not self.is_world(memory):
             return 0.0
         if not self.has_active_map_event(memory):
-            return self.inactive_map_event_penalty
+            return 0.0
         visit_count = self.position_visit_counts.get(self.get_position(), 0)
         decay = max(0.0, 1.0 - visit_count / self.new_position_decay_visits)
         return self.active_map_event_reward * decay
