@@ -1964,8 +1964,21 @@ class Data:
         to assign. self.goal is itself always a GOAL_CANDIDATES member, so
         goal_reached() is normally already covered by last_milestone_payouts;
         it's kept as a fallback for a custom/off-list --goal.
+
+        goal_reached() is level-triggered (true for as long as the event
+        flag stays set), unlike last_milestone_payouts which is a one-step
+        edge. Since _advance_after_goal no longer reassigns self.goal away
+        from a satisfied one (see its docstring), gating on goal_reached()
+        unconditionally would fire every single step for the rest of the
+        episode once the assigned goal's flag is set -- re-entering the
+        auto-advance branch in PokemonRedEnv.step() every step and wiping
+        visit counts (set_curriculum(clear_visits=True)) each time instead
+        of just once. Only fall back to it for a goal outside GOAL_CANDIDATES
+        (the one case last_milestone_payouts truly cannot see).
         """
-        return self.goal_reached() or bool(self.last_milestone_payouts)
+        if self.goal not in GOAL_CANDIDATES:
+            return self.goal_reached()
+        return bool(self.last_milestone_payouts)
 
     def truncated(self, memory: bytes):
         # Stuck fuse uses in_dialog_ticks (resets on dialog_id change / leave),
