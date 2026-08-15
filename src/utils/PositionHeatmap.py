@@ -26,20 +26,40 @@ afterward.
 
 Two view modes (toggle with 'c'):
   - single map: one map_id's grid + direction arrows, cycled with left/right.
-  - combined: every currently-connected map auto-stitched into one canvas.
-    Connectivity is inferred empirically, not from any hardcoded map data —
-    every step that crosses a map_id boundary backs out the coordinate
-    offset between the two maps' local (x, y) grids from the arrow-key
-    direction taken. This is a best-effort heuristic: a door warp into an
-    unrelated interior can *look* like a consistent edge connection (same
-    fixed offset every time) and get stitched in at a nonsense position —
-    there's no memory-flag here distinguishing "walked across an edge" from
-    "used a door", so treat the combined view as approximate.
-    Maps that couldn't be stitched in (no confirmed connection to the
-    anchor) aren't dropped from view: up to _MAX_SIDE_PANELS of them get
+  - combined: every reachable map auto-stitched into one canvas. Geometry
+    for outdoor Kanto comes from pokemon.map_connections.overworld_offsets —
+    exact (x, y) world-cell offsets derived straight from reference/pokered's
+    `connection north/south/west/east` map-header data (the same alignment
+    the game engine itself uses to keep wXCoord/wYCoord continuous across an
+    edge), so the *whole* connected outdoor world is fully built and shown
+    the instant the window opens or combined mode is selected — no episode
+    data needed for the stitching itself, only for which tiles then get
+    colored in. Interiors/caves/etc. have no `connection` data at all (they
+    only ever warp, which isn't a geometric relationship — see
+    tools/render_route.py's module docstring), so those still fall back to
+    RollingHeatmapAggregator._empirical_offsets: inferred from observed
+    step deltas across map_id boundaries, best-effort (a door warp can
+    *look* like a consistent edge connection and get stitched in at a
+    nonsense position — there's no memory-flag distinguishing "walked
+    across an edge" from "used a door"). The static graph always wins on
+    conflict (see global_offsets). Maps that still couldn't be placed
+    either way aren't dropped from view: up to _MAX_SIDE_PANELS of them get
     their own small thumbnail in a side column, sharing the main image's
     color scale. Beyond that cap, the remainder are just named in the last
     slot's text instead of rendered.
+
+Map background: every tile grid (single map, combined view, and side-panel
+thumbnails alike) is drawn on top of the actual map pixel art — decoded
+straight from reference/pokered's tile sheets/blocksets/.blk layouts by
+pokemon.map_render, at _OVERLAY_ALPHA so the underlying walls/paths/grass/
+buildings stay legible through the metric color, with NaN (unvisited)
+tiles fully transparent so they show the plain map with no tint at all.
+The combined view stitches per-map art using the same offsets (static
+where available, empirical otherwise — see the view-modes section above)
+as the data grid, so both align pixel-for-pixel. A map with no resolvable
+source assets (a handful of unused "_COPY" placeholder map_ids) just falls
+back to the plain dark _BG_FACECOLOR, same as every metric looked before
+this background existed.
 
 Eight color metrics (cycle with 'r'), independent of the view mode:
   - ticks: avg ticks/run per tile (time spent) — the original view.
@@ -174,6 +194,18 @@ _MAX_SIDE_PANELS = 6
 # count-based window (see RollingHeatmapAggregator._party_history), not tied
 # to the frame-based eviction everything else here uses.
 _PARTY_HISTORY = 50
+# Alpha for the metric-color overlay drawn on top of the real map pixel art
+# (see pokemon.map_render) — low enough that the underlying tile art (walls,
+# paths, grass, buildings) stays readable through the color, high enough
+# that the metric itself is still the dominant thing on screen. NaN cells
+# use each cmap's set_bad(alpha=0) instead (fully transparent), so unvisited
+# tiles show the plain map with no tint at all.
+_OVERLAY_ALPHA = 0.6
+# Background fill behind/around the map art — shows through on map_ids
+# whose source assets couldn't be resolved (pokemon.map_render.render_map_rgb
+# returned None; rare, only a handful of unused "_COPY" placeholder maps)
+# instead of leaving a blank white gap.
+_BG_FACECOLOR = "#111111"
 
 
 def _visit_metric_scale() -> int:
@@ -634,7 +666,34 @@ class RollingHeatmapAggregator:
         return out
 
     def global_offsets(self, anchor: int) -> dict[int, tuple[int, int]]:
-        """BFS the empirical connection graph from ``anchor`` (offset (0,0)).
+        """Every map's (x, y) world-cell offset relative to ``anchor``
+        (itself at (0, 0)): pokemon.map_connections.overworld_offsets
+        (exact, static, derived straight from reference/pokered's
+        `connection` map-header data — see that module's docstring) for
+        every outdoor map reachable that way, plus ``_empirical_offsets``
+        for anything else (interiors etc., reachable only through
+        non-geometric warps, which the static graph doesn't cover at all)
+        that live episode data has stitched in.
+
+        The static graph is available immediately — no episodes needed —
+        and always wins on conflict: it's exact game data, not a live
+        heuristic guess, so it's applied last and unconditionally
+        overwrites whatever the empirical BFS came up with for the same
+        map_id. Both dicts already share one coordinate frame by
+        construction (both place ``anchor`` at (0, 0)), so overlaying them
+        is a plain dict update, no re-basing needed.
+        """
+        from pokemon import map_connections
+
+        offsets = self._empirical_offsets(anchor)
+        offsets.update(map_connections.overworld_offsets(anchor))
+        offsets.setdefault(anchor, (0, 0))
+        return offsets
+
+    def _empirical_offsets(self, anchor: int) -> dict[int, tuple[int, int]]:
+        """BFS the empirical connection graph from ``anchor`` (offset (0,0)),
+        inferred from observed live step deltas across map_id boundaries
+        (see RollingHeatmapAggregator.add_episode's ``transitions`` arg).
         Maps with no discovered path to the anchor are simply absent.
 
         A plain BFS spanning tree trusts whichever path reaches a map first
@@ -645,6 +704,11 @@ class RollingHeatmapAggregator:
         in at one arbitrary, possibly overlapping position. Detect that case
         and drop the map — and everything stitched in only through it —
         rather than render a silently-wrong placement.
+
+        Superseded for outdoor maps by global_offsets' static
+        pokemon.map_connections overlay — this remains the only source of
+        placement for interiors/caves/etc. that only ever warp, which have
+        no `connection` header data at all.
         """
         confirmed = self._confirmed_transitions()
         adj: dict[int, list[tuple[int, tuple[int, int]]]] = {}
@@ -784,7 +848,14 @@ def _populate_unconnected_panels(
     Always clears/hides every side axis first, so calling this with an
     empty ``unconnected`` (or from a context with no side panels, e.g. the
     single-map view) is the correct way to blank them out.
+
+    Each thumbnail gets the real map pixel art (pokemon.map_render) as its
+    background, same as the main view — imported lazily here (like this
+    module's other pokemon.* imports) so importing PositionHeatmap itself
+    stays cheap for the main training process.
     """
+    from pokemon import map_render
+
     for sax in side_axes:
         sax.clear()
         sax.set_visible(False)
@@ -795,6 +866,7 @@ def _populate_unconnected_panels(
     thumb_ids = unconnected[: max_panels - 1] if overflow else unconnected[:max_panels]
     for sax, map_id in zip(side_axes, thumb_ids):
         sax.set_visible(True)
+        sax.set_facecolor(_BG_FACECOLOR)
         sax.set_xticks([])
         sax.set_yticks([])
         off_goal = allowed is not None and map_id not in allowed
@@ -807,8 +879,16 @@ def _populate_unconnected_panels(
             )
             continue
         grid, x0, y0 = result
+        bg = map_render.render_map_rgb(map_id)
+        if bg is not None:
+            h_cells, w_cells = bg.shape[0] / map_render.CELL_PX, bg.shape[1] / map_render.CELL_PX
+            sax.imshow(
+                bg, origin="upper", zorder=1,
+                extent=(-0.5, w_cells - 0.5, h_cells - 0.5, -0.5),
+            )
         sax.imshow(
             grid, cmap=cmap, vmin=vmin, vmax=vmax, origin="upper",
+            alpha=_OVERLAY_ALPHA, zorder=2,
             extent=(x0 - 0.5, x0 + grid.shape[1] - 0.5, y0 + grid.shape[0] - 0.5, y0 - 0.5),
         )
         sax.set_title(title, fontsize=7, color="#ff8080" if off_goal else "white")
@@ -851,6 +931,22 @@ _GOAL_STATUS_DOT = {"mastered": "\U0001F7E2 ", "practicable": "\U0001F7E1 "}
 # reachable and cleared) and practicable (reachable, just not yet hit) sort
 # above locked (pick_new_goal can't hand it out at all yet).
 _GOAL_STATUS_RANK = {"mastered": 0, "practicable": 1, "locked": 2}
+
+
+def _default_map_id() -> int | None:
+    """Map to show before any episode data has arrived — Red's bedroom
+    (REDS_HOUSE_2F), the map a fresh game (and so the very first episode)
+    actually starts on (see tools/render_route.py's own DEFAULT_START).
+    Lets the window open showing real map art immediately instead of a
+    blank "waiting for runs" screen — see redraw_single/redraw_combined's
+    early-return branches. None only if map_constants can't be imported at
+    all (should not happen in practice)."""
+    try:
+        from pokemon.map_constants import MAPS
+
+        return MAPS["REDS_HOUSE_2F"][0]
+    except Exception:
+        return None
 
 
 def _goal_status(goal: str) -> str:
@@ -933,8 +1029,10 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
     import matplotlib.pyplot as plt
     from matplotlib.gridspec import GridSpec
 
+    from pokemon import map_connections, map_render
     from pokemon.Data import VISIT_PENALTY_HARD_THRESHOLD, VISIT_PENALTY_SOFT_THRESHOLD
 
+    default_map_id = _default_map_id()
     map_names = _map_name_lookup()
     stage_order = _stage_order_lookup()
     allowed_maps_by_stage = _allowed_maps_lookup()
@@ -950,32 +1048,32 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
     # and winning tiles are immediately distinguishable regardless of sample
     # size (unlike ticks/reward, the color scale never rescales to the data).
     ticks_cmap = plt.get_cmap("inferno").copy()
-    ticks_cmap.set_bad(color="#111111")
+    ticks_cmap.set_bad(alpha=0.0)
     reward_cmap = plt.get_cmap("coolwarm").copy()
-    reward_cmap.set_bad(color="#111111")
+    reward_cmap.set_bad(alpha=0.0)
     winrate_cmap = plt.get_cmap("RdYlGn").copy()
-    winrate_cmap.set_bad(color="#111111")
+    winrate_cmap.set_bad(alpha=0.0)
     # fleerate shares winrate's fixed-range red-green scale — same "0-1
     # fraction, green is the good outcome" shape, just a different pair of
     # battle_outcome_counts buckets (smart/coward instead of win/loss).
     # recency: non-negative "episodes since last visit", sequential like
     # ticks but a distinct colormap so the two aren't visually confused.
     recency_cmap = plt.get_cmap("viridis").copy()
-    recency_cmap.set_bad(color="#111111")
+    recency_cmap.set_bad(alpha=0.0)
     # dialog_recency: same non-negative "episodes since" shape as recency,
     # but scoped to dialog-triggering tiles only — distinct colormap so it
     # doesn't read as the same metric at a glance.
     dialog_recency_cmap = plt.get_cmap("cividis").copy()
-    dialog_recency_cmap.set_bad(color="#111111")
+    dialog_recency_cmap.set_bad(alpha=0.0)
     # milestones: non-negative sparse counts (most tiles are 0), same
     # avg/run convention as reward — distinct colormap from ticks/recency.
     milestones_cmap = plt.get_cmap("plasma").copy()
-    milestones_cmap.set_bad(color="#111111")
+    milestones_cmap.set_bad(alpha=0.0)
     # truncations: same non-negative sparse-count shape as milestones (most
     # tiles are 0, a hit means a run actually ended there) — distinct
     # colormap so it doesn't read as the same metric at a glance.
     truncations_cmap = plt.get_cmap("magma").copy()
-    truncations_cmap.set_bad(color="#111111")
+    truncations_cmap.set_bad(alpha=0.0)
     # visits: avg position_visit_counts/run, normalized by
     # VISIT_PENALTY_SOFT_THRESHOLD (see _visit_metric_scale) so 1.0 reads as
     # "at the anti-loop soft-penalty threshold" and 2.0 as "at the hard
@@ -984,7 +1082,7 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
     # threshold multiples are the meaningful reference points here, not
     # whatever the hottest tile in the window happens to be.
     visits_cmap = plt.get_cmap("YlOrRd").copy()
-    visits_cmap.set_bad(color="#111111")
+    visits_cmap.set_bad(alpha=0.0)
     _METRICS = (
         "ticks", "reward", "winrate", "fleerate", "recency", "dialog_recency",
         "milestones", "truncations", "visits",
@@ -998,10 +1096,19 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
     # empty) whenever the single-map view is active or nothing's unconnected.
     gs = GridSpec(_MAX_SIDE_PANELS, 4, figure=fig, wspace=0.7, hspace=0.6)
     ax = fig.add_subplot(gs[:, :3])
+    ax.set_facecolor(_BG_FACECOLOR)
     side_axes = [fig.add_subplot(gs[i, 3]) for i in range(_MAX_SIDE_PANELS)]
     for _sax in side_axes:
         _sax.set_visible(False)
-    im = ax.imshow(np.zeros((1, 1)), cmap=ticks_cmap, origin="upper")
+    # Real map pixel art (pokemon.map_render) drawn first as a background,
+    # the metric-color grid on top at _OVERLAY_ALPHA — see that constant's
+    # comment. bg_im starts blank (no map picked yet) and is filled in by
+    # _update_background on the first redraw.
+    bg_im = ax.imshow(np.zeros((1, 1, 3), dtype=np.uint8), origin="upper", zorder=1)
+    im = ax.imshow(
+        np.zeros((1, 1)), cmap=ticks_cmap, origin="upper",
+        alpha=_OVERLAY_ALPHA, zorder=2,
+    )
     cbar = fig.colorbar(im, ax=ax, label="avg ticks / run")
     ax.set_xlabel("x")
     ax.set_ylabel("y")
@@ -1345,20 +1452,100 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
             im.set_clim(0, vmax if vmax > 0 else 1.0)
             cbar.set_label("avg ticks / run")
 
-    def _apply_extent(x0: int, y0: int, grid) -> None:
+    def _apply_extent(x0: int, y0: int, grid, bg_extent: tuple | None = None) -> None:
         """Set the image extent to the grid's bounding box and, unless the
         user has manually zoomed/panned this context, snap the view to fit
         it. Without this the axes view stays wherever it last was (initially
         a 1x1 box), so a map that grows as more tiles get discovered — or a
         freshly switched-to map with a totally different footprint — never
-        visibly resizes to match."""
+        visibly resizes to match.
+
+        ``bg_extent`` (from ``_update_background``) is usually bigger than
+        the data grid's own bbox — the visited-tile subset vs. the map's
+        full pixel-art footprint — so the auto-fit view is the *union* of
+        the two: on first arriving at a mostly-unexplored map, this shows
+        the whole map (background) immediately rather than cropping to just
+        the handful of visited tiles.
+        """
         extent = (
             x0 - 0.5, x0 + grid.shape[1] - 0.5, y0 + grid.shape[0] - 0.5, y0 - 0.5,
         )
         im.set_extent(extent)
-        if not state["user_viewport"]:
-            ax.set_xlim(extent[0], extent[1])
-            ax.set_ylim(extent[2], extent[3])
+        if state["user_viewport"]:
+            return
+        fit = extent
+        if bg_extent is not None:
+            fit = (
+                min(extent[0], bg_extent[0]), max(extent[1], bg_extent[1]),
+                max(extent[2], bg_extent[2]), min(extent[3], bg_extent[3]),
+            )
+        ax.set_xlim(fit[0], fit[1])
+        ax.set_ylim(fit[2], fit[3])
+
+    def _update_background(img_data: tuple | None) -> tuple | None:
+        """img_data: (rgb_array, x0, y0) in cell coords (e.g. from
+        map_render.render_map_rgb/stitched_rgb), or None if unavailable —
+        blanks bg_im so the axes' dark ``_BG_FACECOLOR`` shows through
+        instead (only a handful of unused placeholder maps hit this).
+        Returns the extent bg_im was set to, for ``_apply_extent``'s
+        auto-fit union, or None."""
+        if img_data is None:
+            bg_im.set_data(np.zeros((1, 1, 3), dtype=np.uint8))
+            bg_im.set_extent((0, 0, 0, 0))
+            return None
+        img, bx0, by0 = img_data
+        h_cells = img.shape[0] / map_render.CELL_PX
+        w_cells = img.shape[1] / map_render.CELL_PX
+        extent = (bx0 - 0.5, bx0 + w_cells - 0.5, by0 + h_cells - 0.5, by0 - 0.5)
+        bg_im.set_data(img)
+        bg_im.set_extent(extent)
+        return extent
+
+    def _show_placeholder(context_label: str) -> None:
+        """No episode data for the current stage/mode yet — show the real
+        map art for ``state["map_id"]`` (or, before anything's ever been
+        picked, ``default_map_id`` — Red's bedroom, where the game and so
+        the first episode actually starts) immediately, with the metric
+        overlay left empty, instead of a blank screen. "Cała mapa" (the
+        whole map) should be visible the moment the window opens, not only
+        once the first run lands."""
+        map_id = state["map_id"] if state["map_id"] is not None else default_map_id
+        bg_img = map_render.render_map_rgb(map_id) if map_id is not None else None
+        bg_extent = _update_background((bg_img, 0, 0) if bg_img is not None else None)
+        im.set_data(np.full((1, 1), np.nan))
+        im.set_extent((0, 0, 0, 0))
+        if bg_extent is not None and not state["user_viewport"]:
+            ax.set_xlim(bg_extent[0], bg_extent[1])
+            ax.set_ylim(bg_extent[2], bg_extent[3])
+        name = name_of(map_id) if map_id is not None else "?"
+        ax.set_title(
+            f"[{state['stage']}] {context_label}{name} (id={map_id}) "
+            f"— waiting for runs..."
+        )
+        fig.canvas.draw_idle()
+
+    def _show_placeholder_combined() -> None:
+        """No episode data for the current stage yet — combined view still
+        shows the *whole* statically-connected outdoor world immediately
+        (pokemon.map_connections.overworld_offsets, built straight from
+        reference/pokered's source map-header data), not just one map.
+        Unlike ``_show_placeholder``'s single-map fallback, this needs no
+        live data at all to be "fully built" — that's the whole point of
+        using the game's own source geometry instead of the empirical,
+        live-inferred BFS (RollingHeatmapAggregator._empirical_offsets)."""
+        anchor = state["map_id"] if state["map_id"] is not None else default_map_id
+        offsets = map_connections.overworld_offsets(anchor) if anchor is not None else {}
+        bg_extent = _update_background(map_render.stitched_rgb(offsets) if offsets else None)
+        im.set_data(np.full((1, 1), np.nan))
+        im.set_extent((0, 0, 0, 0))
+        if bg_extent is not None and not state["user_viewport"]:
+            ax.set_xlim(bg_extent[0], bg_extent[1])
+            ax.set_ylim(bg_extent[2], bg_extent[3])
+        ax.set_title(
+            f"[{state['stage']}] Combined view: {len(offsets)} maps "
+            f"(static, from game source) — waiting for runs to color them in..."
+        )
+        fig.canvas.draw_idle()
 
     def _draw_quiver(dgrid) -> None:
         if dgrid is None:
@@ -1436,8 +1623,7 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
         agg = current_agg()
         maps = agg.maps()
         if not maps:
-            ax.set_title(f"Heatmap [{state['stage']}] - waiting for runs...")
-            fig.canvas.draw_idle()
+            _show_placeholder("")
             return
         if state["map_id"] not in maps:
             state["map_id"] = maps[0]
@@ -1445,8 +1631,10 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
         if result is None:
             return
         grid, x0, y0 = result
+        bg_img = map_render.render_map_rgb(state["map_id"])
+        bg_extent = _update_background((bg_img, 0, 0) if bg_img is not None else None)
         im.set_data(grid)
-        _apply_extent(x0, y0, grid)
+        _apply_extent(x0, y0, grid, bg_extent)
         _apply_metric_style(grid)
 
         _clear_overlays()
@@ -1478,12 +1666,12 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
         result = agg.combined_view(metric=state["metric"])
         if result is None:
             _hide_side_panels()
-            ax.set_title(f"Heatmap [{state['stage']}] - waiting for runs...")
-            fig.canvas.draw_idle()
+            _show_placeholder_combined()
             return
         grid, x0, y0, offsets, connected, unconnected = result
+        bg_extent = _update_background(map_render.stitched_rgb(offsets))
         im.set_data(grid)
-        _apply_extent(x0, y0, grid)
+        _apply_extent(x0, y0, grid, bg_extent)
         _apply_metric_style(grid)
 
         _clear_overlays()
@@ -1548,6 +1736,10 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
 
     plt.ion()
     plt.show(block=False)
+    # Draw the placeholder map immediately (see _show_placeholder) instead
+    # of leaving the window blank until the first queue item arrives — the
+    # main loop below only calls redraw() when got_any is True.
+    redraw()
 
     while not state["closed"]:
         got_any = False
@@ -1672,6 +1864,7 @@ def save_heatmap_images(
     import matplotlib.pyplot as plt
     from matplotlib.gridspec import GridSpec
 
+    from pokemon import map_render
     from pokemon.Data import VISIT_PENALTY_HARD_THRESHOLD, VISIT_PENALTY_SOFT_THRESHOLD
 
     out_dir = Path(out_dir)
@@ -1691,7 +1884,7 @@ def save_heatmap_images(
         "visits": plt.get_cmap("YlOrRd").copy(),
     }
     for cmap in cmap_of.values():
-        cmap.set_bad(color="#111111")
+        cmap.set_bad(alpha=0.0)
     label_of = {
         "ticks": "avg ticks / run",
         "reward": "avg reward / run",
@@ -1732,6 +1925,7 @@ def save_heatmap_images(
         grid, x0: int, y0: int, title: str, metric: str, path: "Path", dgrid,
         unconnected: list[int] | None = None,
         agg_for_panels: "RollingHeatmapAggregator | None" = None,
+        background: tuple | None = None,
     ) -> None:
         # unconnected/agg_for_panels are only passed for the combined-view
         # image, so it can grow a side column of per-map thumbnails for maps
@@ -1746,10 +1940,31 @@ def save_heatmap_images(
         else:
             fig, ax = plt.subplots(figsize=(8, 8))
             side_axes = []
-        im = ax.imshow(grid, cmap=cmap_of[metric], origin="upper")
-        im.set_extent(
-            (x0 - 0.5, x0 + grid.shape[1] - 0.5, y0 + grid.shape[0] - 0.5, y0 - 0.5)
+        ax.set_facecolor(_BG_FACECOLOR)
+        # Real map pixel art (pokemon.map_render), drawn first so the
+        # metric-color grid layers on top at _OVERLAY_ALPHA. background's own
+        # (rgb, bx0, by0) usually covers more than grid's visited-tile bbox
+        # (the map's full footprint vs. just what got visited) — but
+        # AxesImage.set_extent (below) forcibly sets the axes view to its
+        # own extent rather than unioning with what's already there, so the
+        # view has to be explicitly widened afterward or it crops to the
+        # (smaller) data grid and hides the rest of the background.
+        bg_extent = None
+        if background is not None:
+            bg_img, bx0, by0 = background
+            h_cells = bg_img.shape[0] / map_render.CELL_PX
+            w_cells = bg_img.shape[1] / map_render.CELL_PX
+            bg_extent = (bx0 - 0.5, bx0 + w_cells - 0.5, by0 + h_cells - 0.5, by0 - 0.5)
+            ax.imshow(bg_img, origin="upper", zorder=1, extent=bg_extent)
+        im = ax.imshow(
+            grid, cmap=cmap_of[metric], origin="upper",
+            alpha=_OVERLAY_ALPHA, zorder=2,
         )
+        data_extent = (x0 - 0.5, x0 + grid.shape[1] - 0.5, y0 + grid.shape[0] - 0.5, y0 - 0.5)
+        im.set_extent(data_extent)
+        if bg_extent is not None:
+            ax.set_xlim(min(data_extent[0], bg_extent[0]), max(data_extent[1], bg_extent[1]))
+            ax.set_ylim(max(data_extent[2], bg_extent[2]), min(data_extent[3], bg_extent[3]))
         im.set_clim(*_clim(grid, metric))
         fig.colorbar(im, ax=ax, label=label_of[metric])
         ax.set_xlabel("x")
@@ -1804,6 +2019,7 @@ def save_heatmap_images(
                     grid, x0, y0, title, metric, path,
                     dgrid=agg._direction_arrays(offsets),
                     unconnected=unconnected, agg_for_panels=agg,
+                    background=map_render.stitched_rgb(offsets),
                 )
                 written.append(path)
 
@@ -1818,9 +2034,11 @@ def save_heatmap_images(
                     f"[{label}] {name} (id={map_id})  metric={metric}\n"
                     f"{agg.run_count.get(map_id, 0):,} runs"
                 )
+                bg_img = map_render.render_map_rgb(map_id)
                 _render(
                     grid, x0, y0, title, metric, path,
                     dgrid=agg.direction_grid(map_id),
+                    background=(bg_img, 0, 0) if bg_img is not None else None,
                 )
                 written.append(path)
     return written

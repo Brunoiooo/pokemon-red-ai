@@ -14,3 +14,4 @@ keyboard>=0.13.5
 tqdm>=4.66.0
 rich>=13.0.0
 matplotlib>=3.7
+pillow>=10.0  # pokemon.map_render: decodes reference/pokered's tile-sheet PNGs for the heatmap background
