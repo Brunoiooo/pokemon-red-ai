@@ -18,6 +18,7 @@ Examples:
   python cli.py debug-play --from start
   python cli.py debug-play --from stage_route1
   python cli.py debug-play --from start --frame-skip 16 --real-truncation
+  python cli.py debug-play --model  # + live model button-probability table
 
 Parity with PPO training:
   - same discrete actions (0–8) via Emulator.step_discrete
@@ -116,6 +117,25 @@ def _mode_flags(emu: Emulator) -> str:
     if emu.data.is_battle(mem):
         flags.append("battle")
     return "+".join(flags) or "?"
+
+
+def _policy_action_probs(model, obs, action_masks):
+    """The policy's actual action distribution (post action-masking) for the
+    current obs -- what the trained model would do right now, for comparison
+    against whatever button the human just pressed."""
+    import torch as th
+
+    obs_tensor, _ = model.policy.obs_to_tensor(obs)
+    with th.no_grad():
+        distribution = model.policy.get_distribution(obs_tensor, action_masks=action_masks)
+        probs = distribution.distribution.probs[0].cpu().numpy()
+    return probs
+
+
+def _probs_table(probs, action_names) -> str:
+    """%-per-button, sorted highest share first."""
+    order = sorted(range(len(action_names)), key=lambda i: probs[i], reverse=True)
+    return " ".join(f"{action_names[i]}={100.0 * probs[i]:5.1f}%" for i in order)
 
 
 def legal_actions_str(emu: Emulator) -> str:
@@ -347,6 +367,25 @@ def run(args: argparse.Namespace) -> None:
     emulator.use_sdl = True
     emulator.data.goal = goal
 
+    # --model: load a PPO checkpoint purely to print what it would do from
+    # each state you land in (post-step, same obs timing the next
+    # model.predict() call would see) -- lets you compare its live
+    # button-probability table against what you just pressed, to spot where
+    # its policy disagrees with sensible play. It never touches the controls.
+    model = None
+    obs_env = None
+    if args.model is not None:
+        from sb3_contrib import MaskablePPO
+
+        from env.pokemon_red_env import PokemonRedEnv
+        from ppo.checkpoints import resolve_model_path
+
+        model_path = resolve_model_path(args.model or None)
+        print(f"  Loading model: {model_path}")
+        model = MaskablePPO.load(str(model_path), device="cpu")
+        obs_env = PokemonRedEnv(save_state=from_ckpt, goal=goal, stage=stage)
+        obs_env._emu = emulator
+
     if not args.real_truncation:
         # Human play: don't end the run while standing still / reading text.
         emulator.data.max_useless_ticks = 10**9
@@ -376,7 +415,18 @@ def run(args: argparse.Namespace) -> None:
     print_help()
     print()
 
-    memory, _ = emulator.reset(dir=from_ckpt)
+    def model_line(inputs) -> str | None:
+        """What the loaded checkpoint would do right now, sorted highest first.
+        None if --model wasn't passed."""
+        if model is None:
+            return None
+        obs_env.goal = goal
+        obs = obs_env._torch_inputs_to_obs(inputs)
+        action_masks = obs_env.action_masks()
+        probs = _policy_action_probs(model, obs, action_masks)
+        return f"  [model] {_probs_table(probs, BUTTON_NAMES)}"
+
+    memory, inputs = emulator.reset(dir=from_ckpt)
     emulator.data.goal = goal
     emulator.data.seed_cleared_goals(goal)
     # Real-time pace: PyBoy only rate-limits once per tick() call, so batched
@@ -386,6 +436,9 @@ def run(args: argparse.Namespace) -> None:
     print(f"  Loaded. {status_line(emulator)}")
     print(f"  {fuse_line(emulator)}")
     print(f"  {bag_line(emulator)}")
+    line = model_line(inputs)
+    if line:
+        print(line)
     print("  Play toward the first battle dialog and watch reward / mode lines.\n")
 
     prev_mode = _mode_flags(emulator)
@@ -429,7 +482,7 @@ def run(args: argparse.Namespace) -> None:
             print(f"  ✓ Saved → {path}  ({status_line(emulator)})")
             continue
         if label == "RELOAD":
-            memory, _ = emulator.reset(dir=from_ckpt)
+            memory, inputs = emulator.reset(dir=from_ckpt)
             stage, goal = base_stage, base_goal
             emulator.data.goal = goal
             emulator.data.seed_cleared_goals(goal)
@@ -445,6 +498,9 @@ def run(args: argparse.Namespace) -> None:
                 f"stage={stage} ({status_line(emulator)})"
             )
             print(f"  {bag_line(emulator)}")
+            line = model_line(inputs)
+            if line:
+                print(line)
             continue
 
         # Mask as computed *before* the tick -- the same point in time
@@ -456,7 +512,7 @@ def run(args: argparse.Namespace) -> None:
         was_masked = action is not None and not pre_mask[action]
 
         # Match PPO hold length, but pace frame-by-frame at 1x (human speed).
-        memory, _, reward, terminated, truncated = emulator.step_discrete(
+        memory, inputs, reward, terminated, truncated = emulator.step_discrete(
             memory=memory,
             action_idx=action,
             duration=frame_skip,
@@ -587,6 +643,9 @@ def run(args: argparse.Namespace) -> None:
                 f"{status_line(emulator)}  "
                 f"goals={live_n}/{peak_n} loop={emulator.data.loop_streak}{mark_s}"
             )
+            line = model_line(inputs)
+            if line:
+                print(line)
             if exit_info:
                 kind = str(exit_info.get("kind", "?"))
                 label = (
@@ -689,6 +748,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--all-steps",
         action="store_true",
         help="Print every agent step (incl. unrecognized-key None)",
+    )
+    p.add_argument(
+        "--model",
+        nargs="?",
+        const="",
+        default=None,
+        help="Load a PPO checkpoint and print its live button-probability "
+             "table (sorted highest first) after every step, next to what "
+             "you actually pressed -- read-only, never touches the controls. "
+             "Bare --model auto-picks the newest models/ppo_*/best/best_model.zip.",
     )
     return p
 

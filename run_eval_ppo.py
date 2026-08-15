@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+from collections import Counter
 from datetime import datetime
 from multiprocessing import set_start_method
 from pathlib import Path
@@ -64,6 +65,39 @@ def _mon_line(label, lv, hp, maxhp, atk, dfn, spd, spc):
     return (
         f"{label}(lv={lv} hp={hp}/{maxhp} atk={atk} def={dfn} spd={spd} spc={spc}){flag}"
     )
+
+
+def _action_table(counts, action_names) -> str:
+    """One-line %-per-button table, e.g. 'A=20.1% UP=15.2% B=5.0% ...',
+    always listing every button (0%), sorted highest share first."""
+    total = sum(counts.values())
+    if total == 0:
+        return "n/a"
+    order = sorted(range(len(action_names)), key=lambda i: counts.get(i, 0), reverse=True)
+    return " ".join(
+        f"{action_names[i]}={100.0 * counts.get(i, 0) / total:5.1f}%"
+        for i in order
+    )
+
+
+def _policy_action_probs(model, obs, action_masks):
+    """The policy's actual action distribution (post action-masking) for the
+    current obs, as a numpy array over the action space -- not a tally of
+    actions taken, but what model.predict() drew its action from this step."""
+    import torch as th
+
+    obs_tensor, _ = model.policy.obs_to_tensor(obs)
+    with th.no_grad():
+        distribution = model.policy.get_distribution(obs_tensor, action_masks=action_masks)
+        probs = distribution.distribution.probs[0].cpu().numpy()
+    return probs
+
+
+def _probs_table(probs, action_names) -> str:
+    """Same layout as _action_table, but from live policy probabilities
+    (floats summing to ~1) instead of accumulated counts."""
+    order = sorted(range(len(action_names)), key=lambda i: probs[i], reverse=True)
+    return " ".join(f"{action_names[i]}={100.0 * probs[i]:5.1f}%" for i in order)
 
 
 def run(args):
@@ -134,7 +168,10 @@ def run(args):
     from pokemon.map_constants import MAPS_BY_ID
 
     verbose = int(getattr(args, "verbose", 0) or 0)
-    ACTION_NAMES = ("NONE", "A", "B", "UP", "DOWN", "LEFT", "RIGHT", "START", "SELECT")
+    # Must match ACTION_A..ACTION_NONE in src/pokemon/Data.py (0=A ... 8=NONE),
+    # same order as Emulator.buttons / debug_play.py's BUTTON_NAMES.
+    ACTION_NAMES = ("A", "B", "START", "SELECT", "LEFT", "RIGHT", "UP", "DOWN", "NONE")
+    action_counts_total: Counter = Counter()
 
     for ep in range(args.episodes):
         if auto:
@@ -151,6 +188,7 @@ def run(args):
         obs, info = env.reset()
         total = 0.0
         steps = 0
+        action_counts: Counter = Counter()
         stages_cleared: list[str] = []
         done = False
         last_map = info.get("map_id")
@@ -173,12 +211,17 @@ def run(args):
             )
 
         while not done:
+            cur_action_masks = raw.action_masks()
+            action_probs = (
+                _policy_action_probs(model, obs, cur_action_masks) if verbose else None
+            )
             action, _ = model.predict(
                 obs,
-                action_masks=raw.action_masks(),
+                action_masks=cur_action_masks,
                 deterministic=not args.stochastic,
             )
             action_i = int(action)
+            action_counts[action_i] += 1
             obs, reward, terminated, truncated, info = env.step(action_i)
             total += float(reward)
             steps += 1
@@ -349,7 +392,8 @@ def run(args):
                     f"mode={_mode_flags(raw.emu):9s} "
                     f"loop={int(bool(info.get('loop_flag')))} "
                     f"in_goal_map={int(has_active_event)} "
-                    f"ms={info.get('milestone')}{map_ctr}{disc_str}"
+                    f"ms={info.get('milestone')}{map_ctr}{disc_str} "
+                    f"| {_probs_table(action_probs, ACTION_NAMES)}"
                 )
 
             # -vv: per-hit damage-reward scale (which levels it's judged against),
@@ -441,6 +485,11 @@ def run(args):
             f"maps={maps_seen} "
             f"term={info.get('terminated')} trunc={info.get('truncated')}"
         )
+        print(f"  Actions: {_action_table(action_counts, ACTION_NAMES)}")
+        action_counts_total.update(action_counts)
+
+    if args.episodes > 1:
+        print(f"\nActions (all episodes): {_action_table(action_counts_total, ACTION_NAMES)}")
 
     env.close()
     if heatmap_proc is not None:

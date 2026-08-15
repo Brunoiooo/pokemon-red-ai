@@ -25,7 +25,7 @@ from curriculum_config import (
     get_stage_max_steps,
     stage_for_goal,
 )
-from pokemon.Data import BADGE_GOALS, REWARD_COMPONENT_NAMES, Data
+from pokemon.Data import BADGE_GOALS, REWARD_COMPONENT_NAMES, REWARD_MODE_NAMES, Data
 from pokemon.Emulator import N_ACTIONS, Emulator
 
 # Flattened float feature groups from Data.inputs() (excluding images / raw ids).
@@ -287,10 +287,16 @@ class PokemonRedEnv(gym.Env):
             data.map_transitions.clear()
             data.reward_sums.clear()
             data.reward_component_sums.clear()
+            data.reward_mode_sums.clear()
             data.battle_outcome_counts.clear()
             data.milestone_hit_counts.clear()
             data.dialog_hit_counts.clear()
             data.truncate_hit_counts.clear()
+            data.battle_outcome_tally.clear()
+            data.battle_step_count = 0
+            data._wild_decay_sum = 0.0
+            data._wild_decay_count = 0
+            data._wild_decay_floored_count = 0
             # Reward/truncation-affecting, same "fresh pressure" reasoning as
             # position_visit_counts above -- without this a map budget or
             # loop streak partly spent on the previous curriculum leg would
@@ -647,6 +653,37 @@ class PokemonRedEnv(gym.Env):
             "stage": self.stage,
             "goal_success": bool(goal_success),
             "cleared_stage": cleared_stage,
+            # Cumulative per-episode sum of each REWARD_COMPONENT_NAMES entry
+            # so far (see Data.reward_component_vector) — read by
+            # MilestoneCallback at episode end to log one TensorBoard chart
+            # per reward sub-component (pokemon/reward/<name>).
+            "reward_component_sums": dict(
+                zip(REWARD_COMPONENT_NAMES, data.reward_component_vector())
+            ),
+            # Same, bucketed by which game mode (world/dialog/menu/battle/
+            # cutscene) was active when each step's reward landed (see
+            # Data.reward_mode_vector) — MilestoneCallback logs one
+            # TensorBoard chart per mode (pokemon/reward_mode/<mode>).
+            "reward_mode_sums": dict(
+                zip(REWARD_MODE_NAMES, data.reward_mode_vector())
+            ),
+            # Always-on battle telemetry (see Data.battle_outcome_tally /
+            # battle_step_count / _wild_decay_* / last_map_budget_trunc_at_start
+            # for what each backs) -- read by MilestoneCallback for
+            # pokemon/battle_*_rate, pokemon/battles_per_episode,
+            # pokemon/battle_ticks_frac, pokemon/wild_encounter_decay_mean,
+            # pokemon/wild_encounter_decay_floored_rate and
+            # pokemon/map_budget_trunc_at_start_rate.
+            "battle_outcome_tally": dict(data.battle_outcome_tally),
+            "battle_step_count": data.battle_step_count,
+            "wild_decay_sum": data._wild_decay_sum,
+            "wild_decay_count": data._wild_decay_count,
+            "wild_decay_floored_count": data._wild_decay_floored_count,
+            "map_budget_trunc_at_start": (
+                data.last_map_budget_trunc_at_start
+                if truncate_causes and "map_budget" in truncate_causes
+                else None
+            ),
         }
 
     def render(self):

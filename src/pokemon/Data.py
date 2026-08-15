@@ -139,6 +139,14 @@ REWARD_COMPONENT_NAMES: tuple[str, ...] = (
     "total",
 )
 
+# Game-mode buckets a step's *whole* reward (every component combined) gets
+# attributed to, based on which mode was active that step -- see
+# Data._current_reward_mode / reward_mode_sums. Mirrors the mutually
+# exclusive is_world/is_dialog/is_menu/is_battle/is_cutscene_locked states
+# (game_mode_flags_data covers the first four; "cutscene" is the fifth,
+# script-locked-with-no-textbox state those four all explicitly exclude).
+REWARD_MODE_NAMES: tuple[str, ...] = ("world", "dialog", "menu", "battle", "cutscene")
+
 
 @dataclass
 class Data:
@@ -155,8 +163,9 @@ class Data:
     event_reward: float = 2.0  # macro
     # One-shot new-map/new-dialog payouts (formerly new_screen_reward /
     # new_dialog_reward) are gone — reward_new_map_presence / reward_new_dialog_presence
-    # (see reward()) now cover that ground with the same decaying-by-visits
-    # shape as reward_active_map_presence, instead of a flat one-time bonus.
+    # (see reward()) now cover that ground with a decaying-by-visits shape
+    # (full rate on a fresh map/dialog, linearly to 0 by
+    # new_position_decay_visits), instead of a flat one-time bonus.
     # battle_turn_reward is kept at its old value (0.1) on purpose, not tied
     # to either of those — see reward_battle_useless_count.
     battle_turn_reward: float = 0.1  # micro (turn progressed in battle)
@@ -182,10 +191,22 @@ class Data:
     # stomping a far weaker wild Pokemon is no longer free farming (e.g.
     # lvl-10 one-shotting a lvl-2 Pidgey paid the same +2 win bonus and +1.0
     # HP-fraction hit as a genuinely hard fight). Smoothstep is 0 at r=0, 1 at
-    # r=1, with zero slope at both ends — no hard floor/kink, it decays all
-    # the way to 0 as the level gap grows, and is C1-continuous into the
-    # r>=1 cap=1.0 branch. See _battle_difficulty_scale.
+    # r=1, with zero slope at both ends. See _battle_difficulty_scale.
     battle_difficulty_invalid_fallback: float = 0.05
+    # Floor on the smoothstep above (max(floor, smoothstep(...))) — without
+    # it, a big enough level gap scaled reward_enemy_hp/battle_won_reward
+    # toward 0 while battle_useless_step's per-tick waste cost (never scaled
+    # by anything battle-related) stayed full price, so a clean win against
+    # a sufficiently weak wild Pokemon could net negative overall. Same
+    # breakeven-point reasoning as wild_encounter_decay_floor (see its own
+    # docstring) and reuses its value — a win always clears the per-tick
+    # waste cost with margin, however lopsided the level gap, while staying
+    # far enough below 1.0 that farming a trivial fight on purpose is still
+    # clearly worse than a fair one. Deliberately NOT applied to
+    # battle_difficulty_invalid_fallback above — that path is a bad-read
+    # anti-exploit guard, not a real difficulty reading, and must stay able
+    # to sit below this floor.
+    battle_difficulty_scale_floor: float = 0.15
     # Successful RUN: compare enemy vs max party level so a lvl-1 sacrificial
     # slot cannot fake a "smart flee" while stronger Pokémon sit in the back.
     flee_smart_reward: float = 0.4
@@ -222,8 +243,36 @@ class Data:
     # this low would zero out wild rewards on any well-trodden route tile
     # before the agent ever got its first fight there.
     wild_visit_decay_visits: int = 8
-    action_pattern_penalty: float = -0.08
-    spatial_loop_penalty: float = -0.10
+    # Floor for _wild_encounter_decay -- decaying all the way to 0 made every
+    # wild-battle reward/cost on a tile past wild_visit_decay_visits net to
+    # whatever undecayed cost remains (battle_useless_step's per-tick waste,
+    # never decayed), a guaranteed loss forever regardless of outcome. That
+    # made re-engaging a well-trodden grass tile strictly worse than walking
+    # around it, in a policy that already tends to re-tread the same small
+    # footprint (spatial-loop behavior) -- tiles decay past this threshold
+    # fast, so most of the agent's wild-encounter exposure ends up here,
+    # teaching blanket combat avoidance instead of just curbing farming.
+    # 0.15 clears the breakeven point (waste_cost / undecayed_reward_sum,
+    # ~0.056 for a representative fair fight) with margin, while staying far
+    # enough below 1.0 that grinding a stale tile on purpose is still clearly
+    # worse than a fresh fight or fresh exploration -- farming stays
+    # unrewarding, it just stops being punished.
+    wild_encounter_decay_floor: float = 0.15
+    # Brought down from -0.08/-0.10 (previously "stronger than before" per
+    # the comment above -- tried against the same ~1.0 loop_episode_rate
+    # this is still tuned against, and it didn't move that number) to the
+    # same order of magnitude as new_position_reward (0.008). At -0.08/-0.10,
+    # a single flagged incident wiped out 10-12 tiles' worth of exploration
+    # credit -- interspersed with ordinary interruptions on a long,
+    # imperfect traversal (a wild battle, backing off a trainer's sightline)
+    # that made genuinely pushing into new territory net-negative far more
+    # often than it made pure stalling net-negative, biasing the policy
+    # toward not attempting the traversal at all rather than toward doing it
+    # more cleanly. Kept above new_position_reward itself so looping in
+    # place is still never profitable, just no longer catastrophic relative
+    # to real progress happening nearby.
+    action_pattern_penalty: float = -0.02
+    spatial_loop_penalty: float = -0.02
     # A *single* no-effect menu press (e.g. UP at the top of a list) used to
     # fire this every time — nearly guaranteed at least once in any episode
     # that opens a menu at all. Require menu_spam_streak consecutive no-ops
@@ -309,6 +358,10 @@ class Data:
     # each reward type have I earned so far this episode" observation. See
     # _accum_reward / reward_component_vector.
     reward_component_sums: dict[str, float] = field(default_factory=dict)
+    # Cumulative per-episode sum of a step's whole reward (every component
+    # combined), bucketed by REWARD_MODE_NAMES -- monitoring only, not fed to
+    # the model. See _current_reward_mode / reward_mode_vector.
+    reward_mode_sums: dict[str, float] = field(default_factory=dict)
     # Battle outcomes per (x, y, map_id): {"win"/"loss"/"smart"/"coward": n},
     # for --heatmap's win-rate (win vs loss) and flee-rate (smart vs coward)
     # overlays. Attributed to the same last-known-world tile as reward_sums
@@ -338,6 +391,32 @@ class Data:
     # since the "max_steps" cause is only known at the env level — same
     # _last_heatmap_pos attribution as the other mid-dialog-safe overlays.
     truncate_hit_counts: dict[tuple[int, int, int], int] = field(default_factory=dict)
+    # Always-on (not gated by collect_heatmap, unlike battle_outcome_counts
+    # above) per-episode-leg tally of reward_battle_exit's `kind` ("win",
+    # "lose", "blackout", "smart", "coward") -- for MilestoneCallback's
+    # pokemon/battle_*_rate / pokemon/battles_per_episode TensorBoard charts.
+    battle_outcome_tally: dict[str, int] = field(default_factory=dict)
+    # Env-step count (not raw emulator ticks) spent with is_battle() true
+    # this episode leg -- for pokemon/battle_ticks_frac (how much of the
+    # episode is spent in battle, the direct measure of combat engagement
+    # vs. avoidance, instead of inferring it from map_budget/loop stats).
+    battle_step_count: int = 0
+    # Sum/count of _wild_encounter_decay() readings taken at wild battle
+    # exit (reward_battle_exit), plus how many of those hit
+    # wild_encounter_decay_floor -- for pokemon/wild_encounter_decay_mean
+    # and pokemon/wild_encounter_decay_floored_rate, so the floor's real
+    # in-training effect is measured directly instead of hand-computed from
+    # one log excerpt.
+    _wild_decay_sum: float = 0.0
+    _wild_decay_count: int = 0
+    _wild_decay_floored_count: int = 0
+    # Set by truncated() the step map_budget fires -- True when the map
+    # that tripped it is the same one the episode started on
+    # (_start_map_id). Lets MilestoneCallback report what fraction of
+    # map_budget truncations happen on the start/home map specifically
+    # (pokemon/map_budget_trunc_at_start_rate), instead of guessing which
+    # map is responsible from context.
+    last_map_budget_trunc_at_start: bool = False
     _last_heatmap_pos: tuple[int, int, int] | None = None
     # Per-(map_id, dialog_id) step counter — dialog_id is read from a single
     # byte (0-255), so this backs a 256-wide per-map histogram exposed to the
@@ -432,6 +511,10 @@ class Data:
     # free Pokemon-Center-style heal) and reward_battle_exit (classify the
     # exit correctly instead of trusting wBattleResult).
     _just_blacked_out: bool = False
+    # Set alongside _just_blacked_out; consumed the first step is_world() is
+    # true again (see count()) once the forced Pokemon-Center warp actually
+    # lands, to top up that destination map's world_map_step_counts budget.
+    _pending_blackout_recovery: bool = False
     _start_map_id: int | None = None
     # Distinct dialog screen hashes seen for the current dialog_id. Blink frames
     # revisit old hashes; only a *new* hash counts as text progress.
@@ -533,13 +616,22 @@ class Data:
         self.map_transitions = {}
         self.reward_sums = {}
         self.reward_component_sums = {}
+        self.reward_mode_sums = {}
         self.dialog_hit_counts = {}
         self.dialog_id_visit_counts = {}
         self.map_id_visit_counts = {}
         self.world_map_step_counts = {}
+        self._just_blacked_out = False
+        self._pending_blackout_recovery = False
         self.battle_outcome_counts = {}
         self.milestone_hit_counts = {}
         self.truncate_hit_counts = {}
+        self.battle_outcome_tally = {}
+        self.battle_step_count = 0
+        self._wild_decay_sum = 0.0
+        self._wild_decay_count = 0
+        self._wild_decay_floored_count = 0
+        self.last_map_budget_trunc_at_start = False
         self._last_heatmap_pos = None
         self.recent_actions.clear()
         self.recent_positions.clear()
@@ -613,6 +705,27 @@ class Data:
         self.visited_pokedex_own = self.pokedex_own(self.pyboy.memory)
         self.visited_pokedex_seen = self.pokedex_seen(self.pyboy.memory)
 
+        # First step control is back in the world after a blackout's forced
+        # Pokemon-Center warp: top up (not reset to 0 -- keeps the fuse a
+        # real ceiling, not an open door) the destination map's budget by
+        # exactly one map_truncate_budget, clamped at its current floor. The
+        # map's own dwell/step count from earlier this episode can otherwise
+        # already be near/at budget before the agent ever gets a chance to
+        # walk back out, tripping map_budget almost immediately on return --
+        # punishing the trip out (e.g. to Route 1) that caused the blackout
+        # instead of punishing only the blackout itself (battle_lost_penalty
+        # already covers that). Deliberately does NOT touch
+        # position_visit_counts/visited_positions -- exploration_reward for
+        # this map's tiles stays fully decayed, so there is no reward to
+        # farm by blacking out on purpose, only breathing room to leave.
+        if self._pending_blackout_recovery and self.is_world(self.pyboy.memory):
+            self._pending_blackout_recovery = False
+            dest_map = self.map_id(self.pyboy.memory)
+            budget = self.map_truncate_budget(dest_map)
+            self.world_map_step_counts[dest_map] = max(
+                0, self.world_map_step_counts.get(dest_map, 0) - budget
+            )
+
         # --heatmap reward-density overlay: attribute this step's reward to
         # the last known world tile, not just world-state steps — a battle
         # won/lost reward (often the largest single payout) is earned while
@@ -644,11 +757,11 @@ class Data:
             self.visited_positions[pos] = self.visited_positions.get(pos, 0) + duration
             # position_visit_counts always advances too, even on a stationary
             # A/B mash — it drives the decay in reward_position's
-            # exploration_reward and reward_active_map_presence, and freezing
-            # it while "talking" let both pay out a flat per-tick bonus
-            # forever instead of decaying to zero (reward_anti_loop's own
-            # visit-penalty check has its own independent `not interacting`
-            # gate below, so it does not need this counter frozen to spare a
+            # exploration_reward, and freezing it while "talking" let it pay
+            # out a flat per-tick bonus forever instead of decaying to zero
+            # (reward_anti_loop's own visit-penalty check has its own
+            # independent `not interacting` gate below, so it does not need
+            # this counter frozen to spare a
             # normal talk).
             self.position_visit_counts[pos] = self.position_visit_counts.get(pos, 0) + 1
             if not (stayed and interacting):
@@ -758,6 +871,9 @@ class Data:
             self.recent_menu_states.clear()
 
         if self.is_battle(self.pyboy.memory):
+            # One env step, not raw ticks -- see battle_step_count's own
+            # comment (pokemon/battle_ticks_frac telemetry).
+            self.battle_step_count += 1
             if self.number_of_turns_in_current_battle(
                 memory
             ) != self.number_of_turns_in_current_battle(self.pyboy.memory):
@@ -1098,6 +1214,28 @@ class Data:
         this episode" observation (see reward() / _accum_reward)."""
         return [self.reward_component_sums.get(name, 0.0) for name in REWARD_COMPONENT_NAMES]
 
+    def _current_reward_mode(self) -> str:
+        """Which REWARD_MODE_NAMES bucket the current (post-tick) state falls
+        into. Mutually exclusive by construction (is_dialog/is_menu/is_world
+        each already require not is_battle, and is_cutscene_locked requires
+        not is_battle/not is_blocked), so check order doesn't matter."""
+        mem = self.pyboy.memory
+        if self.is_battle(mem):
+            return "battle"
+        if self.is_dialog(mem):
+            return "dialog"
+        if self.is_menu(mem):
+            return "menu"
+        if self.is_world(mem):
+            return "world"
+        return "cutscene"
+
+    def reward_mode_vector(self) -> list[float]:
+        """Cumulative per-episode sum of whole-step reward bucketed by
+        REWARD_MODE_NAMES — monitoring only (TensorBoard), not fed to the
+        model. See _current_reward_mode / reward()."""
+        return [self.reward_mode_sums.get(name, 0.0) for name in REWARD_MODE_NAMES]
+
     def reward(self, memory: bytes, action: int) -> tuple[float, float]:
         milestone = 0.0
         step = 0.0
@@ -1106,6 +1244,8 @@ class Data:
         self.loop_causes = set()
         self.last_milestone_payouts = []
         self._just_blacked_out = self._detect_blackout(memory)
+        if self._just_blacked_out:
+            self._pending_blackout_recovery = True
 
         milestone += self._accum_reward("core", self.reward_core(memory))
         # One-shot payout for any newly-satisfied GOAL_CANDIDATES event/badge
@@ -1160,10 +1300,13 @@ class Data:
             step += self._accum_reward("anti_loop", self.reward_anti_loop(action=action, memory=memory))
         # Always track dialog enter/exit — cutscenes often follow textboxes.
         step += self._accum_reward("dialog_reopen", self.reward_dialog_reopen(memory))
-        # Nudge toward maps with unfinished reachable progress (world-mode only).
-        step += self._accum_reward(
-            "active_map_presence", self.reward_active_map_presence(self.pyboy.memory)
-        )
+        # active_map_presence removed (was: nudge toward maps with unfinished
+        # reachable progress, world-mode only, see reward_active_map_presence
+        # -- now deleted). "active_map_presence" stays in
+        # REWARD_COMPONENT_NAMES / reward_component_sums as a permanently-0
+        # slot rather than being removed from the tuple -- shrinking it would
+        # change VECTOR_DIM and break the observation shape of any
+        # checkpoint trained before this change.
         # Same decay curve/magnitude, nudging toward fresh dialog (dialog-mode
         # only) and fresh maps (world-mode only) instead of active events.
         step += self._accum_reward(
@@ -1171,7 +1314,9 @@ class Data:
         )
         step += self._accum_reward("new_map_presence", self.reward_new_map_presence(self.pyboy.memory))
 
-        self._accum_reward("total", milestone + step)
+        total = self._accum_reward("total", milestone + step)
+        mode = self._current_reward_mode()
+        self.reward_mode_sums[mode] = self.reward_mode_sums.get(mode, 0.0) + total
         return milestone, step
 
     def _is_fresh_dialog_exit(self, memory: bytes) -> bool:
@@ -1438,10 +1583,10 @@ class Data:
                 causes.add("menu_loop")
 
         # 4) Off-goal map camping used to compare self.map_id against a
-        # hand-curated GOAL_ALLOWED_MAPS[goal] set. Replaced by the generic
-        # active_map_events()-driven reward_active_map_presence (see
-        # reward()) — no per-goal map list to maintain, and it shapes every
-        # step rather than only camping past a visit-count threshold.
+        # hand-curated GOAL_ALLOWED_MAPS[goal] set, then later against the
+        # generic active_map_events()-driven reward_active_map_presence
+        # (since removed — see reward()). No replacement currently; nothing
+        # penalizes off-goal map camping here anymore.
 
         self.loop_causes = causes
         if causes:
@@ -1494,8 +1639,8 @@ class Data:
         # tilemap text frames — that was the post-rival exploit. The old
         # one-time "first time ever seeing this (dialog_id, map)" bonus is
         # gone — reward_new_dialog_presence (see reward()) now covers fresh
-        # conversations with the same decaying-by-visits shape as
-        # reward_active_map_presence instead of a flat one-shot payout.
+        # conversations with a decaying-by-visits shape instead of a flat
+        # one-shot payout.
         dialog_reward = self.dialog_advance_reward if dialog_changed else 0.0
         # Same per-tick waste shape AND same ramp tempo as reward_position's
         # step_penalty (base_reward scaled up to 10x at saturation over
@@ -1578,7 +1723,35 @@ class Data:
         )
 
     def reward_player_pokemons_current_hps(self, memory: bytes):
+        """Fractional HP change this step, summed over the party.
+
+        Damage *taken* while in battle is scaled by ``_battle_difficulty_scale``
+        (enemy_lv vs active_lv), the same discount ``reward_enemy_hp``/
+        ``battle_won_reward`` already apply to damage *dealt* -- getting hit
+        by a same-level opponent pays full cost, but eating a big hit from
+        something far weaker (a bad roll on an otherwise easy, winnable
+        fight) no longer nearly cancels out the eventual win reward. Wild
+        battles further decay this cost by ``_wild_encounter_decay`` (same
+        per-tile repeat-visit decay as every other wild-battle reward
+        component, see its docstring) -- once a tile's win/HP-dealt rewards
+        have decayed to ~0 from repetition, the HP-taken cost decays with
+        them instead of staying full price forever, so a heavily-farmed
+        tile's battles trend toward ~0 net, not net-negative. Trainer
+        battles are exempt (one-shot per sprite, same as everywhere else
+        this decay applies). Healing (positive delta) and any HP change
+        outside battle (poison ticks, centre heals -- already separately
+        gated by _just_blacked_out in reward_core) are left at full,
+        undiscounted magnitude.
+        """
         reward = 0.0
+        in_battle = self.is_battle(self.pyboy.memory)
+        scale = 1.0
+        wild = False
+        if in_battle:
+            scale = self._battle_difficulty_scale(
+                self.enemy_level(self.pyboy.memory), self.pokemon_level(self.pyboy.memory)
+            )
+            wild = self.type_of_battle(self.pyboy.memory) == 1
 
         for id_x, id_y, hp_x, hp_y, max_hp in zip(
             self.player_pokemons_ids(memory),
@@ -1588,7 +1761,12 @@ class Data:
             self.player_pokemons_max_hps(self.pyboy.memory),
         ):
             if id_x == id_y and id_x != 0:
-                reward += (hp_y - hp_x) / max_hp
+                delta = (hp_y - hp_x) / max_hp
+                if in_battle and delta < 0:
+                    delta *= scale
+                    if wild:
+                        delta *= self._wild_encounter_decay()
+                reward += delta
 
         return reward
 
@@ -1764,29 +1942,54 @@ class Data:
 
     def map_truncate_budget(self, map_id: int) -> int:
         """Hard step cutoff that ends the episode (see truncated()) -- the
-        map's own width*height in blocks (floor of 64 so a degenerate/
+        map's own width*height in blocks, floor of 64 so a degenerate/
         UNUSED_MAP entry with width=height=0 in map_constants.py still gets a
-        usable budget), scaled by new_position_decay_visits.
+        usable budget.
 
-        That reuses the same "how many times can one tile be walked before
-        it's stale" constant reward_position's exploration_reward decays
-        against, instead of an unrelated hand-picked multiplier: the budget
-        is exactly the step count it'd take to visit every tile on the map
-        new_position_decay_visits times each. No per-step penalty ramps up
-        before this -- truncated() simply ends the episode once it's passed.
+        No longer scaled by new_position_decay_visits (was max(64, area) * 4,
+        i.e. "enough to visit every tile 4 times"). That multiplier was sized
+        for _tick_map_budget's old meaning -- a raw per-episode dwell total --
+        and stopped making sense once _tick_map_budget switched to counting
+        stall since the map's last brand-new tile (reset to 0 on every fresh
+        one, see its own docstring): with a resettable counter, x4 let a
+        policy that pings a single new tile every few hundred stalled steps
+        wander indefinitely without ever tripping this fuse (confirmed live --
+        truncate_cause_map_budget sat at 0.0000 for an entire run under the
+        resettable counter with this multiplier still in place). Area alone
+        is generous enough for a genuine detour around an obstacle without
+        multiplying out a stall streak's tolerance to unreachable lengths. No
+        per-step penalty ramps up before this -- truncated() simply ends the
+        episode once it's passed.
         """
         area = _map_constants.map_area_blocks(map_id)
-        return max(64, area) * self.new_position_decay_visits
+        return max(64, area)
 
     def _tick_map_budget(self, memory: PyBoyMemoryView | bytes) -> None:
-        """Advance the current map's world-step counter. Called once per step
-        from count() — only fills while actually walking the world; dialog/
+        """Advance the current map's stall counter. Called once per step from
+        count() — only fills while actually walking the world; dialog/
         battle/menu time on a map is free (see map_truncate_exceeded, which
-        is checked every mode regardless)."""
+        is checked every mode regardless).
+
+        Counts world-steps *since this map last gained a brand-new tile*
+        (position_visit_counts == 1, checked after count()'s own increment
+        earlier this step — see its call site), not a raw per-episode total.
+        A raw total meant leaving an overstayed map and coming back later
+        resumed adding to the same running sum, so a handful of honest,
+        exploratory forays that each retreated partway (e.g. into a wild
+        battle, or just turning back) could burn through the whole budget
+        between them, leaving no room for the one attempt that would have
+        actually crossed the map. Resetting on every genuinely new tile makes
+        the fuse measure actual stalling instead of cumulative dwell time —
+        a policy that keeps making net-new progress, however many times it
+        steps away and back, never trips it.
+        """
         if not self.is_world(memory):
             return
         mid = self.map_id(memory)
-        self.world_map_step_counts[mid] = self.world_map_step_counts.get(mid, 0) + 1
+        if self.position_visit_counts.get(self.get_position(memory), 0) <= 1:
+            self.world_map_step_counts[mid] = 0
+        else:
+            self.world_map_step_counts[mid] = self.world_map_step_counts.get(mid, 0) + 1
 
     def map_truncate_exceeded(self, memory: PyBoyMemoryView | bytes | None = None) -> bool:
         """True once the current map's step count has passed
@@ -1835,44 +2038,14 @@ class Data:
     def has_active_map_event(self, memory: PyBoyMemoryView | bytes | None = None) -> bool:
         return bool(self.active_map_events(memory=memory))
 
-    def reward_active_map_presence(self, memory: PyBoyMemoryView | bytes | None = None) -> float:
-        """Small shaping signal toward maps with unfinished, reachable
-        progress — see active_map_event_reward. World-mode only: presence
-        doesn't mean much mid-dialog/battle, and reward_position already
-        covers movement shaping there.
-
-        active_map_event_reward decays with the same per-tile visit curve as
-        reward_position's exploration_reward (new_position_decay_visits) —
-        without this it was a flat per-tick bonus with no cap, and
-        reward_anti_loop's visit_penalty (the thing that would normally
-        punish camping one tile) explicitly exempts A/B ("that is the
-        talk-to-NPC attempt" — see its comment), so holding B in place on
-        any map with an unsatisfied event paid out forever, completely
-        immune to the anti-loop camping penalty. No penalty for maps with no
-        active event: has_active_map_event depends on event_graph's inferred
-        parent edges, which can be wrong (an event marked "active" that isn't
-        actually reachable yet) — taxing every other map for that made the
-        policy stack onto the falsely-active map instead of exploring.
-        """
-        if memory is None:
-            memory = self.pyboy.memory
-        if not self.is_world(memory):
-            return 0.0
-        if not self.has_active_map_event(memory):
-            return 0.0
-        visit_count = self.position_visit_counts.get(self.get_position(), 0)
-        decay = max(0.0, 1.0 - visit_count / self.new_position_decay_visits)
-        return self.active_map_event_reward * decay
-
     def reward_new_dialog_presence(
         self, memory: PyBoyMemoryView | bytes | None = None
     ) -> float:
-        """Same decay shaping as reward_active_map_presence, but keyed by
-        (map_id, dialog_id) instead of active-event-map presence: a fresh
+        """Decaying presence bonus keyed by (map_id, dialog_id): a fresh
         conversation pays active_map_event_reward, decaying to 0 by
-        new_position_decay_visits dialog-steps in, same as a tile on a map
-        with an active event. Reuses both constants rather than its own so
-        the two mechanisms can't drift apart in length or value.
+        new_position_decay_visits dialog-steps in. Reuses both constants
+        rather than its own so this and reward_new_map_presence can't drift
+        apart in length or value.
         """
         if memory is None:
             memory = self.pyboy.memory
@@ -1886,11 +2059,10 @@ class Data:
     def reward_new_map_presence(
         self, memory: PyBoyMemoryView | bytes | None = None
     ) -> float:
-        """Same decay shaping as reward_active_map_presence, but keyed by
-        map_id_visit_counts instead of position_visit_counts: first setting
-        foot on a map not visited (much) yet this episode pays
+        """Decaying presence bonus keyed by map_id_visit_counts: first
+        setting foot on a map not visited (much) yet this episode pays
         active_map_event_reward, decaying to 0 by new_position_decay_visits
-        steps in, same as a tile on a map with an active event.
+        steps in.
         """
         if memory is None:
             memory = self.pyboy.memory
@@ -1957,6 +2129,10 @@ class Data:
         # map_truncate_budget), checked in every mode. No per-step penalty
         # before this; the episode is simply truncated once it's passed.
         map_budget = self.map_truncate_exceeded(self.pyboy.memory)
+        if map_budget:
+            self.last_map_budget_trunc_at_start = (
+                self.map_id(self.pyboy.memory) == self._start_map_id
+            )
 
         causes: set[str] = set()
         if stuck_tile:
@@ -3183,40 +3359,58 @@ class Data:
         return max(levels) if levels else 0
 
     def _battle_difficulty_scale(self, enemy_lv: int, player_lv: int) -> float:
-        """Smoothstep(enemy_lv / player_lv) — a same-or-tougher opponent
-        (ratio >= 1) pays full credit; below that the reward eases down
-        smoothly to 0 as the level gap grows, instead of a hard linear ramp
-        with an artificial floor. 3r^2-2r^3 has zero slope at both r=0 and
-        r=1, so there is no kink anywhere, including the seam into the
-        ratio>=1 cap=1.0 branch.
+        """max(battle_difficulty_scale_floor, smoothstep(enemy_lv / player_lv))
+        — a same-or-tougher opponent (ratio >= 1) pays full credit; below
+        that the reward eases down smoothly toward the floor as the level
+        gap grows, instead of a hard linear ramp or decaying all the way to
+        0. 3r^2-2r^3 has zero slope at both r=0 and r=1, so there is no kink
+        anywhere, including the seam into the ratio>=1 cap=1.0 branch.
 
-        Unreadable/invalid levels (<=0) fall back to a small constant, not
-        1.0 — this is an anti-farming discount, so a bad read must never
-        silently grant full credit (that's exactly the failure mode that let
-        the exploit through undetected).
+        Floored (not left to decay to 0) so a clean win against a far
+        weaker wild Pokemon can't net negative once battle_useless_step's
+        per-tick waste cost (never discounted by this scale) is netted
+        against it — see battle_difficulty_scale_floor's own docstring for
+        the reasoning, identical to wild_encounter_decay_floor's.
+
+        Unreadable/invalid levels (<=0) fall back to a small constant below
+        this floor, not 1.0 — this is an anti-farming discount, so a bad
+        read must never silently grant full (or even floor-level) credit
+        (that's exactly the failure mode that let the exploit through
+        undetected).
         """
         if player_lv <= 0 or enemy_lv <= 0:
             return self.battle_difficulty_invalid_fallback
         r = min(1.0, enemy_lv / player_lv)
-        return 3 * r**2 - 2 * r**3
+        smoothstep = 3 * r**2 - 2 * r**3
+        return max(self.battle_difficulty_scale_floor, smoothstep)
 
     def _wild_encounter_decay(self) -> float:
         """Per-tile decay factor for wild-battle rewards, keyed off ordinary
         tile traffic rather than a dedicated encounter counter.
 
-        Floors at 0 after ``wild_visit_decay_visits`` prior position_visit_
-        counts on the current tile (``_battle_entry_wild_visits``, the
-        pre-seed reading cached at battle entry) — walking a grass tile and
-        fighting on it both spend down the same budget, so pacing on/off a
-        known wild tile without even triggering a fight already burns its
-        reward down. Applied to every positive reward a wild fight can pay
-        (``reward_enemy_hp``, ``reward_enemy_status``, ``battle_won_reward``)
-        so grinding one grass tile drains to zero reward, not just the win
-        bonus. Trainer battles never call this — they are one-shot per
-        sprite, not repeatable on the same tile.
+        Decays toward (not to) ``wild_encounter_decay_floor`` after
+        ``wild_visit_decay_visits`` prior position_visit_counts on the
+        current tile (``_battle_entry_wild_visits``, the pre-seed reading
+        cached at battle entry) — walking a grass tile and fighting on it
+        both spend down the same budget, so pacing on/off a known wild tile
+        without even triggering a fight already burns its reward down.
+        Applied to every reward/cost a wild fight can pay (``reward_enemy_hp``,
+        ``reward_enemy_status``, ``battle_won_reward``, ``battle_turn_reward``,
+        the HP-taken cost in ``reward_player_pokemons_current_hps``, and the
+        exit-outcome rewards in ``reward_battle_exit``) so grinding one grass
+        tile drains toward the floor, not just the win bonus. A hard floor
+        of 0 used to mean every one of those undecays to nothing while
+        battle_useless_step's per-tick waste cost (never decayed, not part
+        of this budget) stays full price — a stale tile's battles net a
+        guaranteed loss forever regardless of outcome, which taught blanket
+        combat avoidance rather than just curbing farming (see
+        wild_encounter_decay_floor's own docstring for the math). Trainer
+        battles never call this — they are one-shot per sprite, not
+        repeatable on the same tile.
         """
         return max(
-            0.0, 1.0 - self._battle_entry_wild_visits / self.wild_visit_decay_visits
+            self.wild_encounter_decay_floor,
+            1.0 - self._battle_entry_wild_visits / self.wild_visit_decay_visits,
         )
 
     def reward_battle_exit(self, memory: bytes) -> float:
@@ -3277,12 +3471,6 @@ class Data:
             # question is whole-team risk, not this fight's difficulty.
             difficulty_scale = self._battle_difficulty_scale(enemy_lv, active_lv)
             reward = self.battle_won_reward * difficulty_scale
-            # Wild wins decay with repeat encounters on the same tile, same
-            # shape as reward_position's exploration decay — trainer battles
-            # are one-shot per sprite so they are exempt (type_of_battle read
-            # from `memory`, the still-in-battle previous frame).
-            if self.type_of_battle(memory) == 1:
-                reward *= self._wild_encounter_decay()
             kind = "win"
         elif result == 1:
             reward = self.battle_lost_penalty
@@ -3299,6 +3487,33 @@ class Data:
                 kind = "coward"
         else:
             return 0.0
+
+        # Every battle-exit outcome (win/lose/blackout/smart-flee/coward-flee)
+        # decays with repeat encounters on the same tile, same shape as
+        # reward_position's exploration decay and every other wild-battle
+        # reward component (reward_enemy_hp, reward_enemy_status,
+        # battle_turn_reward, reward_player_pokemons_current_hps) — a
+        # heavily-farmed tile stops mattering symmetrically on every outcome,
+        # not just the win path, instead of only the reward side decaying
+        # while penalties (or a repeat coward-flee) stay full price forever.
+        # Trainer battles are one-shot per sprite so they are exempt
+        # (type_of_battle read from `memory`, the still-in-battle previous
+        # frame — self.pyboy.memory is already back in the overworld here).
+        if self.type_of_battle(memory) == 1:
+            decay = self._wild_encounter_decay()
+            reward *= decay
+            # Always-on (not collect_heatmap-gated) telemetry for
+            # pokemon/wild_encounter_decay_mean / _floored_rate — see
+            # _wild_decay_sum's own comment.
+            self._wild_decay_sum += decay
+            self._wild_decay_count += 1
+            if decay <= self.wild_encounter_decay_floor + 1e-9:
+                self._wild_decay_floored_count += 1
+
+        # Always-on (not collect_heatmap-gated) outcome tally for
+        # pokemon/battle_*_rate / pokemon/battles_per_episode — see
+        # battle_outcome_tally's own comment.
+        self.battle_outcome_tally[kind] = self.battle_outcome_tally.get(kind, 0) + 1
 
         # --heatmap win-rate/flee-rate overlays, both keyed off the same
         # per-tile counts dict: win/loss feed the win-rate metric, smart/

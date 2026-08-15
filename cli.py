@@ -278,6 +278,15 @@ p_debug.add_argument(
     action="store_true",
     help="Print every agent step (incl. unrecognized-key None)",
 )
+p_debug.add_argument(
+    "--model",
+    nargs="?",
+    const="",
+    default=None,
+    help="Load a PPO checkpoint and print its live button-probability "
+         "table after every step, next to what you actually pressed. "
+         "Bare --model auto-picks the newest best checkpoint.",
+)
 
 def main():
     args = parser.parse_args()

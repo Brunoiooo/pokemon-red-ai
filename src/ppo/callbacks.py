@@ -226,6 +226,56 @@ class MilestoneCallback(BaseCallback):
         # revisit their own footprint on average, see
         # PokemonRedEnv._info's position_visit_avg.
         self._position_visit_avgs: deque[float] = deque(maxlen=window)
+        # Rolling per-episode-total window for each REWARD_COMPONENT_NAMES
+        # entry (incl. "total"), fed from info["reward_component_sums"] —
+        # logged as one TensorBoard chart per component
+        # (pokemon/reward/<name>), see PokemonRedEnv._info.
+        from pokemon.Data import REWARD_COMPONENT_NAMES, REWARD_MODE_NAMES
+
+        self._reward_component_windows: dict[str, deque[float]] = {
+            name: deque(maxlen=window) for name in REWARD_COMPONENT_NAMES
+        }
+        # Same, but bucketed by game mode (world/dialog/menu/battle/cutscene)
+        # instead of named component — fed from info["reward_mode_sums"],
+        # logged as pokemon/reward_mode/<mode>. See PokemonRedEnv._info /
+        # Data.reward_mode_vector.
+        self._reward_mode_windows: dict[str, deque[float]] = {
+            name: deque(maxlen=window) for name in REWARD_MODE_NAMES
+        }
+        # Rolling per-episode counts of each reward_battle_exit outcome kind
+        # (win/lose/blackout/smart-flee/coward-flee), fed from
+        # info["battle_outcome_tally"] — summed at log time into
+        # pokemon/battle_<kind>_rate and pokemon/battles_per_episode. See
+        # Data.battle_outcome_tally.
+        self._battle_outcome_windows: dict[str, deque[int]] = {
+            kind: deque(maxlen=window)
+            for kind in ("win", "lose", "blackout", "smart", "coward")
+        }
+        # Per-episode (battle env-steps, total env-steps) — for
+        # pokemon/battle_ticks_frac, the direct measure of how much of the
+        # episode is spent fighting vs. avoiding combat. See
+        # Data.battle_step_count.
+        self._battle_steps: deque[int] = deque(maxlen=window)
+        self._episode_lengths: deque[int] = deque(maxlen=window)
+        # Per-episode _wild_encounter_decay() sum/count/floored-count, fed
+        # from info["wild_decay_*"] — for pokemon/wild_encounter_decay_mean
+        # and pokemon/wild_encounter_decay_floored_rate. See
+        # Data._wild_decay_sum.
+        self._wild_decay_sums: deque[float] = deque(maxlen=window)
+        self._wild_decay_counts: deque[int] = deque(maxlen=window)
+        self._wild_decay_floored_counts: deque[int] = deque(maxlen=window)
+        # 1 when an episode's map_budget truncation happened on the episode's
+        # own start map, 0 when elsewhere — for
+        # pokemon/map_budget_trunc_at_start_rate. Only appended for episodes
+        # that actually truncated on map_budget (see
+        # Data.last_map_budget_trunc_at_start).
+        self._map_budget_trunc_at_start: deque[int] = deque(maxlen=window)
+        # Monotonic (never decreases) highest STAGE_ORDER index any goal hit
+        # has ever reached this run — for pokemon/best_curriculum_stage_ever,
+        # a high-water mark distinct from the rolling/noisy averages above,
+        # so "the policy regressed" and "the policy never got that far" read
+        # differently instead of both just showing a low current rate.
+        self._best_stage_idx_ever = 0
         # Cumulative (whole run, not windowed) count of completed episodes
         # that touched each goal at least once -- see info["milestones_hit"]
         # below. Doubles as a per-goal mastery signal: fed into
@@ -265,6 +315,14 @@ class MilestoneCallback(BaseCallback):
         self._ep_goals_peak = [0] * n
         self._ep_map_dwell_avg = [0.0] * n
         self._ep_position_visit_avg = [0.0] * n
+        self._ep_reward_component_sums: list[dict[str, float]] = [{}] * n
+        self._ep_reward_mode_sums: list[dict[str, float]] = [{}] * n
+        self._ep_battle_outcome_tally: list[dict[str, int]] = [{} for _ in range(n)]
+        self._ep_battle_step_count = [0] * n
+        self._ep_wild_decay_sum = [0.0] * n
+        self._ep_wild_decay_count = [0] * n
+        self._ep_wild_decay_floored_count = [0] * n
+        self._ep_map_budget_trunc_at_start: list[bool | None] = [None] * n
         self.logger.record("pokemon/curriculum_stage_idx", self._stage_idx())
         self._reset_goal_hits()
         self._load_goal_hit_counts()
@@ -458,6 +516,24 @@ class MilestoneCallback(BaseCallback):
             self._ep_position_visit_avg[i] = float(
                 info.get("position_visit_avg", 0.0) or 0.0
             )
+            rc_sums = info.get("reward_component_sums")
+            if rc_sums:
+                self._ep_reward_component_sums[i] = rc_sums
+            rm_sums = info.get("reward_mode_sums")
+            if rm_sums:
+                self._ep_reward_mode_sums[i] = rm_sums
+            tally = info.get("battle_outcome_tally")
+            if tally:
+                self._ep_battle_outcome_tally[i] = tally
+            self._ep_battle_step_count[i] = int(info.get("battle_step_count", 0) or 0)
+            self._ep_wild_decay_sum[i] = float(info.get("wild_decay_sum", 0.0) or 0.0)
+            self._ep_wild_decay_count[i] = int(info.get("wild_decay_count", 0) or 0)
+            self._ep_wild_decay_floored_count[i] = int(
+                info.get("wild_decay_floored_count", 0) or 0
+            )
+            mb_start = info.get("map_budget_trunc_at_start")
+            if mb_start is not None:
+                self._ep_map_budget_trunc_at_start[i] = bool(mb_start)
 
             if done:
                 self._loops.append(1 if self._ep_loop[i] else 0)
@@ -480,11 +556,34 @@ class MilestoneCallback(BaseCallback):
                 self._regressions.append(1 if self._ep_regressed[i] else 0)
                 self._map_dwell_avgs.append(self._ep_map_dwell_avg[i])
                 self._position_visit_avgs.append(self._ep_position_visit_avg[i])
+                for name, window in self._reward_component_windows.items():
+                    window.append(self._ep_reward_component_sums[i].get(name, 0.0))
+                for name, window in self._reward_mode_windows.items():
+                    window.append(self._ep_reward_mode_sums[i].get(name, 0.0))
                 for name in self._ep_milestones[i]:
                     self._goal_hit_counts[name] += 1
+                    from curriculum_config import stage_index
+
+                    idx = stage_index(name)
+                    if idx > self._best_stage_idx_ever:
+                        self._best_stage_idx_ever = idx
 
                 if "episode" in info:
                     self._returns.append(float(info["episode"]["r"]))
+                    self._episode_lengths.append(int(info["episode"].get("l", 0)))
+
+                for kind, window in self._battle_outcome_windows.items():
+                    window.append(self._ep_battle_outcome_tally[i].get(kind, 0))
+                self._battle_steps.append(self._ep_battle_step_count[i])
+                self._wild_decay_sums.append(self._ep_wild_decay_sum[i])
+                self._wild_decay_counts.append(self._ep_wild_decay_count[i])
+                self._wild_decay_floored_counts.append(
+                    self._ep_wild_decay_floored_count[i]
+                )
+                if self._ep_map_budget_trunc_at_start[i] is not None:
+                    self._map_budget_trunc_at_start.append(
+                        1 if self._ep_map_budget_trunc_at_start[i] else 0
+                    )
 
                 self._ep_loop[i] = False
                 self._ep_loop_causes[i] = set()
@@ -494,6 +593,14 @@ class MilestoneCallback(BaseCallback):
                 self._ep_goals_peak[i] = 0
                 self._ep_map_dwell_avg[i] = 0.0
                 self._ep_position_visit_avg[i] = 0.0
+                self._ep_reward_component_sums[i] = {}
+                self._ep_reward_mode_sums[i] = {}
+                self._ep_battle_outcome_tally[i] = {}
+                self._ep_battle_step_count[i] = 0
+                self._ep_wild_decay_sum[i] = 0.0
+                self._ep_wild_decay_count[i] = 0
+                self._ep_wild_decay_floored_count[i] = 0
+                self._ep_map_budget_trunc_at_start[i] = None
 
         if len(self._loops) >= 10 and self.n_calls % self.check_every == 0:
             loop_rate = float(np.mean(self._loops))
@@ -545,6 +652,50 @@ class MilestoneCallback(BaseCallback):
                 self.logger.record(
                     "pokemon/ep_return_mean", float(np.mean(self._returns))
                 )
+            for name, window in self._reward_component_windows.items():
+                if window:
+                    self.logger.record(
+                        f"pokemon/reward/{name}", float(np.mean(window))
+                    )
+            for name, window in self._reward_mode_windows.items():
+                if window:
+                    self.logger.record(
+                        f"pokemon/reward_mode/{name}", float(np.mean(window))
+                    )
+            battles_total = sum(
+                sum(window) for window in self._battle_outcome_windows.values()
+            )
+            n_battle_eps = max(len(next(iter(self._battle_outcome_windows.values()))), 1)
+            self.logger.record(
+                "pokemon/battles_per_episode", battles_total / n_battle_eps
+            )
+            if battles_total:
+                for kind, window in self._battle_outcome_windows.items():
+                    self.logger.record(
+                        f"pokemon/battle_{kind}_rate", sum(window) / battles_total
+                    )
+            if self._episode_lengths and sum(self._episode_lengths):
+                self.logger.record(
+                    "pokemon/battle_ticks_frac",
+                    sum(self._battle_steps) / sum(self._episode_lengths),
+                )
+            if self._wild_decay_counts and sum(self._wild_decay_counts):
+                self.logger.record(
+                    "pokemon/wild_encounter_decay_mean",
+                    sum(self._wild_decay_sums) / sum(self._wild_decay_counts),
+                )
+                self.logger.record(
+                    "pokemon/wild_encounter_decay_floored_rate",
+                    sum(self._wild_decay_floored_counts) / sum(self._wild_decay_counts),
+                )
+            if self._map_budget_trunc_at_start:
+                self.logger.record(
+                    "pokemon/map_budget_trunc_at_start_rate",
+                    float(np.mean(self._map_budget_trunc_at_start)),
+                )
+            self.logger.record(
+                "pokemon/best_curriculum_stage_ever", float(self._best_stage_idx_ever)
+            )
             self.logger.record(
                 "pokemon/goal_hits", float(self._goal_hit_count)
             )
