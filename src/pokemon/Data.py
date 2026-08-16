@@ -248,7 +248,7 @@ class Data:
     # climbs from ordinary foot traffic (not just fights), so a threshold
     # this low would zero out wild rewards on any well-trodden route tile
     # before the agent ever got its first fight there.
-    wild_visit_decay_visits: int = 8
+    wild_visit_decay_visits: int = 4
     # Floor for _wild_encounter_decay -- decaying all the way to 0 made every
     # wild-battle reward/cost on a tile past wild_visit_decay_visits net to
     # whatever undecayed cost remains (battle_useless_step's per-tick waste,
@@ -916,9 +916,7 @@ class Data:
                 # against whatever wMaxMenuItem happens to be right now
                 # (stale or not; only a *change* from here reads as a live
                 # choice, see the field comment).
-                self._dialog_choice_baseline = int(
-                    self.pyboy.memory[RAM.wMaxMenuItem]
-                )
+                self._dialog_choice_baseline = int(self.pyboy.memory[RAM.wMaxMenuItem])
             else:
                 self.in_dialog_ticks += duration
             self._dialog_screen_is_new()
@@ -998,7 +996,8 @@ class Data:
                     self.get_position(offset_x=dx, offset_y=dy), 0
                 )
                 row.append(
-                    min(visits, VISIT_PENALTY_SOFT_THRESHOLD) / VISIT_PENALTY_SOFT_THRESHOLD
+                    min(visits, VISIT_PENALTY_SOFT_THRESHOLD)
+                    / VISIT_PENALTY_SOFT_THRESHOLD
                 )
             grid.append(row)
         return grid
@@ -1211,14 +1210,18 @@ class Data:
         """Add ``value`` to this episode's running total for ``name`` (see
         REWARD_COMPONENT_NAMES / reward_component_sums) and pass it through
         unchanged, so call sites can wrap an addend in place."""
-        self.reward_component_sums[name] = self.reward_component_sums.get(name, 0.0) + value
+        self.reward_component_sums[name] = (
+            self.reward_component_sums.get(name, 0.0) + value
+        )
         return value
 
     def reward_component_vector(self) -> list[float]:
         """Cumulative per-episode sum of each REWARD_COMPONENT_NAMES entry —
         the model-facing "how much of each reward type have I earned so far
         this episode" observation (see reward() / _accum_reward)."""
-        return [self.reward_component_sums.get(name, 0.0) for name in REWARD_COMPONENT_NAMES]
+        return [
+            self.reward_component_sums.get(name, 0.0) for name in REWARD_COMPONENT_NAMES
+        ]
 
     def _current_reward_mode(self) -> str:
         """Which REWARD_MODE_NAMES bucket the current (post-tick) state falls
@@ -1262,7 +1265,9 @@ class Data:
         # since every surviving candidate is a permanent event bit (the auto
         # blacklist already excludes map-presence-style resettable checks),
         # not a "currently on this map" location goal that a warp could undo.
-        milestone += self._accum_reward("generic_progress", self.reward_generic_progress(memory))
+        milestone += self._accum_reward(
+            "generic_progress", self.reward_generic_progress(memory)
+        )
         # Battle→overworld (or dialog) transition — win/lose/flee uses prev memory.
         milestone += self._accum_reward("battle_exit", self.reward_battle_exit(memory))
 
@@ -1303,7 +1308,9 @@ class Data:
             step += self._accum_reward("battle_useless_step", s)
 
         if not self.is_cutscene_locked(self.pyboy.memory):
-            step += self._accum_reward("anti_loop", self.reward_anti_loop(action=action, memory=memory))
+            step += self._accum_reward(
+                "anti_loop", self.reward_anti_loop(action=action, memory=memory)
+            )
         # Always track dialog enter/exit — cutscenes often follow textboxes.
         step += self._accum_reward("dialog_reopen", self.reward_dialog_reopen(memory))
         # active_map_presence removed (was: nudge toward maps with unfinished
@@ -1318,7 +1325,9 @@ class Data:
         step += self._accum_reward(
             "new_dialog_presence", self.reward_new_dialog_presence(self.pyboy.memory)
         )
-        step += self._accum_reward("new_map_presence", self.reward_new_map_presence(self.pyboy.memory))
+        step += self._accum_reward(
+            "new_map_presence", self.reward_new_map_presence(self.pyboy.memory)
+        )
 
         total = self._accum_reward("total", milestone + step)
         mode = self._current_reward_mode()
@@ -1332,7 +1341,10 @@ class Data:
         only adds to _completed_dialogs on exit, so a dialog already in that set here
         means this is a repeat exit of a previously-finished conversation, not progress.
         """
-        return self.is_dialog(memory) and self.get_dialog(memory) not in self._completed_dialogs
+        return (
+            self.is_dialog(memory)
+            and self.get_dialog(memory) not in self._completed_dialogs
+        )
 
     def reward_dialog_reopen(self, memory: bytes) -> float:
         """After exiting a dialog, reopening the same (dialog_id, map_id) is a loop.
@@ -1380,7 +1392,9 @@ class Data:
         """GOAL_CANDIDATES currently true in game state (can shrink)."""
         return sorted(g for g in GOAL_CANDIDATES if self.is_goal_satisfied(g))
 
-    def reward_generic_progress(self, memory: PyBoyMemoryView | bytes | None = None) -> float:
+    def reward_generic_progress(
+        self, memory: PyBoyMemoryView | bytes | None = None
+    ) -> float:
         """One-shot bonus for every GOAL_CANDIDATES event/badge newly
         satisfied this step, plus a penalty for any that regress (see
         event_regression_penalty) — the generic replacement for the old
@@ -1488,13 +1502,15 @@ class Data:
             # is_world() goes False and this check applies normally again
             # (see the dialog_wrong / in-battle turn-spam handling below).
             world_interact_wait = interacting and self.is_world(self.pyboy.memory)
-            if not world_interact_wait and (not interacting or not (in_dialog or in_battle)):
+            if not world_interact_wait and (
+                not interacting or not (in_dialog or in_battle)
+            ):
                 net_stuck = True
                 if self.is_world(self.pyboy.memory) and len(self.recent_positions) >= 8:
                     net_stuck = self.recent_positions[-8] == self.get_position()
-                elif (
-                    self.is_menu(self.pyboy.memory) or in_battle
-                ) and len(self.recent_menu_states) >= 8:
+                elif (self.is_menu(self.pyboy.memory) or in_battle) and len(
+                    self.recent_menu_states
+                ) >= 8:
                     # Same fix as the world branch: holding one direction to
                     # scroll a long menu list (or a battle FIGHT/PKMN/ITEM/RUN
                     # / move-select menu) repeats the button 8x while the
@@ -1755,7 +1771,8 @@ class Data:
         wild = False
         if in_battle:
             scale = self._battle_difficulty_scale(
-                self.enemy_level(self.pyboy.memory), self.pokemon_level(self.pyboy.memory)
+                self.enemy_level(self.pyboy.memory),
+                self.pokemon_level(self.pyboy.memory),
             )
             wild = self.type_of_battle(self.pyboy.memory) == 1
 
@@ -1929,7 +1946,9 @@ class Data:
             return bool(idx < len(badges) and badges[idx])
         return self.is_event_satisfied(goal, self.pyboy.memory)
 
-    def is_event_satisfied(self, event_name: str, memory: PyBoyMemoryView | bytes | None = None) -> bool:
+    def is_event_satisfied(
+        self, event_name: str, memory: PyBoyMemoryView | bytes | None = None
+    ) -> bool:
         """Generic wEventFlags bit read for any name known to event_constants.py.
 
         This is the fallback every unrecognized ``goal`` string falls through
@@ -1997,7 +2016,9 @@ class Data:
         else:
             self.world_map_step_counts[mid] = self.world_map_step_counts.get(mid, 0) + 1
 
-    def map_truncate_exceeded(self, memory: PyBoyMemoryView | bytes | None = None) -> bool:
+    def map_truncate_exceeded(
+        self, memory: PyBoyMemoryView | bytes | None = None
+    ) -> bool:
         """True once the current map's step count has passed
         map_truncate_budget -- the hard cutoff checked by truncated().
         Checked every step regardless of mode: a policy stuck cycling through
@@ -2041,7 +2062,9 @@ class Data:
                 active.append(name)
         return active
 
-    def has_active_map_event(self, memory: PyBoyMemoryView | bytes | None = None) -> bool:
+    def has_active_map_event(
+        self, memory: PyBoyMemoryView | bytes | None = None
+    ) -> bool:
         return bool(self.active_map_events(memory=memory))
 
     def reward_new_dialog_presence(
@@ -2532,17 +2555,25 @@ class Data:
         )
 
     def sprite_data_ids(self, memory: PyBoyMemoryView | bytes):
-        data = [memory[RAM.wSpritePlayerStateData1PictureID + 0x10 * x] for x in range(16)]
+        data = [
+            memory[RAM.wSpritePlayerStateData1PictureID + 0x10 * x] for x in range(16)
+        ]
 
         return data if self.is_world(memory) else [0] * len(data)
 
     def sprite_data_movement_statuses(self, memory: PyBoyMemoryView | bytes):
-        data = [memory[RAM.wSpritePlayerStateData1MovementStatus + 0x10 * x] for x in range(16)]
+        data = [
+            memory[RAM.wSpritePlayerStateData1MovementStatus + 0x10 * x]
+            for x in range(16)
+        ]
 
         return data if self.is_world(memory) else [0] * len(data)
 
     def sprite_data_facing_directions(self, memory: PyBoyMemoryView | bytes):
-        data = [memory[RAM.wSpritePlayerStateData1FacingDirection + 0x10 * x] for x in range(16)]
+        data = [
+            memory[RAM.wSpritePlayerStateData1FacingDirection + 0x10 * x]
+            for x in range(16)
+        ]
 
         return data if self.is_world(memory) else [0] * len(data)
 
@@ -2984,7 +3015,7 @@ class Data:
         )
 
     def pokedex_own(self, memory: PyBoyMemoryView | bytes):
-        data = bytes(memory[RAM.wPokedexOwned:RAM.wPokedexSeen])
+        data = bytes(memory[RAM.wPokedexOwned : RAM.wPokedexSeen])
 
         bits: list[int] = []
         for byte in data:
@@ -2993,7 +3024,7 @@ class Data:
         return bits
 
     def pokedex_seen(self, memory: PyBoyMemoryView | bytes):
-        data = memory[RAM.wPokedexSeen:RAM.wPokedexSeenEnd]
+        data = memory[RAM.wPokedexSeen : RAM.wPokedexSeenEnd]
 
         bits: list[int] = []
         for byte in data:
@@ -3008,7 +3039,11 @@ class Data:
         return [memory[RAM.wBagItems + i * 2] for i in range(20)]
 
     def player_money(self, memory: PyBoyMemoryView | bytes):
-        return memory[RAM.wPlayerMoney] | (memory[RAM.wPlayerMoney + 1] << 8) | (memory[RAM.wPlayerMoney + 2] << 16)
+        return (
+            memory[RAM.wPlayerMoney]
+            | (memory[RAM.wPlayerMoney + 1] << 8)
+            | (memory[RAM.wPlayerMoney + 2] << 16)
+        )
 
     def badges(self, memory: PyBoyMemoryView | bytes):
         return self.bits_extractor(memory[RAM.wObtainedBadges])
@@ -3127,7 +3162,9 @@ class Data:
         return memory[RAM.wWalkBikeSurfState]
 
     def fly_anywhere(self, memory: PyBoyMemoryView | bytes):
-        return self.bits_extractor(memory[RAM.wTownVisitedFlag]) + self.bits_extractor(memory[RAM.wTownVisitedFlag + 1])
+        return self.bits_extractor(memory[RAM.wTownVisitedFlag]) + self.bits_extractor(
+            memory[RAM.wTownVisitedFlag + 1]
+        )
 
     def safari_zone_time(self, memory: PyBoyMemoryView | bytes):
         return memory[RAM.wSafariSteps] | (memory[RAM.wSafariSteps + 1] << 8)
@@ -3234,7 +3271,8 @@ class Data:
             ]
             | (
                 memory[
-                    RAM.wBoxMon1Exp + 1
+                    RAM.wBoxMon1Exp
+                    + 1
                     + self.real_current_menu_selected_item(memory)
                     * self.__stored_pokemon_size
                 ]
@@ -3242,7 +3280,8 @@ class Data:
             )
             | (
                 memory[
-                    RAM.wBoxMon1Exp + 2
+                    RAM.wBoxMon1Exp
+                    + 2
                     + self.real_current_menu_selected_item(memory)
                     * self.__stored_pokemon_size
                 ]
@@ -3306,7 +3345,8 @@ class Data:
                 ],
                 [
                     memory[
-                        RAM.wBoxMon1HP + 1
+                        RAM.wBoxMon1HP
+                        + 1
                         + self.real_current_menu_selected_item(memory)
                         * self.__stored_pokemon_size
                     ]
@@ -3358,7 +3398,10 @@ class Data:
     def all_party_levels(self, memory: PyBoyMemoryView | bytes) -> list[int]:
         """Levels of every occupied party slot (not just the active battler)."""
         count = min(int(self.party_count(memory)), self.__pokemon_count)
-        return [memory[RAM.wPartyMon1Level + self.__player_pokemon_size * i] for i in range(count)]
+        return [
+            memory[RAM.wPartyMon1Level + self.__player_pokemon_size * i]
+            for i in range(count)
+        ]
 
     def max_party_level(self, memory: PyBoyMemoryView | bytes) -> int:
         levels = [lv for lv in self.all_party_levels(memory) if lv > 0]
