@@ -197,7 +197,8 @@ class Emulator:
         action_idx = int(action_idx) % N_ACTIONS
         duration = max(1, int(duration))
 
-        self._skip_locked_frames()
+        self._skip_locked_frames(duration)
+        self._skip_battle_messages(duration)
         self._press_action(action_idx)
 
         if render_each:
@@ -209,6 +210,7 @@ class Emulator:
         for button in self.ALL_BUTTONS:
             self.pyboy.button_release(button)
         self._release_gap(render_each=render_each)
+        self._skip_battle_messages(duration)
 
         milestone, step = self.data.reward(memory=memory, action=action_idx)
 
@@ -247,29 +249,78 @@ class Emulator:
     def is_new_episode(self, memory: bytes):
         return ()
 
-    # Upper bound on a single _skip_locked_frames() call, in emulator frames
-    # (~34s at 60fps). Generous enough for the longest scripted walk in the
-    # game while still bounding worst-case blocking time if is_cutscene_locked
-    # somehow never clears (e.g. an unrecognized lock source).
+    # Absolute safety-valve cap on a single _skip_locked_frames() call, in
+    # emulator frames (~34s at 60fps) -- only reached if the per-call cap
+    # argument passed in is left at its default. See _skip_locked_frames.
     MAX_CUTSCENE_SKIP = 2048
 
-    def _skip_locked_frames(self) -> int:
-        """Jump straight through a forced-walk / warp-transition window.
+    def _skip_locked_frames(self, max_frames: int = MAX_CUTSCENE_SKIP) -> int:
+        """Jump straight through (a bounded chunk of) a forced-walk / warp-
+        transition window.
 
         Reads pokered's own frame-exact countdown registers (see
-        Data.cutscene_skip_frames) so a whole cutscene collapses into one or
-        two big pyboy.tick() calls instead of being polled away
-        frame_skip-frames-at-a-time across many separate env.step() calls —
-        every one of which discards its action anyway per _press_action.
+        Data.cutscene_skip_frames) so a cutscene collapses into a few big
+        pyboy.tick() calls instead of being polled away frame_skip-frames-
+        at-a-time across many separate env.step() calls -- every one of
+        which discards its action anyway per _press_action.
+
+        max_frames caps a single call to roughly the current step's own
+        duration (train_ppo.py's --frame-skip, 16 by default) rather than a
+        large fixed constant: training runs several PokemonRedEnv workers as
+        separate SubprocVecEnv processes, and step() is synchronous across
+        all of them -- the batch can't advance until every worker's step()
+        returns. A worker mid-cutscene ticking hundreds/thousands of frames
+        in one call is a massive outlier next to every other worker's
+        ~frame_skip-sized step that same round, so it single-handedly stalls
+        the whole batch (visible as a global FPS drop and workers freezing
+        then resuming together in GUI mode) for as long as it keeps winning
+        that outlier race. Capping each call to the same order of magnitude
+        as a normal step keeps a locked worker statistically indistinguishable
+        from any other worker's step; is_cutscene_locked (checked again at
+        the top of the next step_discrete()/ticks() call) keeps consuming the
+        remainder across as many subsequent env.step() calls as it takes.
         """
+        max_frames = max(1, int(max_frames))
         total = 0
-        while total < self.MAX_CUTSCENE_SKIP and self.data.is_cutscene_locked(
-            self.pyboy.memory
-        ):
+        while total < max_frames and self.data.is_cutscene_locked(self.pyboy.memory):
             n = self.data.cutscene_skip_frames(self.pyboy.memory)
-            n = max(1, min(n, self.MAX_CUTSCENE_SKIP - total))
+            n = max(1, min(n, max_frames - total))
             self.pyboy.tick(n, render=self.use_sdl, sound=False)
             total += n
+        return total
+
+    # Absolute safety-valve cap on a single _skip_battle_messages() call, in
+    # emulator frames -- only reached if the per-call cap argument passed in
+    # is left at its default. See _skip_battle_messages.
+    MAX_BATTLE_MESSAGE_SKIP = 600
+
+    def _skip_battle_messages(self, max_frames: int = MAX_BATTLE_MESSAGE_SKIP) -> int:
+        """EXPERIMENTAL: auto-mash A through non-actionable battle text.
+
+        Data.is_battle_message() ("X used TACKLE!", "It's super effective!",
+        "Wild RATTATA fainted!", ...) is the battle-mode analog of plain
+        dialog text, and Data.legal_action_mask() already hard-restricts the
+        model to A/B for these frames (see its docstring) -- there is no
+        decision being skipped by clearing them here instead of spending
+        real env.step() calls (each paying the full reward/observation-
+        building cost) mashing A into them one frame_skip window at a time,
+        same reasoning as _skip_locked_frames for overworld cutscenes,
+        including the max_frames per-call cap (see its docstring for why:
+        SubprocVecEnv's synchronous step() means a big outlier call here
+        stalls every other worker until it returns). Unlike that method,
+        pokered exposes no countdown register for battle text (animations.asm's
+        DelayFrames busy-waits internally, nothing readable from RAM) -- so
+        this polls a press/tick/release/tick cycle instead of jumping
+        straight to a known frame count.
+        """
+        max_frames = max(1, int(max_frames))
+        total = 0
+        while total < max_frames and self.data.is_battle_message(self.pyboy.memory):
+            self.pyboy.button_press("a")
+            self.pyboy.tick(2, render=self.use_sdl, sound=False)
+            self.pyboy.button_release("a")
+            self.pyboy.tick(2, render=self.use_sdl, sound=False)
+            total += 4
         return total
 
     def _press_action(self, action_idx: int) -> None:
@@ -299,7 +350,7 @@ class Emulator:
         action_idx = meta_action // len(DURATION_BINS)
         duration = DURATION_BINS[meta_action % len(DURATION_BINS)]
 
-        self._skip_locked_frames()
+        self._skip_locked_frames(duration)
         self._press_action(action_idx)
 
         if render_each:
