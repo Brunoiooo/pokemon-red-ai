@@ -218,7 +218,13 @@ class Data:
     new_pokedex_seen_reward: float = 0.5
     new_pokedex_own_reward: float = 1.0
     status_reward: float = 0.02
-    base_reward: float = -0.001
+    # Bumped from -0.001 -- too weak against gamma=0.99 to discourage pure
+    # step-maximizing (wandering to farm small decaying rewards like
+    # active_map_event_reward/status_reward instead of pushing forward).
+    # Still well under new_position_reward (0.008), so genuine exploration
+    # of a fresh tile stays clearly profitable -- only idling/backtracking
+    # gets meaningfully more expensive.
+    base_reward: float = -0.003
     truncated_reward: float = -0.05
     new_item_reward: float = 0.5
 
