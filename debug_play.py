@@ -50,6 +50,7 @@ from curriculum_config import (
     get_goal_for_stage,
     stage_for_goal,
 )
+from pokemon import event_compass as _event_compass
 from pokemon.Emulator import Emulator
 
 BUTTON_NAMES = ["A", "B", "Start", "Select", "Left", "Right", "Up", "Down", "None"]
@@ -153,9 +154,11 @@ def status_line(emu: Emulator) -> str:
     x = emu.data.position_x(mem)
     y = emu.data.position_y(mem)
     did = emu.data.dialog_id(mem)
+    state = emu.data.current_map_script_state(mem)
+    state_s = f" script_state={state}" if state is not None else ""
     return (
         f"map={mid} pos=({x},{y}) mode={_mode_flags(emu)} "
-        f"dialog_id={did} goal={emu.data.goal} legal=[{legal_actions_str(emu)}]"
+        f"dialog_id={did} goal={emu.data.goal} legal=[{legal_actions_str(emu)}]{state_s}"
     )
 
 
@@ -224,6 +227,40 @@ def map_counter_str(emu: Emulator) -> str:
     return f"{used}/{truncate_budget}"
 
 
+# Unicode arrows -- fine for normal interactive play (same risk profile as
+# print_help's existing em-dashes), but will UnicodeEncodeError if stdout is
+# ever piped/redirected under the cp1250 console codepage (see
+# MilestoneCallback's curriculum-advance print for the same gotcha hit
+# elsewhere in this project). debug_play.py is always run directly in a
+# console, never redirected, so that's an accepted tradeoff here.
+_COMPASS_ARROWS = {(1, 0): "→", (-1, 0): "←", (0, 1): "↓", (0, -1): "↑", (0, 0): "•"}
+
+
+def compass_line(emu: Emulator) -> str:
+    """Live pokemon.event_compass.nearest_unlockable_event() reading -- a
+    diagnostic-only display, deliberately NOT the same signal
+    Data.compass_progress() feeds the model (that one still runs the older
+    pokemon.navigation/pokemon.goal_positions BFS over the curated
+    GOAL_CANDIDATES pool, untouched here). Switched debug_play's own display
+    to the exhaustive, static-analysis-derived event_compass instead, after
+    live play repeatedly caught the older compass pointing at goals with no
+    real walkable trigger at all (an entrance-tile fallback guess, not a
+    verified location) -- event_compass never guesses: an event only
+    becomes a candidate once tools/gen_event_triggers.py's asm resolver has
+    actually found a real SetEvent site for it, so there is nothing to
+    manually blacklist here."""
+    data = emu.data
+    memory = emu.pyboy.memory
+    if not data.is_world(memory):
+        return "compass: (not in world)"
+    result = _event_compass.nearest_unlockable_event(data.get_position(), memory)
+    if result is None:
+        return "compass: no reachable target"
+    dx, dy, dist, target = result
+    arrow = _COMPASS_ARROWS.get((dx, dy), f"({dx:+d},{dy:+d})")
+    return f"compass: {arrow} dist={dist} target={target}"
+
+
 def fuse_line(emu: Emulator) -> str:
     data = emu.data
     pos = data.get_position()
@@ -260,6 +297,11 @@ def print_help() -> None:
     print("    outside that set prints a 'MASKED(btn)' tag on that step -- it")
     print("    still executes here (this is human play, nothing is enforced),")
     print("    it's just what the trained policy could never have picked.")
+    print("  compass line                   — pokemon.event_compass.nearest_unlockable_event():")
+    print("    diagnostic only, NOT what feeds the model's reward (that's still")
+    print("    Data.compass_progress) -- exhaustive asm-resolver-derived compass,")
+    print("    never guesses a location (arrow = next-hop direction, dist = hop")
+    print("    count, target = which event it's routing to).")
     print_sep("-")
 
 
@@ -435,6 +477,7 @@ def run(args: argparse.Namespace) -> None:
     emulator.pyboy.tick(1, render=True, sound=False)
     print(f"  Loaded. {status_line(emulator)}")
     print(f"  {fuse_line(emulator)}")
+    print(f"  {compass_line(emulator)}")
     print(f"  {bag_line(emulator)}")
     line = model_line(inputs)
     if line:
@@ -468,6 +511,7 @@ def run(args: argparse.Namespace) -> None:
             print_help()
             print(f"  {status_line(emulator)}")
             print(f"  {fuse_line(emulator)}")
+            print(f"  {compass_line(emulator)}")
             print(f"  {bag_line(emulator)}")
             print(f"  total_reward={total_reward:.4f} steps={step_i}")
             continue
@@ -497,6 +541,7 @@ def run(args: argparse.Namespace) -> None:
                 f"  Reloaded from saves/{from_ckpt}/  "
                 f"stage={stage} ({status_line(emulator)})"
             )
+            print(f"  {compass_line(emulator)}")
             print(f"  {bag_line(emulator)}")
             line = model_line(inputs)
             if line:
@@ -643,6 +688,7 @@ def run(args: argparse.Namespace) -> None:
                 f"{status_line(emulator)}  "
                 f"goals={live_n}/{peak_n} loop={emulator.data.loop_streak}{mark_s}"
             )
+            print(f"       {compass_line(emulator)}")
             line = model_line(inputs)
             if line:
                 print(line)

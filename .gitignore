@@ -5,7 +5,7 @@ recordings
 debuger
 __pycache__
 winserwer
-v*.*
+/v*.*
 models
 saves
 !saves/start
@@ -13,3 +13,7 @@ checkpoints/
 buffer/
 logs/
 CLAUDE.md
+script_graph.html
+map_pins.html
+event_compass.html
+compass.html

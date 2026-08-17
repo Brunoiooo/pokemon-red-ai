@@ -44,6 +44,7 @@ _VECTOR_FLOAT_KEYS = (
     "map_budget_progress",
     "stuck_tile_progress",
     "loop_streak_progress",
+    "compass_progress",
 )
 _ID_SCALAR_KEYS = (
     "map_id",
@@ -78,8 +79,14 @@ _ID_SEQ_KEYS = (
 # stuck_tile truncate fuse (max_useless_ticks) (see Data.stuck_tile_progress).
 # +1 for loop_streak_progress: loop_streak / the loop_streak truncate fuse
 # (max_loop_streak) (see Data.loop_streak_progress).
+# +3 for compass_progress: [dx, dy, has_target] toward the nearest
+# currently-walkable, not-yet-satisfied goal tile -- a deterministic BFS
+# "compass" over pret/pokered-derived map data (see
+# pokemon.navigation.nearest_objective / Data.compass_progress), not a
+# learned signal. has_target=0 (dx=dy=0) whenever no candidate is reachable
+# right now, deliberately never a guessed direction.
 _BASE_VECTOR_DIM = (
-    798 + 256 + 256 + len(REWARD_COMPONENT_NAMES) + 256 + 1 + 1
+    798 + 256 + 256 + len(REWARD_COMPONENT_NAMES) + 256 + 1 + 1 + 3
 )
 VECTOR_DIM = _BASE_VECTOR_DIM + N_GOALS
 VISIT_MASK_SIZE = 2 * 5 + 1  # map_vision_radius default

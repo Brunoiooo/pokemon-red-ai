@@ -197,7 +197,7 @@ class Emulator:
         action_idx = int(action_idx) % N_ACTIONS
         duration = max(1, int(duration))
 
-        self._skip_locked_frames(duration)
+        self._skip_locked_frames()
         self._skip_battle_messages(duration)
         self._press_action(action_idx)
 
@@ -249,36 +249,20 @@ class Emulator:
     def is_new_episode(self, memory: bytes):
         return ()
 
-    # Absolute safety-valve cap on a single _skip_locked_frames() call, in
-    # emulator frames (~34s at 60fps) -- only reached if the per-call cap
-    # argument passed in is left at its default. See _skip_locked_frames.
+    # Upper bound on a single _skip_locked_frames() call, in emulator frames
+    # (~34s at 60fps). Generous enough for the longest scripted walk in the
+    # game while still bounding worst-case blocking time if is_cutscene_locked
+    # somehow never clears (e.g. an unrecognized lock source).
     MAX_CUTSCENE_SKIP = 2048
 
     def _skip_locked_frames(self, max_frames: int = MAX_CUTSCENE_SKIP) -> int:
-        """Jump straight through (a bounded chunk of) a forced-walk / warp-
-        transition window.
+        """Jump straight through a forced-walk / warp-transition window.
 
         Reads pokered's own frame-exact countdown registers (see
-        Data.cutscene_skip_frames) so a cutscene collapses into a few big
-        pyboy.tick() calls instead of being polled away frame_skip-frames-
-        at-a-time across many separate env.step() calls -- every one of
-        which discards its action anyway per _press_action.
-
-        max_frames caps a single call to roughly the current step's own
-        duration (train_ppo.py's --frame-skip, 16 by default) rather than a
-        large fixed constant: training runs several PokemonRedEnv workers as
-        separate SubprocVecEnv processes, and step() is synchronous across
-        all of them -- the batch can't advance until every worker's step()
-        returns. A worker mid-cutscene ticking hundreds/thousands of frames
-        in one call is a massive outlier next to every other worker's
-        ~frame_skip-sized step that same round, so it single-handedly stalls
-        the whole batch (visible as a global FPS drop and workers freezing
-        then resuming together in GUI mode) for as long as it keeps winning
-        that outlier race. Capping each call to the same order of magnitude
-        as a normal step keeps a locked worker statistically indistinguishable
-        from any other worker's step; is_cutscene_locked (checked again at
-        the top of the next step_discrete()/ticks() call) keeps consuming the
-        remainder across as many subsequent env.step() calls as it takes.
+        Data.cutscene_skip_frames) so a whole cutscene collapses into one or
+        two big pyboy.tick() calls instead of being polled away
+        frame_skip-frames-at-a-time across many separate env.step() calls —
+        every one of which discards its action anyway per _press_action.
         """
         max_frames = max(1, int(max_frames))
         total = 0
@@ -350,7 +334,7 @@ class Emulator:
         action_idx = meta_action // len(DURATION_BINS)
         duration = DURATION_BINS[meta_action % len(DURATION_BINS)]
 
-        self._skip_locked_frames(duration)
+        self._skip_locked_frames()
         self._press_action(action_idx)
 
         if render_each:

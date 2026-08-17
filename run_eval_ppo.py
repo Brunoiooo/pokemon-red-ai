@@ -12,6 +12,16 @@ from pathlib import Path
 
 sys.path.insert(0, "src")
 
+# Windows consoles default stdout to the system codepage (cp1252 etc.), which
+# can't encode the compass arrow glyphs (-vv's [compass] line) -- force utf-8
+# so this doesn't crash mid-eval on a non-Linux box. No-op where stdout is
+# already utf-8 or doesn't support reconfigure (e.g. piped/redirected).
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 from ppo.checkpoints import resolve_model_path
 
 
@@ -42,6 +52,22 @@ def _mode_flags(emu) -> str:
     if emu.data.is_battle(mem):
         flags.append("battle")
     return "+".join(flags) or "?"
+
+
+_COMPASS_ARROWS = {
+    (0, -1): "↑", (0, 1): "↓", (-1, 0): "←", (1, 0): "→",
+    (-1, -1): "↖", (1, -1): "↗", (-1, 1): "↙", (1, 1): "↘",
+    (0, 0): "·",
+}
+
+
+def _compass_arrow(dx: float, dy: float) -> str:
+    """dx/dy (each in [-1, 1], as returned by Data.compass_progress -- the
+    next BFS hop's direction, not a straight-line vector) -> one of 8
+    arrow glyphs (or "·" for arrived/no movement), for a log line that's
+    readable at a glance instead of squinting at signed floats."""
+    key = (int(round(dx)), int(round(dy)))
+    return _COMPASS_ARROWS.get(key, "?")
 
 
 def _mon_line(label, lv, hp, maxhp, atk, dfn, spd, spc):
@@ -164,6 +190,7 @@ def run(args):
     model = MaskablePPO.load(str(model_path), device="cpu" if args.cpu else "auto")
     data = raw.emu.data
 
+    from pokemon.Data import COMPASS_STALL_STEPS
     from pokemon.map_collision import walkable_tile_count
     from pokemon.map_constants import MAPS_BY_ID
 
@@ -395,6 +422,31 @@ def run(args):
                     f"ms={info.get('milestone')}{map_ctr}{disc_str} "
                     f"| {_probs_table(action_probs, ACTION_NAMES)}"
                 )
+
+            # -vv: live compass_progress() debug -- which goal it's currently
+            # steering toward and the stall-detector progress (see
+            # Data.compass_progress / Data._compass_near_counts) so a
+            # dead/mis-gated goal eating the compass slot is visible live
+            # instead of only inferable after COMPASS_STALL_STEPS silently
+            # excludes it. Silent outside world mode (battle/dialog/menu) --
+            # [step]'s mode= already shows that, so repeating "not in world
+            # mode" every step there is just noise.
+            if verbose >= 2:
+                cdbg = data.last_compass_debug
+                if cdbg is not None and cdbg["goal"] is None:
+                    print(f"  [compass] step={steps:4d} NO TARGET")
+                elif cdbg is not None:
+                    stall = (
+                        f" STALLING({cdbg['near_steps']}/{COMPASS_STALL_STEPS})"
+                        if cdbg["near_steps"]
+                        else ""
+                    )
+                    arrow = _compass_arrow(cdbg["dx"], cdbg["dy"])
+                    goal_short = cdbg["goal"].removeprefix("EVENT_")
+                    print(
+                        f"  [compass] step={steps:4d} {arrow} {goal_short} "
+                        f"dist={cdbg['dist']}{stall}"
+                    )
 
             # -vv: per-hit damage-reward scale (which levels it's judged against),
             # plus the raw stats behind it so a bad address/endianness decode

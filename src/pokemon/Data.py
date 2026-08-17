@@ -11,6 +11,7 @@ from pokemon import event_constants as _event_constants
 from pokemon import event_graph as _event_graph
 from pokemon import map_collision as _map_collision
 from pokemon import map_constants as _map_constants
+from pokemon import map_scripts as _map_scripts
 from pokemon import ram_constants as _ram_constants
 
 # Named WRAM/HRAM addresses (RAM.wFoo / RAM.hFoo), generated from pret/pokered
@@ -113,6 +114,16 @@ EVENT_GOAL_CANDIDATES: frozenset[str] = frozenset(
     and name not in GOAL_MANUAL_BLACKLIST
 )
 GOAL_CANDIDATES: frozenset[str] = EVENT_GOAL_CANDIDATES | frozenset(BADGE_GOALS)
+
+# Data.compass_progress's live stall detector (see that method's docstring):
+# a goal reported "arrived" (BFS hop distance <= COMPASS_STALL_DIST) for
+# COMPASS_STALL_STEPS cumulative steps without ever becoming satisfied gets
+# excluded from the compass for the rest of the episode -- a generic
+# backstop for gating event_graph's static CheckEvent/SetEvent-proximity
+# heuristic structurally cannot see (script-counter state machines, item/
+# badge checks, NPC-position checks, ...).
+COMPASS_STALL_DIST = 2
+COMPASS_STALL_STEPS = 60
 
 # Named reward sub-components tracked as cumulative per-episode sums and
 # exposed to the model (see Data.reward_component_vector / _accum_reward).
@@ -500,6 +511,19 @@ class Data:
     # Snapshot of GOAL_CANDIDATES satisfied last step, for the regression
     # diff in reward_generic_progress.
     _prev_satisfied_events: frozenset[str] = field(default_factory=frozenset)
+    # compass_progress()'s live stall detector: how many steps (cumulative,
+    # not necessarily consecutive -- see compass_progress) the compass has
+    # reported each goal as "arrived" (dist <= COMPASS_STALL_DIST) without
+    # it ever becoming satisfied. Catches gating event_graph's static
+    # CheckEvent/SetEvent-proximity heuristic structurally can't see at all
+    # (e.g. a per-map script-counter state machine like OaksLab.asm's
+    # wOaksLabCurScript, where later SetEvents are gated purely by earlier
+    # SetEvents in the same sequential dispatch, not by any CheckEvent) --
+    # complements _goal_parents_satisfied rather than replacing it.
+    _compass_near_counts: dict[str, int] = field(default_factory=dict)
+    # Goals _compass_near_counts pushed past COMPASS_STALL_STEPS -- excluded
+    # from compass_progress's candidate pool for the rest of the episode.
+    _compass_excluded: set[str] = field(default_factory=set)
     # Per-step debug trail for eval -vv: (name, payout) actually paid this step.
     last_milestone_payouts: list[tuple[str, float]] = field(default_factory=list)
     # GOAL_CANDIDATES names that un-satisfied this step (see
@@ -550,6 +574,8 @@ class Data:
     last_battle_exit_info: dict | None = None
     # Set each step by reward_enemy_hp while in battle (debug_play / diagnostics).
     last_enemy_hp_debug: dict | None = None
+    # Set each step by compass_progress (debug_play / diagnostics / eval -vv).
+    last_compass_debug: dict | None = None
     # Last known-good (nonzero) enemy/active level this battle, for
     # _battle_difficulty_scale — wEnemyMonLevel/wBattleMonLevel can read back
     # 0 on some frames mid-fight (e.g. during a mon-switch/animation window)
@@ -661,6 +687,8 @@ class Data:
         # lands (same reasoning as _saw_oaks_parcel_in_bag just below).
         self._milestones_hit = {n for n in GOAL_CANDIDATES if self.is_goal_satisfied(n)}
         self._prev_satisfied_events = frozenset(self._milestones_hit)
+        self._compass_near_counts = {}
+        self._compass_excluded = set()
         self.last_milestone_payouts = []
         self.last_regressed = []
         self._dialog_screens_seen = set()
@@ -680,6 +708,7 @@ class Data:
         self.last_flee_info = None
         self.last_battle_exit_info = None
         self.last_enemy_hp_debug = None
+        self.last_compass_debug = None
         self._battle_enemy_level_cache = 0
         self._battle_active_level_cache = 0
         self._battle_entry_wild_visits = 0
@@ -976,6 +1005,35 @@ class Data:
             self.map_id(memory),
         )
 
+    def current_map_script_state(self, memory: bytes | None = None) -> int | None:
+        """Live wFooCurScript byte for the CURRENT map (pokemon.map_scripts.
+        MAP_SCRIPTS), if this map has its own dedicated CurScript variable --
+        which exact dispatch state its story is in RIGHT NOW, ground truth
+        from RAM instead of a static "assume state 0" guess. This matters
+        whenever an episode resumes mid-sequence (a checkpoint captured
+        partway through a map's cutscene chain) -- the static analysis has
+        no way to know which state is actually active, only RAM does.
+
+        None if this map has no def_script_pointers table at all, no
+        dedicated variable (shares the single wCurMapScript byte instead,
+        which only reflects *some* map's state -- meaningless to read
+        unless we already know it's this one, and pokemon.map_scripts
+        doesn't record that reliably enough to trust here), or the byte
+        read doesn't match any state index this module actually parsed for
+        that map (a table this static analysis didn't fully capture, or a
+        transient/invalid mid-transition value).
+        """
+        if memory is None:
+            memory = self.pyboy.memory
+        ms = _map_scripts.MAP_SCRIPTS.get(self.map_id(memory))
+        if ms is None or ms["cur_script_ram"] is None:
+            return None
+        addr = getattr(RAM, ms["cur_script_ram"], None)
+        if addr is None:
+            return None
+        idx = memory[addr]
+        return idx if idx in ms["states"] else None
+
     def screen_tiles_hash(self, memory: PyBoyMemoryView | bytes | None = None):
         return hashlib.blake2b(
             bytes(self.screen_tiles(memory if memory else self.pyboy.memory)),
@@ -1055,6 +1113,101 @@ class Data:
         """
         return self.data_normalizer([self.loop_streak], max=self.max_loop_streak)
 
+    def _goal_parents_satisfied(self, goal: str) -> bool:
+        """Whether every event_graph parent of ``goal`` is already true in
+        THIS episode's live game state (self.is_goal_satisfied), not just
+        physically walkable to. BFS reachability (pokemon.navigation) only
+        catches *geographic* gating (a Cut tree/badge/HM blocking the
+        route) -- it has no way to know a tile's flag is additionally
+        gated on an unrelated story flag with no physical obstacle at all
+        (e.g. EVENT_DAISY_WALKING requires EVENT_GOT_TOWN_MAP +
+        EVENT_ENTERED_BLUES_HOUSE first per PalletTown.asm's
+        PalletTownDaisyScript, even though the tile itself is reachable
+        from minute one). event_graph is still just a static-analysis
+        hint, not proof (see event_graph.py's own caveat) -- but checked
+        live against this episode's actual flags, a false positive here
+        only means "compass skips a goal that was secretly fine", never
+        "compass points at something wrong", so it's a safe filter to
+        layer on top of BFS, not a replacement for it. True (no gate) for
+        badges (no EVENT_GRAPH entry of their own -- wObtainedBadges isn't
+        a named event) and any goal event_graph has no parents for.
+        """
+        info = _event_graph.EVENT_GRAPH.get(goal)
+        if info is None:
+            return True
+        return all(self.is_goal_satisfied(p) for p in info["parents"])
+
+    def compass_progress(self) -> list[float]:
+        """[dx, dy, has_target] toward the nearest currently-walkable,
+        not-yet-satisfied, not-currently-story-gated, not-stalled
+        GOAL_CANDIDATES tile (pokemon.navigation.nearest_objective,
+        filtered by _goal_parents_satisfied and _compass_excluded) -- a
+        deterministic BFS "compass", not a learned signal. dx/dy are the
+        *next graph hop's* direction, clipped to [-1, 1], not a
+        straight-line offset to the target -- see
+        navigation.nearest_objective's docstring for why (pos and a
+        cross-map target don't share a coordinate frame). [0, 0, 0]
+        (has_target=0) whenever no candidate is reachable within
+        navigation.DEFAULT_MAX_HOPS, or outside world mode (position is
+        meaningless mid-battle/dialog/menu) -- a clean, learnable "no
+        signal" state, deliberately never a guessed direction. Imports
+        pokemon.navigation lazily (inside this method, not at module level)
+        because pokemon.goal_positions -> curriculum_config -> pokemon.Data
+        is already a real import chain; importing navigation at Data.py's
+        own module level would be circular (see navigation.py's docstring).
+
+        A goal the compass reports as "arrived" (dist <= COMPASS_STALL_DIST)
+        for COMPASS_STALL_STEPS cumulative steps without ever becoming
+        satisfied is added to _compass_excluded for the rest of the episode
+        -- a live, generic backstop for gating _goal_parents_satisfied's
+        static event_graph data structurally cannot see (e.g. a per-map
+        script-counter state machine, an item/badge check, an NPC-position
+        check -- anything that isn't a CheckEvent near the SetEvent). This
+        is deliberately slow to trigger (COMPASS_STALL_STEPS is generous):
+        an early, barely-trained policy can also sit near a perfectly
+        achievable target for a long time simply because it hasn't learned
+        the right button yet, and wrongly excluding a fine goal for the
+        rest of that one episode is a far cheaper mistake than the
+        alternative (a target that can genuinely never fire this episode
+        eating the compass slot indefinitely).
+        """
+        if not self.is_world(self.pyboy.memory):
+            self.last_compass_debug = None
+            return [0.0, 0.0, 0.0]
+        from pokemon import navigation as _navigation
+
+        candidates = frozenset(
+            g
+            for g in GOAL_CANDIDATES - self._prev_satisfied_events - self._compass_excluded
+            if self._goal_parents_satisfied(g)
+        )
+        result = _navigation.nearest_objective(self.get_position(), candidates)
+        if result is None:
+            self.last_compass_debug = {
+                "goal": None,
+                "dx": 0.0,
+                "dy": 0.0,
+                "dist": None,
+                "candidates": len(candidates),
+                "near_steps": None,
+            }
+            return [0.0, 0.0, 0.0]
+        dx, dy, dist, goal = result
+        if dist <= COMPASS_STALL_DIST:
+            near = self._compass_near_counts.get(goal, 0) + 1
+            self._compass_near_counts[goal] = near
+            if near >= COMPASS_STALL_STEPS:
+                self._compass_excluded.add(goal)
+        self.last_compass_debug = {
+            "goal": goal,
+            "dx": float(max(-1, min(1, dx))),
+            "dy": float(max(-1, min(1, dy))),
+            "dist": dist,
+            "candidates": len(candidates),
+            "near_steps": self._compass_near_counts.get(goal, 0),
+        }
+        return [float(max(-1, min(1, dx))), float(max(-1, min(1, dy))), 1.0]
+
     def inputs(self):
         r = self.map_vision_radius
         return {
@@ -1107,6 +1260,9 @@ class Data:
             ),
             "loop_streak_progress": torch.tensor(
                 self.loop_streak_progress(), dtype=torch.float32
+            ),
+            "compass_progress": torch.tensor(
+                self.compass_progress(), dtype=torch.float32
             ),
             "index_of_current_pokemon_send_out": torch.tensor(
                 self.index_of_current_pokemon_send_out(self.pyboy.memory),

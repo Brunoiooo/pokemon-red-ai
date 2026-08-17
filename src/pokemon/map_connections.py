@@ -97,6 +97,34 @@ def _apply_edge(
 
 
 @lru_cache(maxsize=None)
+def direct_neighbors(map_id: int) -> frozenset[int]:
+    """map_ids reachable from map_id by exactly one `connection` edge, in
+    either direction (map_id's own header's edges, or another map's header
+    that names map_id as its target) -- deliberately narrower than "any
+    map sharing map_id's overworld_offsets cluster": that cluster is the
+    full transitive flood-fill, so two maps can share it without a
+    connection directly between them. Used by
+    pokemon.world_graph._cross_border to only ever accept a border-cross
+    between maps with a *declared* edge, never a coincidentally-aligned
+    pair (see module docstring's no-signal-beats-wrong-signal rationale)."""
+    entry = MAPS_BY_ID.get(map_id)
+    if entry is None:
+        return frozenset()
+    map_const = entry[0]
+    edges = _edges()
+    out_consts = {target for _direction, target, _param in edges.get(map_const, ())}
+    for src_const, src_edges in edges.items():
+        if any(target == map_const for _d, target, _p in src_edges):
+            out_consts.add(src_const)
+    out_ids = set()
+    for const in out_consts:
+        tgt_entry = MAPS.get(const)
+        if tgt_entry is not None:
+            out_ids.add(tgt_entry[0])
+    return frozenset(out_ids)
+
+
+@lru_cache(maxsize=None)
 def overworld_offsets(anchor_map_id: int) -> dict[int, tuple[int, int]]:
     """map_id -> (x0, y0) world cell offset for every map reachable from
     ``anchor_map_id`` by following `connection` edges (BFS/DFS,

@@ -288,15 +288,27 @@ GRASS_COLLISION: dict[int, bytes] = {
 }
 
 
-def _lookup(grid_by_map: dict[int, bytes], map_id: int, x: int, y: int) -> bool:
-    grid = grid_by_map.get(map_id)
+def in_bounds(map_id: int, x: int, y: int) -> bool:
+    """True if (x, y) falls within map_id's own local cell grid
+    (width_blocks*2, height_blocks*2) -- independent of walkability, so
+    callers can tell "off this map's edge" (try a neighboring map, see
+    pokemon.world_graph._cross_border) apart from "on this map but a
+    wall/water/obstacle" (see is_walkable). False if map_id has no
+    MAPS_BY_ID entry."""
     entry = MAPS_BY_ID.get(map_id)
-    if grid is None or entry is None:
+    if entry is None:
         return False
     width_cells = entry[1] * 2
     height_cells = entry[2] * 2
-    if not (0 <= x < width_cells and 0 <= y < height_cells):
+    return 0 <= x < width_cells and 0 <= y < height_cells
+
+
+def _lookup(grid_by_map: dict[int, bytes], map_id: int, x: int, y: int) -> bool:
+    grid = grid_by_map.get(map_id)
+    entry = MAPS_BY_ID.get(map_id)
+    if grid is None or entry is None or not in_bounds(map_id, x, y):
         return False
+    width_cells = entry[1] * 2
     idx = y * width_cells + x
     return bool(grid[idx // 8] & (1 << (idx % 8)))
 
