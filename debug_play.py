@@ -237,18 +237,21 @@ _COMPASS_ARROWS = {(1, 0): "→", (-1, 0): "←", (0, 1): "↓", (0, -1): "↑",
 
 
 def compass_line(emu: Emulator) -> str:
-    """Live pokemon.event_compass.nearest_unlockable_event() reading -- a
-    diagnostic-only display, deliberately NOT the same signal
-    Data.compass_progress() feeds the model (that one still runs the older
-    pokemon.navigation/pokemon.goal_positions BFS over the curated
-    GOAL_CANDIDATES pool, untouched here). Switched debug_play's own display
-    to the exhaustive, static-analysis-derived event_compass instead, after
-    live play repeatedly caught the older compass pointing at goals with no
-    real walkable trigger at all (an entrance-tile fallback guess, not a
-    verified location) -- event_compass never guesses: an event only
-    becomes a candidate once tools/gen_event_triggers.py's asm resolver has
-    actually found a real SetEvent site for it, so there is nothing to
-    manually blacklist here."""
+    """Live pokemon.event_compass.nearest_unlockable_event() reading -- the
+    same resolver Data.compass_progress() now feeds the model with
+    (pokemon.navigation/pokemon.goal_positions and the curated
+    GOAL_CANDIDATES-whitelist BFS they ran are retired). event_compass
+    never guesses a location: an event only becomes a candidate once
+    tools/gen_event_triggers.py's asm resolver has actually found a real
+    SetEvent site for it, so there is nothing to manually blacklist.
+
+    One real difference from what training sees: this calls
+    nearest_unlockable_event() directly rather than through
+    Data.compass_progress(), so it doesn't apply that method's
+    COMPASS_STALL_STEPS backstop (data._compass_excluded stays empty during
+    manual play, since nothing here ever calls compass_progress() to
+    populate it) -- a target compass_progress would have stall-excluded by
+    now can still show up here."""
     data = emu.data
     memory = emu.pyboy.memory
     if not data.is_world(memory):
@@ -298,10 +301,11 @@ def print_help() -> None:
     print("    still executes here (this is human play, nothing is enforced),")
     print("    it's just what the trained policy could never have picked.")
     print("  compass line                   — pokemon.event_compass.nearest_unlockable_event():")
-    print("    diagnostic only, NOT what feeds the model's reward (that's still")
-    print("    Data.compass_progress) -- exhaustive asm-resolver-derived compass,")
-    print("    never guesses a location (arrow = next-hop direction, dist = hop")
-    print("    count, target = which event it's routing to).")
+    print("    same resolver Data.compass_progress() feeds the model with --")
+    print("    exhaustive asm-derived compass, never guesses a location (arrow =")
+    print("    next-hop direction, dist = hop count, target = which event it's")
+    print("    routing to; no COMPASS_STALL_STEPS backstop here -- see")
+    print("    compass_line's own docstring).")
     print_sep("-")
 
 

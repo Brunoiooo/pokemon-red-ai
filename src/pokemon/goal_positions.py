@@ -1,8 +1,10 @@
 """Maps each curriculum goal (pokemon.Data.GOAL_CANDIDATES) to a concrete,
 routable (x, y, map_id) tile pokemon.world_graph can path to, plus a
 dependency-respecting visit order -- built for tools/render_route.py's
-auto/--all mode (and any future goal-distance reward shaping that wants
-"how far to the next unlockable goal").
+auto/--all mode, its sole remaining caller. Used to be shared with
+pokemon.navigation.nearest_objective too (Data.compass_progress's compass
+engine before pokemon.event_compass replaced it); navigation.py was deleted
+as dead code once that swap landed, since nothing else ever imported it.
 
 Also resolves coordinate-triggered scripts (pokemon.map_scripts.COORD_TRIGGERS
 -- derived from every map's dispatch-table script graph, see that module --
@@ -26,8 +28,8 @@ standing on right after walking through any warp_event leading into that map
 (pokemon.map_warps) -- real, static, unambiguous positions, at the cost of
 "routes to the right building, not necessarily next to the right NPC inside
 it". A map with several doors (a mansion, a gym with two entrances, ...) has
-no single canonical one, so callers (pokemon.navigation) get every entrance
-as a candidate and let a live BFS pick whichever is actually nearest from
+no single canonical one, so callers (tools/render_route.py) get every
+entrance as a candidate and let a live BFS pick whichever is actually nearest from
 the current position, rather than this module guessing one -- picking a
 fixed "first found" entrance regardless of where the player currently is
 routes through a needlessly distant door when a closer one exists, or
@@ -160,8 +162,7 @@ def goal_tiles(goal: str) -> list[Pos]:
 
     [] if goal's map_id is unknown AND it has no coordinate trigger of its
     own AND none of its ancestors do either. Callers wanting live-nearest
-    routing among several entrances (pokemon.navigation) should use this,
-    not goal_tile.
+    routing among several entrances should use this, not goal_tile.
     """
     own_coord = _coord_trigger_tiles_for(goal)
     if own_coord:

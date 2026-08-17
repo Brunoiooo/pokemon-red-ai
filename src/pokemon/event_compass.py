@@ -1,10 +1,14 @@
-"""Live "nearest currently-unlockable event" resolver, standalone from the
-RL reward path (pokemon.navigation/pokemon.goal_positions/Data.
-compass_progress and curriculum_config.GOAL_CANDIDATES are all untouched by
-this module).
+"""Live "nearest currently-unlockable event" resolver -- the compass engine
+Data.compass_progress() feeds the model with (imported lazily from inside
+that method; see its own docstring for why). Replaced the older
+pokemon.navigation/pokemon.goal_positions BFS over a curated
+Data.GOAL_CANDIDATES whitelist, which is retired (pokemon.navigation.py
+deleted as dead code once this took over its only caller;
+pokemon.goal_positions.py stays -- tools/render_route.py's AUTO mode still
+uses it for route rendering, an offline visualization, not training).
 
-Where pokemon.navigation.nearest_objective only routes to a small, curated
-whitelist of story goals, this routes to *any* of the ~370 events
+Where the old pokemon.navigation.nearest_objective only routed to that
+small, curated whitelist, this routes to *any* of the ~386 events
 pokemon.event_triggers.EVENT_TRIGGERS (tools/gen_event_triggers.py's
 exhaustive interaction scan) knows a real, non-no-op trigger for -- filtered
 live to just the ones whose own flag isn't set yet and whose `requires`
@@ -12,11 +16,12 @@ guards currently hold (e.g. Pallet Town's EVENT_OAK_APPEARED_IN_PALLET only
 qualifies while EVENT_FOLLOWED_OAK_INTO_LAB is NOT set -- see event_triggers'
 module docstring).
 
-Deliberately does not import pokemon.Data, pokemon.curriculum_config, or
-pokemon.goal_positions -- same lazy-import discipline pokemon.navigation's
-own docstring explains (Data -> curriculum_config -> goal_positions is
-already a real import chain; this module reimplements the ~3-line
-wEventFlags bit read locally rather than risk a circular import for it).
+Deliberately does not import pokemon.Data or pokemon.curriculum_config
+(pokemon.event_triggers is pure generated data with no imports of its own,
+so unlike the old goal_positions-based compass there's no real circular-
+import risk here -- Data.compass_progress still imports this module lazily
+anyway, for consistency with that established pattern and to avoid paying
+the import cost anywhere compass_progress is never called).
 """
 from __future__ import annotations
 
@@ -207,7 +212,10 @@ def currently_blocked_tiles(memory) -> frozenset[Pos]:
 
 
 def nearest_unlockable_event(
-    pos: Pos, memory, max_hops: int = DEFAULT_MAX_HOPS
+    pos: Pos,
+    memory,
+    max_hops: int = DEFAULT_MAX_HOPS,
+    excluded_events: frozenset[str] = frozenset(),
 ) -> tuple[int, int, int, str] | None:
     """(dx, dy, dist, event_name) for the nearest tile among every
     currently-unset, currently-satisfiable event trigger that a live BFS
@@ -218,10 +226,19 @@ def nearest_unlockable_event(
     pokemon.navigation.nearest_objective (see its own docstring for why:
     a path can cross onto another map via a warp with no geometric
     relationship to `pos` at all, so only "which way to move right now" is
-    well-defined for a possibly-distant target)."""
+    well-defined for a possibly-distant target).
+
+    `excluded_events` (empty by default) drops specific event names from
+    candidacy regardless of live state -- for a caller-driven stall
+    backstop (Data.compass_progress's own COMPASS_STALL_STEPS mechanism):
+    this module's own guard/requires checks are still just a static-
+    analysis hint, not proof (see event_triggers' module docstring), so a
+    target that turns out to be gated on something this module structurally
+    can't see (a badge/item check this repo's manual audit hasn't found
+    yet) can still eat the compass slot indefinitely without one."""
     tile_to_event: dict[Pos, str] = {}
     for event_name, sites in _event_triggers.EVENT_TRIGGERS.items():
-        if event_flag_set(event_name, memory):
+        if event_name in excluded_events or event_flag_set(event_name, memory):
             continue
         satisfiable_sites = [s for s in sites if requires_satisfied(s["requires"], memory)]
         if not satisfiable_sites:

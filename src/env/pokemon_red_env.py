@@ -80,11 +80,11 @@ _ID_SEQ_KEYS = (
 # +1 for loop_streak_progress: loop_streak / the loop_streak truncate fuse
 # (max_loop_streak) (see Data.loop_streak_progress).
 # +3 for compass_progress: [dx, dy, has_target] toward the nearest
-# currently-walkable, not-yet-satisfied goal tile -- a deterministic BFS
-# "compass" over pret/pokered-derived map data (see
-# pokemon.navigation.nearest_objective / Data.compass_progress), not a
-# learned signal. has_target=0 (dx=dy=0) whenever no candidate is reachable
-# right now, deliberately never a guessed direction.
+# currently-unlockable event -- a deterministic BFS "compass" over
+# pret/pokered-derived map data (see pokemon.event_compass.
+# nearest_unlockable_event / Data.compass_progress), not a learned signal.
+# has_target=0 (dx=dy=0) whenever no candidate is reachable right now,
+# deliberately never a guessed direction.
 _BASE_VECTOR_DIM = (
     798 + 256 + 256 + len(REWARD_COMPONENT_NAMES) + 256 + 1 + 1 + 3
 )

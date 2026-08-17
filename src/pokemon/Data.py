@@ -514,12 +514,12 @@ class Data:
     # compass_progress()'s live stall detector: how many steps (cumulative,
     # not necessarily consecutive -- see compass_progress) the compass has
     # reported each goal as "arrived" (dist <= COMPASS_STALL_DIST) without
-    # it ever becoming satisfied. Catches gating event_graph's static
-    # CheckEvent/SetEvent-proximity heuristic structurally can't see at all
-    # (e.g. a per-map script-counter state machine like OaksLab.asm's
-    # wOaksLabCurScript, where later SetEvents are gated purely by earlier
-    # SetEvents in the same sequential dispatch, not by any CheckEvent) --
-    # complements _goal_parents_satisfied rather than replacing it.
+    # it ever becoming satisfied. Catches gating pokemon.event_triggers'
+    # static asm resolver structurally can't see at all -- it's explicit
+    # about being a "hint, not proof" too (e.g. a badge/item check this
+    # repo's manual audit hasn't found and modeled yet, the same class of
+    # gap event_triggers.py's own badge_blocking_tiles/BADGE_BLOCKED_TILES
+    # already closed for one confirmed case, Viridian Gym's door).
     _compass_near_counts: dict[str, int] = field(default_factory=dict)
     # Goals _compass_near_counts pushed past COMPASS_STALL_STEPS -- excluded
     # from compass_progress's candidate pool for the rest of the episode.
@@ -1113,82 +1113,66 @@ class Data:
         """
         return self.data_normalizer([self.loop_streak], max=self.max_loop_streak)
 
-    def _goal_parents_satisfied(self, goal: str) -> bool:
-        """Whether every event_graph parent of ``goal`` is already true in
-        THIS episode's live game state (self.is_goal_satisfied), not just
-        physically walkable to. BFS reachability (pokemon.navigation) only
-        catches *geographic* gating (a Cut tree/badge/HM blocking the
-        route) -- it has no way to know a tile's flag is additionally
-        gated on an unrelated story flag with no physical obstacle at all
-        (e.g. EVENT_DAISY_WALKING requires EVENT_GOT_TOWN_MAP +
-        EVENT_ENTERED_BLUES_HOUSE first per PalletTown.asm's
-        PalletTownDaisyScript, even though the tile itself is reachable
-        from minute one). event_graph is still just a static-analysis
-        hint, not proof (see event_graph.py's own caveat) -- but checked
-        live against this episode's actual flags, a false positive here
-        only means "compass skips a goal that was secretly fine", never
-        "compass points at something wrong", so it's a safe filter to
-        layer on top of BFS, not a replacement for it. True (no gate) for
-        badges (no EVENT_GRAPH entry of their own -- wObtainedBadges isn't
-        a named event) and any goal event_graph has no parents for.
-        """
-        info = _event_graph.EVENT_GRAPH.get(goal)
-        if info is None:
-            return True
-        return all(self.is_goal_satisfied(p) for p in info["parents"])
-
     def compass_progress(self) -> list[float]:
-        """[dx, dy, has_target] toward the nearest currently-walkable,
-        not-yet-satisfied, not-currently-story-gated, not-stalled
-        GOAL_CANDIDATES tile (pokemon.navigation.nearest_objective,
-        filtered by _goal_parents_satisfied and _compass_excluded) -- a
-        deterministic BFS "compass", not a learned signal. dx/dy are the
-        *next graph hop's* direction, clipped to [-1, 1], not a
-        straight-line offset to the target -- see
-        navigation.nearest_objective's docstring for why (pos and a
-        cross-map target don't share a coordinate frame). [0, 0, 0]
+        """[dx, dy, has_target] toward the nearest currently-unset,
+        currently-satisfiable event trigger
+        (pokemon.event_compass.nearest_unlockable_event, filtered live by
+        pokemon.event_triggers' own `requires` guards and by
+        _compass_excluded) -- a deterministic BFS "compass", not a learned
+        signal. Unlike the old pokemon.navigation/pokemon.goal_positions
+        compass this replaced, the candidate pool isn't a curated
+        GOAL_CANDIDATES whitelist filtered by a *hint* of live-flag gating
+        on top of it -- pokemon.event_triggers only ever contains an event
+        at all once tools/gen_event_triggers.py's asm resolver found a
+        real, verified SetEvent site for it, and every site's own
+        `requires` is checked live already, so there's nothing left for a
+        separate "_goal_parents_satisfied"-style pass to add here (removed
+        along with the old compass). dx/dy are the *next graph hop's*
+        direction, clipped to [-1, 1], not a straight-line offset to the
+        target -- see nearest_unlockable_event's docstring for why (pos and
+        a cross-map target don't share a coordinate frame). [0, 0, 0]
         (has_target=0) whenever no candidate is reachable within
-        navigation.DEFAULT_MAX_HOPS, or outside world mode (position is
+        event_compass.DEFAULT_MAX_HOPS, or outside world mode (position is
         meaningless mid-battle/dialog/menu) -- a clean, learnable "no
         signal" state, deliberately never a guessed direction. Imports
-        pokemon.navigation lazily (inside this method, not at module level)
-        because pokemon.goal_positions -> curriculum_config -> pokemon.Data
-        is already a real import chain; importing navigation at Data.py's
-        own module level would be circular (see navigation.py's docstring).
+        pokemon.event_compass lazily (inside this method, not at module
+        level) for the same reason the old compass did: pokemon.
+        goal_positions -> curriculum_config -> pokemon.Data is already a
+        real import chain, so importing anything compass-related at
+        Data.py's own module level risks the same circularity (see
+        event_compass.py's own docstring).
 
-        A goal the compass reports as "arrived" (dist <= COMPASS_STALL_DIST)
+        An event the compass reports as "arrived" (dist <= COMPASS_STALL_DIST)
         for COMPASS_STALL_STEPS cumulative steps without ever becoming
         satisfied is added to _compass_excluded for the rest of the episode
-        -- a live, generic backstop for gating _goal_parents_satisfied's
-        static event_graph data structurally cannot see (e.g. a per-map
-        script-counter state machine, an item/badge check, an NPC-position
-        check -- anything that isn't a CheckEvent near the SetEvent). This
-        is deliberately slow to trigger (COMPASS_STALL_STEPS is generous):
-        an early, barely-trained policy can also sit near a perfectly
-        achievable target for a long time simply because it hasn't learned
-        the right button yet, and wrongly excluding a fine goal for the
-        rest of that one episode is a far cheaper mistake than the
-        alternative (a target that can genuinely never fire this episode
-        eating the compass slot indefinitely).
+        -- a live backstop for whatever event_triggers' own static analysis
+        still can't see (event_triggers.py is explicit that it's a "hint,
+        not proof" too -- a badge/item gate this repo's manual audit hasn't
+        found yet, say). This is deliberately slow to trigger
+        (COMPASS_STALL_STEPS is generous): an early, barely-trained policy
+        can also sit near a perfectly achievable target for a long time
+        simply because it hasn't learned the right button yet, and wrongly
+        excluding a fine goal for the rest of that one episode is a far
+        cheaper mistake than the alternative (a target that can genuinely
+        never fire this episode eating the compass slot indefinitely).
         """
         if not self.is_world(self.pyboy.memory):
             self.last_compass_debug = None
             return [0.0, 0.0, 0.0]
-        from pokemon import navigation as _navigation
+        from pokemon import event_compass as _event_compass
 
-        candidates = frozenset(
-            g
-            for g in GOAL_CANDIDATES - self._prev_satisfied_events - self._compass_excluded
-            if self._goal_parents_satisfied(g)
+        excluded = frozenset(self._compass_excluded)
+        memory = self.pyboy.memory
+        result = _event_compass.nearest_unlockable_event(
+            self.get_position(), memory, excluded_events=excluded
         )
-        result = _navigation.nearest_objective(self.get_position(), candidates)
         if result is None:
             self.last_compass_debug = {
                 "goal": None,
                 "dx": 0.0,
                 "dy": 0.0,
                 "dist": None,
-                "candidates": len(candidates),
+                "candidates": len(set(_event_compass.unlockable_events(memory)) - excluded),
                 "near_steps": None,
             }
             return [0.0, 0.0, 0.0]
@@ -1203,7 +1187,7 @@ class Data:
             "dx": float(max(-1, min(1, dx))),
             "dy": float(max(-1, min(1, dy))),
             "dist": dist,
-            "candidates": len(candidates),
+            "candidates": len(set(_event_compass.unlockable_events(memory)) - excluded),
             "near_steps": self._compass_near_counts.get(goal, 0),
         }
         return [float(max(-1, min(1, dx))), float(max(-1, min(1, dy))), 1.0]
