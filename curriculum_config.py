@@ -19,14 +19,22 @@ ONLY as a stable enumeration for two purposes that need *a* fixed order, not
 a *correct* one: (1) GOAL_ORDER/GOAL_INDEX's one-hot indexing for the
 policy's goal observation, and (2) cosmetic listings (--list-stages,
 create_stage_save.py --list). Nothing picks "the next goal" by walking
-STAGE_ORDER anymore -- see pick_new_goal(), which is a random, order-free
-pick instead, optionally biased by pick_new_goal's ``weights`` arg (see
+STAGE_ORDER anymore -- see pick_next_goal_by_success_rate(), which prioritizes
+whichever already-mastered goal has the HIGHEST rolling-window success rate
+(last up to ``window``, default 100, resume-attempts -- not a lifetime
+average) that's still below ADVANCE_SUCCESS_THRESHOLD (a "zone of proximal
+development" pick: challenging but not hopeless), using a per-goal 1/0
+success window tallied by MilestoneCallback while that goal was the active
+resume checkpoint (see GOAL_SUCCESS_STATS_PATH). A goal with no recorded data
+yet (or too little in its window to trust, see GOAL_SUCCESS_MIN_ATTEMPTS)
+falls back to pick_new_goal(), a
+random, order-free pick optionally biased by its ``weights`` arg (see
 MilestoneCallback._goal_hit_counts) so goals the policy rarely lands on get
 sampled more than ones it already clears constantly -- a practice order that
 emerges from what's been learned, still with no fixed sequence behind it.
 Badges (no bit index of their own) are still anchored next to their
 corresponding "beat gym leader" event purely for STAGE_ORDER's list
-position; that anchoring has no bearing on pick_new_goal().
+position; that anchoring has no bearing on either picker.
 
 Save directories under saves/<goal_name>/checkpoint.state, written
 dynamically as episodes reach them (see
@@ -50,6 +58,16 @@ from pokemon.Data import BADGE_GOALS, GOAL_CANDIDATES
 ADVANCE_SUCCESS_THRESHOLD = 0.70
 ADVANCE_MIN_EPISODES = 40
 ADVANCE_CHECK_EVERY = 2048
+
+# Minimum recorded resume-attempts within a goal's rolling success window
+# (completed episodes run with that goal as the active base/resume
+# checkpoint, most recent up to MilestoneCallback.window -- see
+# MilestoneCallback._goal_success_windows / GOAL_SUCCESS_STATS_PATH) before
+# its windowed success rate is trusted enough to drive pick_next_goal_by_
+# success_rate's choice. Below this, a goal is treated the same as one with
+# zero data (the "untried" bucket) so a single lucky/unlucky early episode
+# can't dominate the pick.
+GOAL_SUCCESS_MIN_ATTEMPTS = 10
 
 # Generous flat safety-net ceiling on top of Data.py's live, size-scaled
 # per-map truncate budget (map_truncate_budget) — that budget grows as new
@@ -348,6 +366,72 @@ def pick_new_goal(
         if sum(w) > 0:
             return rng.choices(candidates, weights=w, k=1)[0]
     return rng.choice(candidates)
+
+
+def pick_next_goal_by_success_rate(
+    success_rates: dict[str, float],
+    *,
+    threshold: float = ADVANCE_SUCCESS_THRESHOLD,
+    fallback_weights: dict[str, float] | None = None,
+    rng: random.Random | None = None,
+) -> str | None:
+    """Pick the next base goal to resume episodes from, prioritizing the
+    "zone of proximal development": whichever already-mastered goal
+    (candidate pool -- see pick_new_goal) the policy clears *often* but not
+    yet reliably, rather than one it almost always fails from (little
+    learning signal, mostly wasted episodes) or one it already clears
+    comfortably (nothing left to learn there).
+
+    ``success_rates`` maps goal -> rolling-window success rate (mean of the
+    last up to ``window`` resume-attempts, not a lifetime average),
+    restricted by the caller to goals with at least GOAL_SUCCESS_MIN_ATTEMPTS
+    recorded in that window (see MilestoneCallback._goal_success_windows,
+    GOAL_SUCCESS_STATS_PATH) -- a goal missing from this dict is "untried"
+    and handled by the fallback below, same as one explicitly absent.
+
+    Priority:
+    1. Among candidates with a known rate < ``threshold``, pick the one with
+       the HIGHEST rate (closest to mastery) -- ties broken uniformly at
+       random.
+    2. Else, among candidates with no known rate yet ("untried"), fall back
+       to pick_new_goal's inverse-hit-count-weighted random pick restricted
+       to just those, so new goals get a chance to accumulate data.
+    3. Else (every candidate already sits >= threshold -- the whole
+       reachable frontier is comfortably mastered), fall back to a plain
+       pick_new_goal call over every candidate so the curriculum never
+       stalls.
+
+    None if there is no candidate at all (nothing mastered yet), same as
+    pick_new_goal.
+    """
+    rng = rng or random
+    candidates = [
+        g
+        for g in STAGE_ORDER
+        if CURRICULUM.get(g, {}).get("enabled", True) and _save_exists(g)
+    ]
+    if not candidates:
+        return None
+
+    below_threshold = [
+        g for g in candidates if g in success_rates and success_rates[g] < threshold
+    ]
+    if below_threshold:
+        best_rate = max(success_rates[g] for g in below_threshold)
+        best = [g for g in below_threshold if success_rates[g] == best_rate]
+        return rng.choice(best)
+
+    untried = [g for g in candidates if g not in success_rates]
+    if untried:
+        w = [
+            (fallback_weights or {}).get(g, 1.0)
+            for g in untried
+        ]
+        if sum(w) > 0:
+            return rng.choices(untried, weights=w, k=1)[0]
+        return rng.choice(untried)
+
+    return pick_new_goal(weights=fallback_weights, rng=rng)
 
 
 def stage_for_goal(goal: str) -> str:

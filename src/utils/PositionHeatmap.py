@@ -1298,15 +1298,17 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
             goal_scroll = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL)
             goal_tree = ttk.Treeview(
                 tree_frame,
-                columns=("hits",),
+                columns=("hits", "success"),
                 show="tree headings",
                 height=32,
                 yscrollcommand=goal_scroll.set,
             )
             goal_tree.heading("#0", text="Goal")
             goal_tree.heading("hits", text="Hits")
+            goal_tree.heading("success", text="Success %")
             goal_tree.column("#0", width=220, anchor=tk.W, stretch=False)
             goal_tree.column("hits", width=50, anchor=tk.E, stretch=False)
+            goal_tree.column("success", width=70, anchor=tk.E, stretch=False)
             goal_tree.tag_configure("zero", foreground="#999999")
             goal_scroll.config(command=goal_tree.yview)
             goal_scroll.pack(side=tk.RIGHT, fill=tk.Y)
@@ -1325,13 +1327,24 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
 
     goal_hit_counts_path = Path("saves") / "goal_hit_counts.json"
     visited_maps_path = Path("saves") / "visited_maps.json"
+    # Per-goal rolling success window (most recent up to MilestoneCallback.
+    # window resume-attempts, as a list of 1/0) while that goal was the
+    # active base/resume checkpoint -- see MilestoneCallback._goal_success_
+    # windows / GOAL_SUCCESS_STATS_PATH in ppo/callbacks.py. Distinct from
+    # goal_hit_counts_path's "hits" (any goal touched by an episode,
+    # regardless of what was assigned, cumulative forever): this windowed
+    # rate is what curriculum_config.pick_next_goal_by_success_rate actually
+    # picks on. Optional -- older saves/ dirs or a run that hasn't hit the
+    # periodic save yet won't have it, so its absence doesn't block the rest
+    # of the panel, it just shows "n/a" success rates.
+    goal_success_stats_path = Path("saves") / "goal_success_stats.json"
     _goal_panel_state = {"mtime": None}
 
     def _refresh_goal_saturation() -> None:
-        """Reload saves/goal_hit_counts.json and saves/visited_maps.json
-        (see MilestoneCallback._visited_maps in ppo/callbacks.py, fed into
-        pick_new_goal's own ``visited_maps`` arg) when either changes, and
-        repaint the side panel.
+        """Reload saves/goal_hit_counts.json, saves/goal_success_stats.json
+        and saves/visited_maps.json (see MilestoneCallback._visited_maps in
+        ppo/callbacks.py, fed into pick_new_goal's own ``visited_maps`` arg)
+        when any changes, and repaint the side panel.
 
         Only goals pick_new_goal could actually hand out right now are
         listed: status "locked" (parents not yet satisfied -- see
@@ -1356,7 +1369,11 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
             visited_mtime = visited_maps_path.stat().st_mtime
         except OSError:
             return
-        combined_mtime = (mtime, visited_mtime)
+        try:
+            stats_mtime = goal_success_stats_path.stat().st_mtime
+        except OSError:
+            stats_mtime = None
+        combined_mtime = (mtime, visited_mtime, stats_mtime)
         if combined_mtime == _goal_panel_state["mtime"]:
             return
         try:
@@ -1366,6 +1383,13 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
                 visited_maps = {int(m) for m in json.load(f)}
         except (OSError, ValueError):
             return
+        stats: dict = {}
+        if stats_mtime is not None:
+            try:
+                with open(goal_success_stats_path, encoding="utf-8") as f:
+                    stats = json.load(f)
+            except (OSError, ValueError):
+                stats = {}
         _goal_panel_state["mtime"] = combined_mtime
         names = stage_order or sorted(counts)
         statuses = {name: _goal_status(name) for name in names}
@@ -1383,8 +1407,12 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
         goal_tree.delete(*goal_tree.get_children())
         for name, hits in rows:
             label = f"{_GOAL_STATUS_DOT.get(statuses[name], '')}{name}"
+            window = stats.get(name) or []
+            attempts = len(window)
+            successes = sum(window)
+            success_pct = f"{successes / attempts:.0%}" if attempts else "n/a"
             goal_tree.insert(
-                "", tk.END, text=label, values=(hits,),
+                "", tk.END, text=label, values=(hits, success_pct),
                 tags=("zero",) if hits == 0 else (),
             )
 

@@ -36,7 +36,7 @@ import keyboard
 
 from curriculum_config import CURRICULUM, STAGE_ORDER
 from pokemon.Emulator import DURATION_BINS, Emulator
-from ppo.callbacks import GOAL_HIT_COUNTS_PATH
+from ppo.callbacks import GOAL_HIT_COUNTS_PATH, GOAL_SUCCESS_STATS_PATH
 
 BUTTON_NAMES = ["A", "B", "Start", "Select", "Left", "Right", "Up", "Down", "None"]
 BIN_16_IDX = 0
@@ -77,10 +77,30 @@ def _load_goal_hit_counts() -> dict[str, int]:
         return {}
 
 
+def _load_goal_success_stats() -> dict[str, tuple[int, int]]:
+    """Per-goal rolling success window (most recent up to
+    MilestoneCallback.window resume-attempts, as a list of 1/0) written by
+    MilestoneCallback while that goal was the active base/resume checkpoint
+    (see GOAL_SUCCESS_STATS_PATH) -- distinct from _load_goal_hit_counts's
+    "hits" (any goal touched by an episode, regardless of what was
+    assigned). Returns (attempts, successes) per goal, i.e. (window length,
+    window sum) -- NOT a lifetime total, just whatever's in the current
+    window. Empty if training hasn't run / hasn't persisted a snapshot yet."""
+    if not GOAL_SUCCESS_STATS_PATH.is_file():
+        return {}
+    try:
+        with open(GOAL_SUCCESS_STATS_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        return {k: (len(v), sum(v)) for k, v in data.items()}
+    except (OSError, ValueError):
+        return {}
+
+
 def list_stages() -> None:
     counts = _load_goal_hit_counts()
+    stats = _load_goal_success_stats()
     print_sep()
-    print("  Curriculum stages (save path → goal, practice count)")
+    print("  Curriculum stages (save path → goal, practice count, success rate)")
     print_sep()
     for name in STAGE_ORDER:
         cfg = CURRICULUM.get(name, {})
@@ -89,7 +109,12 @@ def list_stages() -> None:
         goal = cfg.get("goal", "?")
         desc = cfg.get("description", "")
         hits = counts.get(goal, 0)
-        print(f"  {mark} {name:<24} goal={goal:<16} hits={hits:<6} {desc}")
+        attempts, successes = stats.get(goal, (0, 0))
+        rate = f"{successes / attempts:.0%}" if attempts else "n/a"
+        print(
+            f"  {mark} {name:<24} goal={goal:<16} hits={hits:<6} "
+            f"success_rate={rate:<5}({successes}/{attempts}) {desc}"
+        )
     print_sep()
     print("  ✓ = saves/<stage>/checkpoint.state exists")
     print("  Train uses that file when the stage is active (else falls back to start).")
@@ -101,6 +126,14 @@ def list_stages() -> None:
         )
     else:
         print(f"  hits = 0 for all -- no {GOAL_HIT_COUNTS_PATH} yet (run training first)")
+    if stats:
+        print(
+            "  success_rate = successes/attempts over the last up to "
+            "window (default 100) episodes resumed from that goal, not a "
+            "lifetime total (see pick_next_goal_by_success_rate)"
+        )
+    else:
+        print(f"  success_rate = n/a for all -- no {GOAL_SUCCESS_STATS_PATH} yet")
 
 
 def _status_line(emulator: Emulator) -> str:

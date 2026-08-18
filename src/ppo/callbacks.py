@@ -28,6 +28,19 @@ GOAL_HIT_COUNTS_PATH = Path("saves") / "goal_hit_counts.json"
 # PositionHeatmap.py's goal-saturation side panel.
 VISITED_MAPS_PATH = Path("saves") / "visited_maps.json"
 
+# Per-goal rolling window (most recent up to MilestoneCallback.window
+# outcomes, oldest first) of 1/0 success while that goal was the active
+# base/resume checkpoint (see MilestoneCallback._goal_success_windows),
+# persisted the same way and for the same resume-survival reason as
+# GOAL_HIT_COUNTS_PATH. Drives curriculum_config.pick_next_goal_by_success_
+# rate's zone-of-proximal-development pick: unlike GOAL_HIT_COUNTS_PATH (any
+# goal touched, regardless of what was assigned, cumulative forever), this
+# is scoped to episodes run *while resuming from* a given goal, windowed the
+# same way as the rolling trigger rate (self._successes) so it tracks
+# current policy behavior instead of averaging in stale early-training
+# episodes forever.
+GOAL_SUCCESS_STATS_PATH = Path("saves") / "goal_success_stats.json"
+
 
 class HeatmapCallback(BaseCallback):
     """Forward per-run (map,x,y)->ticks snapshots to the live --heatmap window.
@@ -163,10 +176,15 @@ class EntropyCoefScheduler(BaseCallback):
 class MilestoneCallback(BaseCallback):
     """Track episode milestone hit-rate and loop episode rate.
 
-    When ``auto_curriculum`` is True, periodically hands training a fresh,
-    randomly-picked goal (see curriculum_config.pick_new_goal) once the
-    rolling success rate -- did each recent episode clear *some* goal, not
-    a specific one -- clears the threshold. There is no story order to walk:
+    When ``auto_curriculum`` is True, periodically hands training a fresh
+    goal once the rolling success rate -- did each recent episode clear
+    *some* goal, not a specific one -- clears the threshold. The new goal is
+    picked by curriculum_config.pick_next_goal_by_success_rate: whichever
+    already-mastered goal has the highest rolling-window success rate
+    (last up to ``window`` episodes resumed from it) that's still below the
+    threshold (see _goal_success_windows, GOAL_SUCCESS_STATS_PATH), falling
+    back to a random pick_new_goal() pick for goals with no trustworthy data
+    yet. There is no story order to walk:
     whichever goal(s) an episode actually reaches already get their own
     saves/<goal>/checkpoint.state (see
     PokemonRedEnv._save_milestone_checkpoints); this just keeps refreshing
@@ -278,12 +296,23 @@ class MilestoneCallback(BaseCallback):
         self._best_stage_idx_ever = 0
         # Cumulative (whole run, not windowed) count of completed episodes
         # that touched each goal at least once -- see info["milestones_hit"]
-        # below. Doubles as a per-goal mastery signal: fed into
-        # pick_new_goal's ``weights`` in _try_reassign so the next base goal
-        # is biased toward whatever the policy has practiced least, letting
-        # a de facto goal order emerge from what it's actually learned
-        # rather than a fixed sequence.
+        # below. Fed into pick_new_goal's ``weights`` as _try_reassign's
+        # fallback (goals with no trustworthy _goal_success_windows data yet
+        # -- see pick_next_goal_by_success_rate) so untried goals
+        # are biased toward whatever the policy has practiced least there,
+        # letting a de facto exploration order emerge from what it's
+        # actually learned rather than a fixed sequence.
         self._goal_hit_counts: Counter[str] = Counter()
+        # Per-goal rolling window (maxlen=self.window, same width as the
+        # global trigger window self._successes below) of 1/0 success,
+        # appended to whichever goal was self.stage at each episode's
+        # completion (see GOAL_SUCCESS_STATS_PATH). Feeds curriculum_config.
+        # pick_next_goal_by_success_rate in _try_reassign: unlike
+        # _goal_hit_counts above (any goal touched, cumulative forever),
+        # this measures how often *recent* episodes resumed from a given
+        # goal's checkpoint went on to succeed -- i.e. that goal's own
+        # current success rate, not a lifetime average.
+        self._goal_success_windows: dict[str, deque[int]] = {}
         # Every map_id any episode has touched this run, whole-run cumulative
         # like _goal_hit_counts. No longer fed into pick_new_goal (see its
         # docstring); kept for the pokemon/maps_visited_count gauge and
@@ -326,10 +355,12 @@ class MilestoneCallback(BaseCallback):
         self.logger.record("pokemon/curriculum_stage_idx", self._stage_idx())
         self._reset_goal_hits()
         self._load_goal_hit_counts()
+        self._load_goal_success_stats()
         self._load_visited_maps()
 
     def _on_training_end(self) -> None:
         self._save_goal_hit_counts()
+        self._save_goal_success_stats()
         self._save_visited_maps()
 
     def _load_goal_hit_counts(self) -> None:
@@ -350,6 +381,32 @@ class MilestoneCallback(BaseCallback):
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(dict(self._goal_hit_counts), f, indent=2, sort_keys=True)
         os.replace(tmp, GOAL_HIT_COUNTS_PATH)
+
+    def _load_goal_success_stats(self) -> None:
+        """Seed each goal's rolling success window from a prior run, if any
+        -- same resume story as _load_goal_hit_counts. Each list is
+        truncated to the most recent ``self.window`` entries (oldest first)
+        so a resume with a smaller --window doesn't keep dragging in more
+        history than the deque can even hold."""
+        if not GOAL_SUCCESS_STATS_PATH.is_file():
+            return
+        try:
+            with open(GOAL_SUCCESS_STATS_PATH, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            return
+        self._goal_success_windows = {
+            g: deque((int(x) for x in outcomes[-self.window :]), maxlen=self.window)
+            for g, outcomes in data.items()
+        }
+
+    def _save_goal_success_stats(self) -> None:
+        GOAL_SUCCESS_STATS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = GOAL_SUCCESS_STATS_PATH.with_suffix(".json.tmp")
+        data = {g: list(dq) for g, dq in self._goal_success_windows.items()}
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, sort_keys=True)
+        os.replace(tmp, GOAL_SUCCESS_STATS_PATH)
 
     def _load_visited_maps(self) -> None:
         """Seed the cumulative visited-map set from a prior run, if any --
@@ -429,14 +486,40 @@ class MilestoneCallback(BaseCallback):
         if rate < self.success_threshold:
             return
 
-        from curriculum_config import get_goal_for_stage, get_stage_max_steps, pick_new_goal
+        from curriculum_config import (
+            GOAL_SUCCESS_MIN_ATTEMPTS,
+            get_goal_for_stage,
+            get_stage_max_steps,
+            pick_next_goal_by_success_rate,
+        )
 
-        # Inverse-hit-count weighting: a goal no completed episode has ever
-        # touched (count 0) gets weight 1.0, same as one seen exactly once,
-        # so brand-new discoveries aren't favored purely for being unseen --
-        # weight only decays as a goal accumulates *practiced* hits.
-        weights = {g: 1.0 / (1.0 + c) for g, c in self._goal_hit_counts.items()}
-        nxt = pick_new_goal(weights=weights)
+        # Inverse-hit-count weighting, used only as a fallback for goals
+        # with no trustworthy success-rate data yet (see
+        # pick_next_goal_by_success_rate) -- a goal no completed episode has
+        # ever touched (count 0) gets weight 1.0, same as one seen exactly
+        # once, so brand-new discoveries aren't favored purely for being
+        # unseen; weight only decays as a goal accumulates *practiced* hits.
+        fallback_weights = {g: 1.0 / (1.0 + c) for g, c in self._goal_hit_counts.items()}
+        # Rolling (last up to self.window episodes) success rate per goal,
+        # restricted to goals with enough recorded resume-attempts in that
+        # window to trust the ratio (see GOAL_SUCCESS_MIN_ATTEMPTS) -- picks
+        # the "zone of proximal development" goal: highest *current* success
+        # rate that's still below self.success_threshold, so training keeps
+        # drilling wherever it's closest to (but not yet) reliable right
+        # now, instead of a goal it either always fails from or has already
+        # mastered. Windowed (not lifetime-cumulative) so a goal's rate
+        # tracks the current policy instead of being dragged down forever by
+        # its own early, weak attempts.
+        success_rates = {
+            g: float(np.mean(dq))
+            for g, dq in self._goal_success_windows.items()
+            if len(dq) >= GOAL_SUCCESS_MIN_ATTEMPTS
+        }
+        nxt = pick_next_goal_by_success_rate(
+            success_rates,
+            threshold=self.success_threshold,
+            fallback_weights=fallback_weights,
+        )
         if nxt is None or nxt == self.stage:
             return
 
@@ -454,17 +537,21 @@ class MilestoneCallback(BaseCallback):
         goal = get_goal_for_stage(nxt)
         max_steps = get_stage_max_steps(nxt)
         nxt_hits = self._goal_hit_counts.get(nxt, 0)
+        nxt_rate = success_rates.get(nxt)
+        rate_desc = f"{nxt_rate:.2f}" if nxt_rate is not None else "untried"
         msg = (
-            f"[curriculum] {old} -> {nxt} (order-free pick, "
-            f"practiced {nxt_hits}x so far) "
+            f"[curriculum] {old} -> {nxt} (zone-of-proximal-dev pick, "
+            f"own windowed success_rate={rate_desc}, practiced {nxt_hits}x so far) "
             f"(goal={goal}, max_steps={max_steps}, "
-            f"success_rate={rate:.2f} >= {self.success_threshold:.2f})"
+            f"trigger success_rate={rate:.2f} >= {self.success_threshold:.2f})"
         )
         # ASCII only: Windows cp1250 + PowerShell redirect crashes on arrows.
         print(f"\n{msg}\n")
         self.logger.record("pokemon/curriculum_stage_idx", self._stage_idx())
         self.logger.record("pokemon/goal_success_rate", 0.0)
         self.logger.record("pokemon/goal_practice_count", float(nxt_hits))
+        if nxt_rate is not None:
+            self.logger.record("pokemon/goal_success_rate_window_picked", nxt_rate)
 
     def _on_step(self) -> bool:
         infos = self.locals.get("infos", [])
@@ -550,6 +637,9 @@ class MilestoneCallback(BaseCallback):
                     or info.get("terminated", False)
                 )
                 self._successes.append(1 if success else 0)
+                self._goal_success_windows.setdefault(
+                    self.stage, deque(maxlen=self.window)
+                ).append(1 if success else 0)
                 self._badges.append(int(info.get("badges", 0) or 0))
                 self._goals_live.append(live)
                 self._goals_peak.append(self._ep_goals_peak[i])
@@ -705,6 +795,12 @@ class MilestoneCallback(BaseCallback):
                     self._goal_hit_reward_sum / self._goal_hit_count,
                 )
             self.logger.record("pokemon/curriculum_stage_idx", self._stage_idx())
+            cur_window = self._goal_success_windows.get(self.stage)
+            if cur_window:
+                self.logger.record(
+                    "pokemon/current_goal_success_rate_window",
+                    float(np.mean(cur_window)),
+                )
             if self._goal_hit_counts:
                 from curriculum_config import N_GOALS
 
@@ -724,6 +820,7 @@ class MilestoneCallback(BaseCallback):
                     "pokemon/maps_visited_count", float(len(self._visited_maps))
                 )
             self._save_goal_hit_counts()
+            self._save_goal_success_stats()
             self._save_visited_maps()
             self._try_reassign()
 
