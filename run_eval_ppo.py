@@ -397,9 +397,7 @@ def run(args):
                     map_ctr = f" map_ctr={ctr_used}/{ctr_truncate_budget}"
                 # How much of the current map has actually been discovered
                 # so far this run: distinct (x, y) on this map_id with a
-                # position_visit_counts entry (ordinary walking, plus
-                # whatever a wild encounter's flood fill in
-                # Data._mark_wild_grass_island bumped in one shot) against
+                # position_visit_counts entry (ordinary walking) against
                 # every walkable cell the map has (pokemon.map_collision,
                 # generated straight from pret/pokered's own map/tileset
                 # data -- see tools/gen_map_collision.py).

@@ -351,7 +351,7 @@ def flood_grass_island(map_id: int, x0: int, y0: int) -> set[tuple[int, int]]:
     stopping at the patch's edge). Empty set if (x0, y0) itself is not
     grass (see is_grass -- no static data for map_id, out-of-bounds, a
     non-grass tile, or a tileset with no grass tile at all). Used by
-    Data._mark_wild_grass_island.
+    tools/render_map_island.py for debug visualization.
     """
     if not is_grass(map_id, x0, y0):
         return set()

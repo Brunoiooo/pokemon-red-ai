@@ -43,7 +43,7 @@ walling them off, so a flood fill over the *walkable* bitmap swallows the
 entire connected route, not just the "island" of grass a wild encounter's
 tile sits in (empirically: Route 1 has 553 walkable cells but only 104 are
 actually grass, split into several disconnected patches). See
-Data._mark_wild_grass_island, which floods the grass bitmap specifically.
+flood_grass_island below, which floods the grass bitmap specifically.
 
 Usage: python tools/gen_map_collision.py
 """
@@ -347,7 +347,7 @@ def main() -> None:
     lines.append('    stopping at the patch\'s edge). Empty set if (x0, y0) itself is not')
     lines.append("    grass (see is_grass -- no static data for map_id, out-of-bounds, a")
     lines.append('    non-grass tile, or a tileset with no grass tile at all). Used by')
-    lines.append("    Data._mark_wild_grass_island.")
+    lines.append("    tools/render_map_island.py for debug visualization.")
     lines.append('    """')
     lines.append("    if not is_grass(map_id, x0, y0):")
     lines.append("        return set()")

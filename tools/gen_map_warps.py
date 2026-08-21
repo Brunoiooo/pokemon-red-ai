@@ -26,8 +26,8 @@ Known gap: outdoor Route<->City edge-walks (no warp_event involved at all,
 just walking off a map's border) are not covered by this graph. Those are
 already tracked live and empirically by Data.map_transitions once an agent
 has actually crossed them; this file is only about the discrete jumps
-(building/floor/cave warps) relevant to Data._mark_wild_grass_island-style
-static analysis and cross-map routing between indoor destinations.
+(building/floor/cave warps) relevant to static per-map collision analysis
+and cross-map routing between indoor destinations.
 
 Usage: python tools/gen_map_warps.py
 """

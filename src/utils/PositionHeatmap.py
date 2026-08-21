@@ -104,10 +104,7 @@ Eight color metrics (cycle with 'r'), independent of the view mode:
     threshold" and 2.0 is "at the hard threshold". Fixed [0, 2] color scale
     like winrate/fleerate (doesn't rescale to the data) since those
     threshold multiples, not the window's hottest tile, are what's worth
-    reading off the color directly. Includes the flood-filled "island" bump
-    _mark_wild_grass_island adds around a wild encounter's tile, so a grass
-    patch discovered via one battle reads as visited even before it's been
-    walked.
+    reading off the color directly.
   Rate metrics (winrate/fleerate) are left blank on tiles with too few
   recorded battles (< _MIN_BATTLE_SAMPLES) rather than shown at a noisy
   100%/0%.

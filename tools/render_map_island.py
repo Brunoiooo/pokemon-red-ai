@@ -8,9 +8,9 @@ Renders the full static collision grid for one map_id, with three tiers:
   'o' grass and reachable from the start (pokemon.map_collision.flood_grass_island)
   '@' the start tile itself
 
-Use this to confirm Data._mark_wild_grass_island's BFS does what it claims:
-stays inside the connected grass patch the encounter tile sits in, and does
-NOT leak across a path into some other patch of grass elsewhere on the map.
+Use this to confirm flood_grass_island's BFS does what it claims: stays
+inside the connected grass patch the given tile sits in, and does NOT leak
+across a path into some other patch of grass elsewhere on the map.
 
 Usage:
   python tools/render_map_island.py ROUTE_1 8 6

@@ -9,7 +9,6 @@ import torch
 
 from pokemon import event_constants as _event_constants
 from pokemon import event_graph as _event_graph
-from pokemon import map_collision as _map_collision
 from pokemon import map_constants as _map_constants
 from pokemon import map_scripts as _map_scripts
 from pokemon import ram_constants as _ram_constants
@@ -859,7 +858,6 @@ class Data:
             # every world<-battle return.
             if self.type_of_battle(self.pyboy.memory) == 1:
                 self._battle_entry_wild_visits = self.position_visit_counts.get(pos, 0)
-                self._mark_wild_grass_island(pos)
             if pos not in self.position_visit_counts:
                 self.position_visit_counts[pos] = 1
         elif not self.is_battle(self.pyboy.memory) and not self.is_dialog(
@@ -957,37 +955,6 @@ class Data:
         mid = self.map_id(self.pyboy.memory)
         self.map_id_visit_counts[mid] = self.map_id_visit_counts.get(mid, 0) + 1
         self._tick_map_budget(self.pyboy.memory)
-
-    def _mark_wild_grass_island(self, start_pos: tuple[int, int, int]) -> None:
-        """BFS-flood the grass-tile patch a wild encounter's tile sits in,
-        over the full static per-map grass bitmap (see pokemon.map_collision,
-        generated straight from pret/pokered's own map/tileset data by
-        tools/gen_map_collision.py) and bump position_visit_counts by 1 on
-        every reachable tile -- so one wild battle credits the whole
-        connected grass "island" the tile sits in, not just that one square,
-        discouraging camping a single tile of a patch the agent has
-        effectively already scouted.
-
-        Grass-only, not "any walkable tile": on an overworld map the grass
-        directly abuts the path with no wall between them, so flooding over
-        is_walkable() would swallow the entire connected route instead of
-        stopping at the grass patch's actual edge. Empty for a non-grass
-        encounter tile (cave floor, water, Safari Zone building, ...) --
-        those tilesets have no grass tile at all, so flood_grass_island()
-        returns nothing and the single-tile seed in the caller is all that
-        tile gets, same as before this only ever covered grass anyway.
-
-        Unlike a live on-screen read, this covers the map's actual full
-        connected region (not just whatever currently fits on the GB
-        screen around the player) and needs no per-step caching -- it's
-        static data, looked up directly by (map_id, x, y).
-        """
-        x0, y0, map_id = start_pos
-        for x, y in _map_collision.flood_grass_island(map_id, x0, y0):
-            world_pos = (x, y, map_id)
-            self.position_visit_counts[world_pos] = (
-                self.position_visit_counts.get(world_pos, 0) + 1
-            )
 
     def get_dialog(self, memory: bytes | None = None):
         if memory is None:
