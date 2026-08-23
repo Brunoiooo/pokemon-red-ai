@@ -304,14 +304,19 @@ class MilestoneCallback(BaseCallback):
         # actually learned rather than a fixed sequence.
         self._goal_hit_counts: Counter[str] = Counter()
         # Per-goal rolling window (maxlen=self.window, same width as the
-        # global trigger window self._successes below) of 1/0 success,
-        # appended to whichever goal was self.stage at each episode's
-        # completion (see GOAL_SUCCESS_STATS_PATH). Feeds curriculum_config.
+        # global trigger window self._successes below) of 1/0 success. The
+        # active self.stage gets a real 1/0 entry at each episode's
+        # completion (whole-episode success/fail); every OTHER goal actually
+        # cleared during that same episode (order-free chaining -- see
+        # _ep_milestones) also gets a 1 appended to its own window, since a
+        # goal being hit is unambiguous positive evidence for that goal
+        # specifically, not just whichever goal happened to be self.stage
+        # (see GOAL_SUCCESS_STATS_PATH). Feeds curriculum_config.
         # pick_next_goal_by_success_rate in _try_reassign: unlike
         # _goal_hit_counts above (any goal touched, cumulative forever),
-        # this measures how often *recent* episodes resumed from a given
-        # goal's checkpoint went on to succeed -- i.e. that goal's own
-        # current success rate, not a lifetime average.
+        # this measures how often *recent* episodes went on to succeed at
+        # each goal -- i.e. that goal's own current success rate, not a
+        # lifetime average.
         self._goal_success_windows: dict[str, deque[int]] = {}
         # Every map_id any episode has touched this run, whole-run cumulative
         # like _goal_hit_counts. No longer fed into pick_new_goal (see its
@@ -640,6 +645,21 @@ class MilestoneCallback(BaseCallback):
                 self._goal_success_windows.setdefault(
                     self.stage, deque(maxlen=self.window)
                 ).append(1 if success else 0)
+                # Every OTHER goal actually cleared this episode (order-free
+                # chaining -- see _ep_milestones) is unambiguous positive
+                # evidence for that goal specifically, not just self.stage.
+                # Without this, a goal only ever accumulated windowed success
+                # data while it happened to be the globally-active
+                # self.stage, so goals the policy clears constantly as a
+                # stepping stone toward something harder stayed stuck at
+                # "untried" in pick_next_goal_by_success_rate forever even
+                # though the policy was demonstrably mastering them.
+                for name in self._ep_milestones[i]:
+                    if name == self.stage:
+                        continue
+                    self._goal_success_windows.setdefault(
+                        name, deque(maxlen=self.window)
+                    ).append(1)
                 self._badges.append(int(info.get("badges", 0) or 0))
                 self._goals_live.append(live)
                 self._goals_peak.append(self._ep_goals_peak[i])
