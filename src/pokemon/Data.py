@@ -169,8 +169,12 @@ class Data:
     # badge_reward/event_reward are the only two payout amounts left —
     # reward_generic_progress pays every GOAL_CANDIDATES event/badge flat,
     # once per episode, no per-goal hand-tuned amount or active-goal scaling.
-    badge_reward: float = 10.0  # macro
-    event_reward: float = 2.0  # macro
+    badge_reward: float = field(
+        default=10.0, metadata={"cli": True, "help": "Macro payout per badge"}
+    )
+    event_reward: float = field(
+        default=2.0, metadata={"cli": True, "help": "Macro payout per story event"}
+    )
     # One-shot new-map/new-dialog payouts (formerly new_screen_reward /
     # new_dialog_reward) are gone — reward_new_map_presence / reward_new_dialog_presence
     # (see reward()) now cover that ground with a decaying-by-visits shape
@@ -178,31 +182,48 @@ class Data:
     # new_position_decay_visits), instead of a flat one-time bonus.
     # battle_turn_reward is kept at its old value (0.1) on purpose, not tied
     # to either of those — see reward_battle_useless_count.
-    battle_turn_reward: float = 0.1  # micro (turn progressed in battle)
-    new_position_reward: float = 0.008  # micro (slightly lower to curb tile farming)
+    battle_turn_reward: float = field(
+        default=0.1, metadata={"cli": True, "help": "Micro reward per battle turn progressed"}
+    )
+    new_position_reward: float = field(
+        default=0.008, metadata={"cli": True, "help": "Micro exploration reward per fresh tile"}
+    )
     # Revisit taper: full credit stays a one-shot, but the drop to 0 no longer
     # happens in a single step. Linear ramp-down over this many visits, so a
     # necessary backtrack (e.g. retracing to a room's only exit) isn't an
     # instant cliff from full bonus to the bare step penalty.
-    new_position_decay_visits: int = 4
+    new_position_decay_visits: int = field(
+        default=4, metadata={"cli": True, "help": "Visits until new_position_reward decays to 0"}
+    )
     # Mid-dialog text farming was an exploit (post-rival Oak speech): tiny
     # +0.01 per screen kept the agent camping without leaving for Route 1.
-    dialog_advance_reward: float = 0.0
-    dialog_exit_reward: float = 0.2  # meso — leaving dialog is real progress
+    dialog_advance_reward: float = field(
+        default=0.0, metadata={"cli": True, "help": "Reward per dialog-page-advance (0 = disabled)"}
+    )
+    dialog_exit_reward: float = field(
+        default=0.2, metadata={"cli": True, "help": "Meso reward for cleanly exiting a fresh dialog"}
+    )
     # Battle exit (wBattleResult @ RAM.wBattleResult): 0=win, 1=lose, 2=fled.
     # Win is mezzo (same scale as event); macro progress stays on event/badge.
-    battle_won_reward: float = 2.0
+    battle_won_reward: float = field(
+        default=2.0, metadata={"cli": True, "help": "Reward for winning a battle"}
+    )
     # No penalty for losing a battle — a negative penalty here was making the
     # agent risk-averse enough to actively avoid fights (and exploit episode
     # truncation to dodge the -1 before it landed) instead of just playing.
-    battle_lost_penalty: float = 0.0
+    battle_lost_penalty: float = field(
+        default=0.0, metadata={"cli": True, "help": "Penalty for losing a battle (0 = disabled)"}
+    )
     # battle_won_reward and per-hit enemy-HP reward are both scaled by a
     # smoothstep (3r^2-2r^3, r=enemy_lv/active_player_lv clamped to [0,1]) so
     # stomping a far weaker wild Pokemon is no longer free farming (e.g.
     # lvl-10 one-shotting a lvl-2 Pidgey paid the same +2 win bonus and +1.0
     # HP-fraction hit as a genuinely hard fight). Smoothstep is 0 at r=0, 1 at
     # r=1, with zero slope at both ends. See _battle_difficulty_scale.
-    battle_difficulty_invalid_fallback: float = 0.05
+    battle_difficulty_invalid_fallback: float = field(
+        default=0.05,
+        metadata={"cli": True, "help": "Difficulty-scale fallback when a level read is bad"},
+    )
     # Floor on the smoothstep above (max(floor, smoothstep(...))) — without
     # it, a big enough level gap scaled reward_enemy_hp/battle_won_reward
     # toward 0 while battle_useless_step's per-tick waste cost (never scaled
@@ -216,27 +237,51 @@ class Data:
     # battle_difficulty_invalid_fallback above — that path is a bad-read
     # anti-exploit guard, not a real difficulty reading, and must stay able
     # to sit below this floor.
-    battle_difficulty_scale_floor: float = 0.15
+    battle_difficulty_scale_floor: float = field(
+        default=0.15,
+        metadata={"cli": True, "help": "Floor on the win/enemy-HP battle-difficulty smoothstep"},
+    )
     # Successful RUN: compare enemy vs max party level so a lvl-1 sacrificial
     # slot cannot fake a "smart flee" while stronger Pokémon sit in the back.
-    flee_smart_reward: float = 0.4
-    flee_coward_penalty: float = -1.0
+    flee_smart_reward: float = field(
+        default=0.4, metadata={"cli": True, "help": "Reward for fleeing an over-leveled enemy"}
+    )
+    flee_coward_penalty: float = field(
+        default=-1.0, metadata={"cli": True, "help": "Penalty for fleeing a beatable enemy"}
+    )
     # Soft-capped party level-ups (Pleines/Whidden): full credit until sum of
     # party levels hits the threshold (~Misty-ready), then /4 to curb grinding.
-    level_reward_scale: float = 0.5
-    level_reward_threshold: int = 22
-    new_pokedex_seen_reward: float = 0.5
-    new_pokedex_own_reward: float = 1.0
-    status_reward: float = 0.02
+    level_reward_scale: float = field(
+        default=0.5, metadata={"cli": True, "help": "Reward scale per party level-up"}
+    )
+    level_reward_threshold: int = field(
+        default=22,
+        metadata={"cli": True, "help": "Sum-of-party-levels threshold before level reward soft-caps"},
+    )
+    new_pokedex_seen_reward: float = field(
+        default=0.5, metadata={"cli": True, "help": "Reward for a new Pokedex 'seen' entry"}
+    )
+    new_pokedex_own_reward: float = field(
+        default=1.0, metadata={"cli": True, "help": "Reward for a new Pokedex 'owned' entry"}
+    )
+    status_reward: float = field(
+        default=0.02, metadata={"cli": True, "help": "Reward for inflicting a status condition"}
+    )
     # Bumped from -0.001 -- too weak against gamma=0.99 to discourage pure
     # step-maximizing (wandering to farm small decaying rewards like
     # active_map_event_reward/status_reward instead of pushing forward).
     # Still well under new_position_reward (0.008), so genuine exploration
     # of a fresh tile stays clearly profitable -- only idling/backtracking
     # gets meaningfully more expensive.
-    base_reward: float = -0.003
-    truncated_reward: float = -0.05
-    new_item_reward: float = 0.5
+    base_reward: float = field(
+        default=-0.003, metadata={"cli": True, "help": "Per-step idle/base penalty"}
+    )
+    truncated_reward: float = field(
+        default=-0.05, metadata={"cli": True, "help": "Penalty applied on episode truncation"}
+    )
+    new_item_reward: float = field(
+        default=0.5, metadata={"cli": True, "help": "Reward for picking up a new item"}
+    )
 
     # Anti-loop / anti-spam penalties (PokeRL-style). Stronger than before so
     # farming a ~17 return without the stage goal is no longer attractive.
@@ -246,8 +291,26 @@ class Data:
     # cumulative counter over a handful of small maps, so a doorway/
     # chokepoint tile naturally crosses 3-5 visits on any normal multi
     # thousand-step episode — that's foot traffic, not looping.
-    visit_penalty_soft: float = -0.05  # visit count > 10
-    visit_penalty_hard: float = -0.15  # visit count > 20
+    visit_penalty_soft: float = field(
+        default=-0.05, metadata={"cli": True, "help": "Penalty once tile visit count exceeds the soft threshold"}
+    )
+    visit_penalty_hard: float = field(
+        default=-0.15, metadata={"cli": True, "help": "Penalty once tile visit count exceeds the hard threshold"}
+    )
+    # Per-instance override of the module-level VISIT_PENALTY_*_THRESHOLD
+    # constants above -- defaults match them exactly. Kept as separate
+    # module constants too since PositionHeatmap.py's _visit_metric_scale()
+    # references Data.VISIT_PENALTY_SOFT_THRESHOLD directly (a static
+    # heatmap-display scale, not reward logic, so it doesn't need to track a
+    # per-run override).
+    visit_penalty_soft_threshold: int = field(
+        default=VISIT_PENALTY_SOFT_THRESHOLD,
+        metadata={"cli": True, "help": "Tile visit count above which visit_penalty_soft applies"},
+    )
+    visit_penalty_hard_threshold: int = field(
+        default=VISIT_PENALTY_HARD_THRESHOLD,
+        metadata={"cli": True, "help": "Tile visit count above which visit_penalty_hard applies"},
+    )
     # Wild-battle rewards (battle_won_reward, and the positive side of
     # reward_enemy_hp/reward_enemy_status) decay with repeat position_visit_
     # counts on the tile a fight started on — same counter as
@@ -258,7 +321,9 @@ class Data:
     # climbs from ordinary foot traffic (not just fights), so a threshold
     # this low would zero out wild rewards on any well-trodden route tile
     # before the agent ever got its first fight there.
-    wild_visit_decay_visits: int = 4
+    wild_visit_decay_visits: int = field(
+        default=4, metadata={"cli": True, "help": "Visits until wild-battle reward decay bottoms out"}
+    )
     # Floor for _wild_encounter_decay -- decaying all the way to 0 made every
     # wild-battle reward/cost on a tile past wild_visit_decay_visits net to
     # whatever undecayed cost remains (battle_useless_step's per-tick waste,
@@ -273,7 +338,9 @@ class Data:
     # enough below 1.0 that grinding a stale tile on purpose is still clearly
     # worse than a fresh fight or fresh exploration -- farming stays
     # unrewarding, it just stops being punished.
-    wild_encounter_decay_floor: float = 0.15
+    wild_encounter_decay_floor: float = field(
+        default=0.15, metadata={"cli": True, "help": "Floor on wild-battle reward decay"}
+    )
     # Brought down from -0.08/-0.10 (previously "stronger than before" per
     # the comment above -- tried against the same ~1.0 loop_episode_rate
     # this is still tuned against, and it didn't move that number) to the
@@ -287,31 +354,49 @@ class Data:
     # more cleanly. Kept above new_position_reward itself so looping in
     # place is still never profitable, just no longer catastrophic relative
     # to real progress happening nearby.
-    action_pattern_penalty: float = -0.02
-    spatial_loop_penalty: float = -0.02
+    action_pattern_penalty: float = field(
+        default=-0.02, metadata={"cli": True, "help": "Penalty for a detected repeating action pattern"}
+    )
+    spatial_loop_penalty: float = field(
+        default=-0.02, metadata={"cli": True, "help": "Penalty for a detected spatial (position) loop"}
+    )
     # A *single* no-effect menu press (e.g. UP at the top of a list) used to
     # fire this every time — nearly guaranteed at least once in any episode
     # that opens a menu at all. Require menu_spam_streak consecutive no-ops
     # before it counts as spam rather than incidental boundary-bumping.
-    menu_spam_penalty: float = -0.05
-    menu_spam_streak_threshold: int = 3
+    menu_spam_penalty: float = field(
+        default=-0.05, metadata={"cli": True, "help": "Penalty for menu-spam (consecutive no-op presses)"}
+    )
+    menu_spam_streak_threshold: int = field(
+        default=3, metadata={"cli": True, "help": "Consecutive no-op menu presses before menu_spam_penalty fires"}
+    )
     # Cursor oscillating between a couple of menu states (e.g. ITEM <-> CANCEL)
     # changes state every step, so it evades menu_spam_penalty's "no-change"
     # check above. Catch revisits of the same menu state instead.
-    menu_loop_penalty: float = -0.10
+    menu_loop_penalty: float = field(
+        default=-0.10, metadata={"cli": True, "help": "Penalty for a detected menu-state loop"}
+    )
     # START/SELECT/d-pad while a textbox is open — does not advance story text.
     # A lone stray press mixed into otherwise-correct A/B mashing (near-
     # certain under a stochastic policy) used to flag the whole episode as
     # "looped". Require dialog_wrong_streak consecutive wrong presses before
     # it counts as genuinely stuck rather than one wrong roll.
-    dialog_wrong_button_penalty: float = -0.08
-    dialog_wrong_streak_threshold: int = 2
+    dialog_wrong_button_penalty: float = field(
+        default=-0.08, metadata={"cli": True, "help": "Penalty for a wrong button press during dialog"}
+    )
+    dialog_wrong_streak_threshold: int = field(
+        default=2, metadata={"cli": True, "help": "Consecutive wrong dialog presses before the penalty fires"}
+    )
     # In-dialog waste now reuses base_reward via the same shape as
     # reward_position's step_penalty (see reward_dialog) — no separate scale.
     # Re-open a dialog that was already exited on this map: 1st = penalty, 2nd = truncate.
-    dialog_reopen_penalty: float = -0.5
+    dialog_reopen_penalty: float = field(
+        default=-0.5, metadata={"cli": True, "help": "Penalty for re-opening an already-exited dialog"}
+    )
     # Consecutive anti-loop hits → truncate episode (escape local optima).
-    max_loop_streak: int = 48
+    max_loop_streak: int = field(
+        default=48, metadata={"cli": True, "help": "Consecutive anti-loop hits before the episode truncates"}
+    )
     # Episode goal for terminated() — a GOAL_CANDIDATES member (an EVENT_*
     # name or one of BADGE_GOALS). Only used by goal_reached()/terminated();
     # reward_generic_progress pays out every GOAL_CANDIDATES event regardless
@@ -322,7 +407,10 @@ class Data:
     in_menu_ticks: float = 0.0
     in_battle_ticks: float = 0.0
     in_dialog_ticks: float = 0.0
-    max_useless_ticks: int = 512
+    max_useless_ticks: int = field(
+        default=512,
+        metadata={"cli": True, "help": "Stuck-tile/menu truncate fuse (ticks; debug tools set 10**9 to disable)"},
+    )
     # Hard stuck fuse for one dialog_id. Resets only on dialog_id change or
     # leaving dialog — NOT on tilemap blink / partial text frames (those were
     # resetting the fuse forever while farming advance rewards).
@@ -330,11 +418,15 @@ class Data:
     # camp. Halved from 512*8 — a policy stuck idling in dialog (deterministic
     # eval argmax landing on NONE) was burning a full 256-step episode before
     # truncating; this bounds the damage without touching a legitimate read.
-    max_useless_dialog_ticks: int = 512 * 4
+    max_useless_dialog_ticks: int = field(
+        default=512 * 4, metadata={"cli": True, "help": "Stuck-dialog truncate fuse (ticks)"}
+    )
     # Battle fuse: same budget as dialog. Turn counter alone is too coarse —
     # intro text, move select, and attack messages all sit on one turn.
     # 512 was 32 steps @ fs 16; *4 gives room mid-fight.
-    max_useless_battle_ticks: int = 512 * 4
+    max_useless_battle_ticks: int = field(
+        default=512 * 4, metadata={"cli": True, "help": "Stuck-battle truncate fuse (ticks)"}
+    )
     __player_pokemon_size: int = 0x2C
     __pokemon_count: int = 6
 
@@ -344,7 +436,9 @@ class Data:
 
     visited_positions: dict[tuple[int, int, int], int] = field(default_factory=dict)
     position_visit_counts: dict[tuple[int, int, int], int] = field(default_factory=dict)
-    map_vision_radius: int = 5
+    map_vision_radius: int = field(
+        default=5, metadata={"cli": True, "help": "Visit-mask/local-grid observation radius (tiles)"}
+    )
 
     # --heatmap opt-in (set by PokemonRedEnv from its collect_heatmap ctor arg).
     # Gates direction_counts below so plain training never pays for it.
@@ -458,12 +552,18 @@ class Data:
     # this cap itself is purely a display/normalization scale for the grid
     # input, not a reward threshold — but the underlying map_id_visit_counts
     # it normalizes *is* reward-affecting (see reward_new_map_presence).
-    map_visit_grid_cap: int = MAP_DWELL_BUDGET
+    map_visit_grid_cap: int = field(
+        default=MAP_DWELL_BUDGET,
+        metadata={"cli": True, "help": "Normalization cap for the map_id_visit_grid observation"},
+    )
     # Per-map step allowance used to derive curriculum_config's episode
     # max_steps (see MAP_DWELL_BUDGET) and shown by debug_play.py/
     # run_eval_ppo.py's dwell diagnostics — informational only, no reward
     # penalty is tied to it.
-    map_dwell_budget: float = MAP_DWELL_BUDGET
+    map_dwell_budget: float = field(
+        default=MAP_DWELL_BUDGET,
+        metadata={"cli": True, "help": "Per-map step allowance used to derive curriculum max_steps (informational)"},
+    )
 
     # Size-scaled per-map step budget: steps allowed on one map this episode
     # is that map's own width*height in blocks (map_constants.py, generated
@@ -482,18 +582,72 @@ class Data:
     # an active-but-actually-unreachable event (e.g. its parent event_graph
     # edge is wrong) turned that into a tax on every other map, which made
     # the policy camp the falsely-"active" map instead of exploring.
-    active_map_event_reward: float = 0.01
+    active_map_event_reward: float = field(
+        default=0.01,
+        metadata={"cli": True, "help": "Per-step reward for being on a map with a pending reachable event"},
+    )
 
     # Generic regression safety net over GOAL_CANDIDATES (see
     # reward_generic_progress). Should rarely fire — event_graph's auto
     # blacklist already excludes resettable/cyclic events from
     # GOAL_CANDIDATES — but a missed case or a manually-added candidate
     # shouldn't be able to farm a false milestone by flip-flopping.
-    event_regression_penalty: float = -0.3
+    event_regression_penalty: float = field(
+        default=-0.3, metadata={"cli": True, "help": "Penalty for a GOAL_CANDIDATES event un-satisfying"}
+    )
 
-    recent_actions: deque = field(default_factory=lambda: deque(maxlen=20))
-    recent_positions: deque = field(default_factory=lambda: deque(maxlen=16))
-    recent_menu_states: deque = field(default_factory=lambda: deque(maxlen=16))
+    # Previously-inline magic numbers, promoted to named tunables with the
+    # same default value so they're discoverable/overridable like every
+    # other reward-shaping field above, instead of buried in method bodies.
+    menu_waste_ramp_scale: float = field(
+        default=9.0,
+        metadata={"cli": True, "help": "Menu-waste penalty ramp: scale of (1 + waste_factor * scale)"},
+    )
+    stored_item_reward_multiplier: float = field(
+        default=0.5,
+        metadata={"cli": True, "help": "reward_stored_items' fraction of new_item_reward"},
+    )
+    level_reward_post_threshold_divisor: float = field(
+        default=4.0,
+        metadata={"cli": True, "help": "Divisor applied to level_reward_scale past level_reward_threshold"},
+    )
+    action_pattern_window_short: int = field(
+        default=4, metadata={"cli": True, "help": "Short action-repeat window for loop detection"}
+    )
+    action_pattern_window_long: int = field(
+        default=8, metadata={"cli": True, "help": "Long action-repeat window for loop detection"}
+    )
+    spatial_loop_window: int = field(
+        default=8, metadata={"cli": True, "help": "Recent-position window size for spatial-loop detection"}
+    )
+    spatial_loop_match_threshold: int = field(
+        default=6, metadata={"cli": True, "help": "Matching positions within the window that count as a loop"}
+    )
+    menu_loop_window: int = field(
+        default=6, metadata={"cli": True, "help": "Recent-menu-state window size for menu-loop detection"}
+    )
+    menu_loop_match_threshold: int = field(
+        default=3, metadata={"cli": True, "help": "Matching menu states within the window that count as a loop"}
+    )
+    map_truncate_budget_floor: int = field(
+        default=64,
+        metadata={"cli": True, "help": "Floor on the size-scaled per-map step budget (max(floor, area))"},
+    )
+    recent_actions_maxlen: int = field(
+        default=20, metadata={"cli": True, "help": "History length of recent_actions used for loop detection"}
+    )
+    recent_positions_maxlen: int = field(
+        default=16, metadata={"cli": True, "help": "History length of recent_positions used for loop detection"}
+    )
+    recent_menu_states_maxlen: int = field(
+        default=16, metadata={"cli": True, "help": "History length of recent_menu_states used for loop detection"}
+    )
+
+    # maxlen comes from the *_maxlen fields above (so it's overridable) --
+    # populated in __post_init__ instead of a literal default_factory here.
+    recent_actions: deque = field(default_factory=deque)
+    recent_positions: deque = field(default_factory=deque)
+    recent_menu_states: deque = field(default_factory=deque)
     loop_flag: bool = False
     loop_causes: set[str] = field(default_factory=set)
     loop_streak: int = 0
@@ -519,6 +673,22 @@ class Data:
     # repo's manual audit hasn't found and modeled yet, the same class of
     # gap event_triggers.py's own badge_blocking_tiles/BADGE_BLOCKED_TILES
     # already closed for one confirmed case, Viridian Gym's door).
+    compass_stall_dist: int = field(
+        default=COMPASS_STALL_DIST,
+        metadata={"cli": True, "help": "BFS-hop distance the compass considers 'arrived' at a goal"},
+    )
+    compass_stall_steps: int = field(
+        default=COMPASS_STALL_STEPS,
+        metadata={"cli": True, "help": "Steps 'arrived-but-unsatisfied' before a goal is compass-excluded"},
+    )
+    # Mirrors event_compass.DEFAULT_MAX_HOPS (not imported at module level to
+    # avoid a circular import -- event_compass is imported lazily inside
+    # compass_progress()/reward methods below). BFS hop budget for the
+    # nearest-unlockable-event compass fed into the model's observation
+    # vector (compass_progress) every step, not just a debug_play display.
+    compass_max_hops: int = field(
+        default=300, metadata={"cli": True, "help": "BFS hop search budget for the event compass"}
+    )
     _compass_near_counts: dict[str, int] = field(default_factory=dict)
     # Goals _compass_near_counts pushed past COMPASS_STALL_STEPS -- excluded
     # from compass_progress's candidate pool for the rest of the episode.
@@ -588,6 +758,15 @@ class Data:
     # still pays close to full battle_won_reward (mirrors reward_position
     # reading position_visit_counts pre-increment).
     _battle_entry_wild_visits: int = 0
+
+    def __post_init__(self) -> None:
+        self.recent_actions = deque(self.recent_actions, maxlen=self.recent_actions_maxlen)
+        self.recent_positions = deque(
+            self.recent_positions, maxlen=self.recent_positions_maxlen
+        )
+        self.recent_menu_states = deque(
+            self.recent_menu_states, maxlen=self.recent_menu_states_maxlen
+        )
 
     @property
     def visited_pokedex_own(self):
@@ -1021,8 +1200,8 @@ class Data:
                     self.get_position(offset_x=dx, offset_y=dy), 0
                 )
                 row.append(
-                    min(visits, VISIT_PENALTY_SOFT_THRESHOLD)
-                    / VISIT_PENALTY_SOFT_THRESHOLD
+                    min(visits, self.visit_penalty_soft_threshold)
+                    / self.visit_penalty_soft_threshold
                 )
             grid.append(row)
         return grid
@@ -1131,7 +1310,10 @@ class Data:
         excluded = frozenset(self._compass_excluded)
         memory = self.pyboy.memory
         result = _event_compass.nearest_unlockable_event(
-            self.get_position(), memory, excluded_events=excluded
+            self.get_position(),
+            memory,
+            max_hops=self.compass_max_hops,
+            excluded_events=excluded,
         )
         if result is None:
             self.last_compass_debug = {
@@ -1144,10 +1326,10 @@ class Data:
             }
             return [0.0, 0.0, 0.0]
         dx, dy, dist, goal = result
-        if dist <= COMPASS_STALL_DIST:
+        if dist <= self.compass_stall_dist:
             near = self._compass_near_counts.get(goal, 0) + 1
             self._compass_near_counts[goal] = near
-            if near >= COMPASS_STALL_STEPS:
+            if near >= self.compass_stall_steps:
                 self._compass_excluded.add(goal)
         self.last_compass_debug = {
             "goal": goal,
@@ -1405,7 +1587,8 @@ class Data:
             # agent to back out before stuck_menu's hard truncate fires.
             menu_waste_factor = self.in_menu_ticks / self.max_useless_ticks
             step += self._accum_reward(
-                "menu_useless", self.base_reward * (1.0 + menu_waste_factor * 9.0)
+                "menu_useless",
+                self.base_reward * (1.0 + menu_waste_factor * self.menu_waste_ramp_scale),
             )
             if self._is_fresh_dialog_exit(memory):
                 milestone += self._accum_reward("dialog_exit", self.dialog_exit_reward)
@@ -1560,10 +1743,10 @@ class Data:
         # Skip while pressing A/B in world — that is the talk-to-NPC attempt.
         if self.is_world(self.pyboy.memory) and not interacting:
             visits = self.position_visit_counts.get(self.get_position(), 0)
-            if visits > VISIT_PENALTY_HARD_THRESHOLD:
+            if visits > self.visit_penalty_hard_threshold:
                 penalty += self.visit_penalty_hard
                 causes.add("visit_penalty")
-            elif visits > VISIT_PENALTY_SOFT_THRESHOLD:
+            elif visits > self.visit_penalty_soft_threshold:
                 penalty += self.visit_penalty_soft
                 causes.add("visit_penalty")
 
@@ -1582,7 +1765,11 @@ class Data:
         # outside the world (battle/menu cursor navigation), so fall back to
         # the pure button-pattern check there.
         actions = list(self.recent_actions) + [action]
-        if len(actions) >= 4:
+        # action_pattern_window_short gates how much history must exist
+        # before this ABAB-shape check runs; the shape itself always looks
+        # at exactly the last 4 actions (a fixed pattern length, not a
+        # generic window).
+        if len(actions) >= max(4, self.action_pattern_window_short):
             a, b, c, d = actions[-4], actions[-3], actions[-2], actions[-1]
             if (
                 a == c
@@ -1597,7 +1784,8 @@ class Data:
                 if net_stuck:
                     penalty += self.action_pattern_penalty
                     causes.add("action_pattern")
-        if len(actions) >= 8 and len(set(actions[-8:])) == 1:
+        w_long = self.action_pattern_window_long
+        if len(actions) >= w_long and len(set(actions[-w_long:])) == 1:
             # Same talk-to-NPC exemption as check 1: is_world() implies
             # neither in_dialog nor in_battle, so "not (in_dialog or
             # in_battle)" was always True there regardless of `interacting` —
@@ -1613,11 +1801,11 @@ class Data:
                 not interacting or not (in_dialog or in_battle)
             ):
                 net_stuck = True
-                if self.is_world(self.pyboy.memory) and len(self.recent_positions) >= 8:
-                    net_stuck = self.recent_positions[-8] == self.get_position()
+                if self.is_world(self.pyboy.memory) and len(self.recent_positions) >= w_long:
+                    net_stuck = self.recent_positions[-w_long] == self.get_position()
                 elif (self.is_menu(self.pyboy.memory) or in_battle) and len(
                     self.recent_menu_states
-                ) >= 8:
+                ) >= w_long:
                     # Same fix as the world branch: holding one direction to
                     # scroll a long menu list (or a battle FIGHT/PKMN/ITEM/RUN
                     # / move-select menu) repeats the button 8x while the
@@ -1630,7 +1818,7 @@ class Data:
                         self.menu_position_y(self.pyboy.memory),
                         self.real_current_menu_selected_item(self.pyboy.memory),
                     )
-                    net_stuck = list(self.recent_menu_states)[-8] == cur_menu_state
+                    net_stuck = list(self.recent_menu_states)[-w_long] == cur_menu_state
                 if net_stuck:
                     penalty += self.action_pattern_penalty
                     causes.add("action_pattern")
@@ -1668,14 +1856,17 @@ class Data:
         if (
             self.is_world(self.pyboy.memory)
             and not interacting
-            and len(self.recent_positions) >= 8
+            and len(self.recent_positions) >= self.spatial_loop_window
         ):
             cur = self.get_position()
             # >= 3 matches within the last 16 world-steps used to catch
             # perfectly ordinary chokepoint traffic (doorways, staircases) —
             # >= 6 means the same tile came up in more than a third of the
             # recent window, which is genuine pacing rather than a pass-through.
-            if sum(1 for p in self.recent_positions if p == cur) >= 6:
+            if (
+                sum(1 for p in self.recent_positions if p == cur)
+                >= self.spatial_loop_match_threshold
+            ):
                 penalty += self.spatial_loop_penalty
                 causes.add("spatial_loop")
 
@@ -1701,13 +1892,16 @@ class Data:
         # multi-message battle turn instead of an actual stuck cursor.
         if (
             self.is_menu(self.pyboy.memory) or self.is_battle_menu(self.pyboy.memory)
-        ) and len(self.recent_menu_states) >= 6:
+        ) and len(self.recent_menu_states) >= self.menu_loop_window:
             cur_menu_state = (
                 self.menu_position_x(self.pyboy.memory),
                 self.menu_position_y(self.pyboy.memory),
                 self.real_current_menu_selected_item(self.pyboy.memory),
             )
-            if sum(1 for s in self.recent_menu_states if s == cur_menu_state) >= 3:
+            if (
+                sum(1 for s in self.recent_menu_states if s == cur_menu_state)
+                >= self.menu_loop_match_threshold
+            ):
                 penalty += self.menu_loop_penalty
                 causes.add("menu_loop")
 
@@ -1760,7 +1954,7 @@ class Data:
         waste_factor = (
             min(self.in_battle_ticks, self.max_useless_ticks) / self.max_useless_ticks
         )
-        return 0.0, self.base_reward * (1.0 + waste_factor * 9.0)
+        return 0.0, self.base_reward * (1.0 + waste_factor * self.menu_waste_ramp_scale)
 
     def reward_dialog(self, memory: bytes, action: int) -> tuple[float, float]:
         dialog_changed = self.dialog_id(memory) != self.dialog_id(self.pyboy.memory)
@@ -1782,7 +1976,7 @@ class Data:
         waste_factor = (
             min(self.in_dialog_ticks, self.max_useless_ticks) / self.max_useless_ticks
         )
-        waste = self.base_reward * (1.0 + waste_factor * 9.0)
+        waste = self.base_reward * (1.0 + waste_factor * self.menu_waste_ramp_scale)
         return dialog_reward, waste
 
     def reward_position(self):
@@ -1790,7 +1984,7 @@ class Data:
         ticks_here = self.visited_positions.get(pos, 0)
         visit_count = self.position_visit_counts.get(pos, 0)
         waste_factor = min(ticks_here, self.max_useless_ticks) / self.max_useless_ticks
-        step_penalty = self.base_reward * (1.0 + waste_factor * 9.0)
+        step_penalty = self.base_reward * (1.0 + waste_factor * self.menu_waste_ramp_scale)
         decay = max(0.0, 1.0 - visit_count / self.new_position_decay_visits)
         exploration_reward = self.new_position_reward * decay
         return exploration_reward + step_penalty
@@ -1848,7 +2042,7 @@ class Data:
                 - sum(self.stored_items_quantities(memory))
             )
             * self.new_item_reward
-            * 0.5
+            * self.stored_item_reward_multiplier
         )
 
     def reward_player_pokemons_current_hps(self, memory: bytes):
@@ -1951,7 +2145,7 @@ class Data:
             if level_after <= self.level_reward_threshold:
                 reward += self.level_reward_scale
             else:
-                reward += self.level_reward_scale / 4.0
+                reward += self.level_reward_scale / self.level_reward_post_threshold_divisor
         return reward
 
     def reward_player_pokemons_max_hps(self, memory: bytes):
@@ -2094,7 +2288,7 @@ class Data:
         episode once it's passed.
         """
         area = _map_constants.map_area_blocks(map_id)
-        return max(64, area)
+        return max(self.map_truncate_budget_floor, area)
 
     def _tick_map_budget(self, memory: PyBoyMemoryView | bytes) -> None:
         """Advance the current map's stall counter. Called once per step from

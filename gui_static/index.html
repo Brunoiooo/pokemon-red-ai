@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Pokemon Red AI — Control Panel</title>
+<style>
+:root {
+  --bg: #14171b; --surface: #1b1f26; --surface-2: #242a33; --surface-3: #2c333e;
+  --line: #333c49; --line-soft: #262d38; --text: #d7dce3; --text-dim: #8590a3; --text-faint: #576078;
+  --accent: #9bbc0f; --accent-strong: #c5e05a; --accent-dim: #3c4a16;
+  --warn: #e8a33d; --warn-dim: #4a3517;
+  --bad: #ff5f6d; --bad-dim: #4a1418;
+  --shadow: 0 8px 24px rgba(0,0,0,0.45);
+  --mono: ui-monospace, "JetBrains Mono", "Cascadia Code", "SF Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #eef0e4; --surface: #ffffff; --surface-2: #f4f6ec; --surface-3: #e9ecdd;
+    --line: #cdd3bd; --line-soft: #dde1cf; --text: #1d2417; --text-dim: #566047; --text-faint: #8a927a;
+    --accent: #4d6b0a; --accent-strong: #3a5006; --accent-dim: #dbe8b8;
+    --warn: #9a6111; --warn-dim: #f5e3c4;
+    --bad: #c9313c; --bad-dim: #fbe4e4;
+    --shadow: 0 8px 24px rgba(60,66,40,0.12);
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--bg); color: var(--text); font-family: var(--mono);
+  font-size: 13px; overflow: hidden;
+}
+.app {
+  display: grid;
+  grid-template-columns: minmax(360px, 46%) 1fr;
+  grid-template-rows: 56px 1fr;
+  height: 100vh;
+}
+.topbar {
+  grid-column: 1 / -1; display: flex; align-items: center; gap: 4px;
+  padding: 0 14px; background: var(--surface); border-bottom: 1px solid var(--line);
+}
+.topbar .brand { display: flex; flex-direction: column; margin-right: 18px; }
+.topbar .brand .mark { color: var(--accent); font-weight: 700; letter-spacing: 0.03em; font-size: 13px; }
+.topbar .brand .sub { color: var(--text-faint); font-size: 10px; }
+.tabs { display: flex; gap: 2px; }
+.tab {
+  padding: 8px 14px; cursor: pointer; color: var(--text-dim); border-radius: 6px 6px 0 0;
+  border: 1px solid transparent; font-size: 12.5px; user-select: none;
+}
+.tab:hover { color: var(--text); background: var(--surface-2); }
+.tab.active { color: var(--accent-strong); background: var(--surface-2); border-color: var(--line); border-bottom-color: var(--surface-2); }
+.topbar .spacer { flex: 1; }
+.topbar .hint { color: var(--text-faint); font-size: 11px; }
+
+.formpane { overflow-y: auto; padding: 14px 16px 40px; border-right: 1px solid var(--line); }
+.runpane { display: flex; flex-direction: column; min-height: 0; }
+
+.group { border: 1px solid var(--line); border-radius: 8px; margin-bottom: 10px; background: var(--surface); overflow: hidden; }
+.group > summary {
+  list-style: none; cursor: pointer; padding: 9px 12px; font-size: 12px; font-weight: 600;
+  color: var(--text-dim); display: flex; align-items: center; gap: 8px; background: var(--surface-2);
+  border-bottom: 1px solid var(--line-soft);
+}
+.group:not([open]) > summary { border-bottom: none; }
+.group > summary::-webkit-details-marker { display: none; }
+.group > summary .chev { color: var(--text-faint); font-size: 10px; transition: transform .12s; }
+.group[open] > summary .chev { transform: rotate(90deg); }
+.group > summary .count { margin-left: auto; color: var(--text-faint); font-size: 10.5px; }
+
+.fields { padding: 10px 12px; display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px 14px; }
+.field { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.field label { font-size: 11px; color: var(--text-dim); display: flex; gap: 6px; align-items: baseline; }
+.field label .flagname { color: var(--text-faint); font-size: 10px; }
+.field input[type="text"], .field input[type="number"], .field select {
+  background: var(--surface-3); border: 1px solid var(--line); color: var(--text);
+  border-radius: 5px; padding: 5px 7px; font-family: var(--mono); font-size: 12px; width: 100%;
+}
+.field input:focus, .field select:focus { outline: none; border-color: var(--accent); }
+.field.changed input, .field.changed select { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-dim); }
+.field .help { font-size: 10px; color: var(--text-faint); line-height: 1.35; }
+.field .default { font-size: 10px; color: var(--text-faint); }
+
+.checkrow { display: flex; align-items: center; gap: 7px; }
+.checkrow input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px; }
+.checkrow label { font-size: 12px; color: var(--text); cursor: pointer; }
+
+.optional-mode { display: flex; gap: 6px; }
+.optional-mode select { flex: 0 0 auto; }
+.optional-mode input { flex: 1; }
+
+.multi-choice { display: flex; flex-wrap: wrap; gap: 8px 12px; }
+.multi-choice .checkrow { font-size: 11px; }
+
+.runpane-top { padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--surface); }
+.runpane-top h2 { margin: 0 0 8px; font-size: 13px; color: var(--accent-strong); }
+.preview {
+  background: var(--surface-3); border: 1px solid var(--line-soft); border-radius: 6px;
+  padding: 8px 10px; font-size: 11px; color: var(--text-dim); max-height: 90px; overflow-y: auto;
+  white-space: pre-wrap; word-break: break-all; margin-bottom: 10px;
+}
+.controls { display: flex; gap: 8px; align-items: center; }
+button {
+  font-family: var(--mono); border-radius: 6px; padding: 7px 16px; font-size: 12px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--surface-2); color: var(--text);
+}
+button:hover:not(:disabled) { background: var(--surface-3); }
+button:disabled { opacity: 0.4; cursor: default; }
+button.primary { background: var(--accent-dim); border-color: var(--accent); color: var(--accent-strong); font-weight: 700; }
+button.primary:hover:not(:disabled) { background: var(--accent); color: #0c1204; }
+button.stop { background: var(--bad-dim); border-color: var(--bad); color: var(--bad); }
+button.stop:hover:not(:disabled) { background: var(--bad); color: #2a0002; }
+.status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); }
+.status-dot.running { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+.status-dot.error { background: var(--bad); box-shadow: 0 0 6px var(--bad); }
+.status-text { font-size: 11px; color: var(--text-dim); }
+
+.console {
+  flex: 1; overflow-y: auto; padding: 10px 14px; font-size: 11.5px; line-height: 1.5;
+  white-space: pre-wrap; word-break: break-word; background: var(--bg);
+}
+.console .line { color: var(--text-dim); }
+.console .line.stderr-ish { color: var(--warn); }
+.console .sysmsg { color: var(--accent); }
+.console .errmsg { color: var(--bad); }
+.console:empty::before { content: "Output will appear here once a run starts."; color: var(--text-faint); }
+
+.footerbar { padding: 6px 14px; border-top: 1px solid var(--line); background: var(--surface); display: flex; align-items: center; gap: 10px; }
+.footerbar label { font-size: 11px; color: var(--text-dim); display: flex; align-items: center; gap: 5px; }
+.footerbar .spacer { flex: 1; }
+.linkbtn { background: none; border: none; color: var(--text-faint); text-decoration: underline; cursor: pointer; font-family: var(--mono); font-size: 11px; padding: 0; }
+.linkbtn:hover { color: var(--text); }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="topbar">
+    <div class="brand"><span class="mark">POKEMON RED AI</span><span class="sub">control panel</span></div>
+    <div class="tabs" id="tabs"></div>
+    <div class="spacer"></div>
+    <div class="hint" id="topHint"></div>
+  </div>
+  <div class="formpane" id="formpane"></div>
+  <div class="runpane">
+    <div class="runpane-top">
+      <h2>Command</h2>
+      <div class="preview" id="preview"></div>
+      <div class="controls">
+        <button class="primary" id="startBtn">▶ Start</button>
+        <button class="stop" id="stopBtn" disabled>■ Stop</button>
+        <button id="resetBtn">Reset tab to defaults</button>
+        <div class="spacer"></div>
+        <span class="status-dot" id="statusDot"></span>
+        <span class="status-text" id="statusText">idle</span>
+      </div>
+    </div>
+    <div class="console" id="console"></div>
+    <div class="footerbar">
+      <label><input type="checkbox" id="autoscroll" checked /> autoscroll</label>
+      <button class="linkbtn" id="clearBtn">clear output</button>
+      <div class="spacer"></div>
+      <span class="hint">python cli.py &lt;command&gt; ...</span>
+    </div>
+  </div>
+</div>
+
+<script>
+const state = {};       // state[command][dest] = value
+const schema = { };     // filled from /api/commands
+let activeCommand = null;
+let currentRunId = null;
+let currentEventSource = null;
+
+const COLLAPSED_BY_DEFAULT = new Set([
+  "reward shaping (Data)", "reward shaping", "emulator timing", "curriculum advance",
+  "--auto-entropy scheduler", "PPO / model hyperparameters",
+]);
+
+async function boot() {
+  const res = await fetch('/api/commands');
+  const data = await res.json();
+  Object.assign(schema, data);
+  const tabsEl = document.getElementById('tabs');
+  const names = Object.keys(schema);
+  names.forEach((name, i) => {
+    state[name] = defaultsFor(name);
+    const tab = document.createElement('div');
+    tab.className = 'tab' + (i === 0 ? ' active' : '');
+    tab.textContent = name;
+    tab.dataset.command = name;
+    tab.addEventListener('click', () => selectTab(name));
+    tabsEl.appendChild(tab);
+  });
+  selectTab(names[0]);
+}
+
+function defaultsFor(command) {
+  const out = {};
+  for (const group of schema[command].groups) {
+    for (const arg of group.args) {
+      if (arg.kind === 'optional') {
+        out[arg.dest] = null; // "off" by default -- matches not passing the flag
+      } else {
+        out[arg.dest] = arg.default;
+      }
+    }
+  }
+  return out;
+}
+
+function selectTab(name) {
+  activeCommand = name;
+  document.querySelectorAll('.tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.command === name);
+  });
+  renderForm(name);
+  updatePreview();
+}
+
+function fieldChanged(arg, value) {
+  if (arg.kind === 'optional') return value !== null;
+  if (arg.kind === 'multi_choice') return JSON.stringify(value) !== JSON.stringify(arg.default);
+  return value !== arg.default;
+}
+
+function renderForm(command) {
+  const pane = document.getElementById('formpane');
+  pane.innerHTML = '';
+  const cmdState = state[command];
+  for (const group of schema[command].groups) {
+    const details = document.createElement('details');
+    details.className = 'group';
+    details.open = !COLLAPSED_BY_DEFAULT.has(group.title);
+    const summary = document.createElement('summary');
+    summary.innerHTML = `<span class="chev">▶</span> ${escapeHtml(group.title)} <span class="count">${group.args.length}</span>`;
+    details.appendChild(summary);
+    const fields = document.createElement('div');
+    fields.className = 'fields';
+    for (const arg of group.args) {
+      fields.appendChild(renderField(command, arg, cmdState));
+    }
+    details.appendChild(fields);
+    pane.appendChild(details);
+  }
+}
+
+function renderField(command, arg, cmdState) {
+  const wrap = document.createElement('div');
+  wrap.className = 'field';
+  wrap.id = `field-${command}-${arg.dest}`;
+
+  const markChanged = () => {
+    wrap.classList.toggle('changed', fieldChanged(arg, cmdState[arg.dest]));
+  };
+
+  if (arg.kind === 'bool' || arg.kind === 'bool_optional') {
+    const row = document.createElement('div');
+    row.className = 'checkrow';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.id = `cb-${command}-${arg.dest}`;
+    cb.checked = !!cmdState[arg.dest];
+    cb.addEventListener('change', () => {
+      cmdState[arg.dest] = cb.checked;
+      markChanged(); updatePreview();
+    });
+    const lbl = document.createElement('label');
+    lbl.htmlFor = cb.id;
+    lbl.textContent = arg.flag;
+    row.appendChild(cb); row.appendChild(lbl);
+    wrap.appendChild(row);
+    appendHelp(wrap, arg, `default: ${arg.default}`);
+    markChanged();
+    return wrap;
+  }
+
+  if (arg.kind === 'optional') {
+    wrap.appendChild(fieldLabel(arg));
+    const row = document.createElement('div');
+    row.className = 'optional-mode';
+    const sel = document.createElement('select');
+    ['off', 'auto', 'custom'].forEach(m => {
+      const o = document.createElement('option'); o.value = m; o.textContent = m;
+      sel.appendChild(o);
+    });
+    const txt = document.createElement('input');
+    txt.type = 'text'; txt.placeholder = 'value (e.g. a path)'; txt.disabled = true;
+    const applyMode = (mode, value) => {
+      if (mode === 'off') { cmdState[arg.dest] = null; txt.disabled = true; txt.value = ''; }
+      else if (mode === 'auto') { cmdState[arg.dest] = ''; txt.disabled = true; txt.value = ''; }
+      else { cmdState[arg.dest] = value || ''; txt.disabled = false; }
+      markChanged(); updatePreview();
+    };
+    sel.value = 'off';
+    sel.addEventListener('change', () => applyMode(sel.value, txt.value));
+    txt.addEventListener('input', () => { if (sel.value === 'custom') applyMode('custom', txt.value); });
+    row.appendChild(sel); row.appendChild(txt);
+    wrap.appendChild(row);
+    appendHelp(wrap, arg, `bare flag = ${JSON.stringify(arg.const)}`);
+    markChanged();
+    return wrap;
+  }
+
+  if (arg.kind === 'choice') {
+    wrap.appendChild(fieldLabel(arg));
+    const sel = document.createElement('select');
+    arg.choices.forEach(c => {
+      const o = document.createElement('option'); o.value = c; o.textContent = c;
+      if (c === cmdState[arg.dest]) o.selected = true;
+      sel.appendChild(o);
+    });
+    sel.addEventListener('change', () => { cmdState[arg.dest] = sel.value; markChanged(); updatePreview(); });
+    wrap.appendChild(sel);
+    appendHelp(wrap, arg, `default: ${arg.default}`);
+    markChanged();
+    return wrap;
+  }
+
+  if (arg.kind === 'multi_choice') {
+    wrap.appendChild(fieldLabel(arg));
+    const row = document.createElement('div');
+    row.className = 'multi-choice';
+    const current = new Set(cmdState[arg.dest] || []);
+    arg.choices.forEach(c => {
+      const sub = document.createElement('div'); sub.className = 'checkrow';
+      const cb = document.createElement('input'); cb.type = 'checkbox';
+      cb.id = `mc-${command}-${arg.dest}-${c}`; cb.checked = current.has(c);
+      cb.addEventListener('change', () => {
+        const set = new Set(cmdState[arg.dest] || []);
+        if (cb.checked) set.add(c); else set.delete(c);
+        cmdState[arg.dest] = Array.from(set);
+        markChanged(); updatePreview();
+      });
+      const lbl = document.createElement('label'); lbl.htmlFor = cb.id; lbl.textContent = c;
+      sub.appendChild(cb); sub.appendChild(lbl);
+      row.appendChild(sub);
+    });
+    wrap.appendChild(row);
+    appendHelp(wrap, arg, `default: ${arg.default.join(',')}`);
+    markChanged();
+    return wrap;
+  }
+
+  // int / float / str
+  wrap.appendChild(fieldLabel(arg));
+  const input = document.createElement('input');
+  input.type = (arg.kind === 'int' || arg.kind === 'float') ? 'number' : 'text';
+  if (arg.kind === 'float') input.step = 'any';
+  if (arg.kind === 'int') input.step = '1';
+  input.value = cmdState[arg.dest] === null || cmdState[arg.dest] === undefined ? '' : cmdState[arg.dest];
+  input.addEventListener('input', () => {
+    let v = input.value;
+    if (v !== '' && arg.kind === 'int') v = parseInt(v, 10);
+    else if (v !== '' && arg.kind === 'float') v = parseFloat(v);
+    cmdState[arg.dest] = v === '' ? '' : v;
+    markChanged(); updatePreview();
+  });
+  wrap.appendChild(input);
+  appendHelp(wrap, arg, `default: ${arg.default === null ? '(none)' : arg.default}`);
+  markChanged();
+  return wrap;
+}
+
+function fieldLabel(arg) {
+  const lbl = document.createElement('label');
+  lbl.innerHTML = `${escapeHtml(arg.dest)} <span class="flagname">${escapeHtml(arg.flag)}</span>`;
+  return lbl;
+}
+
+function appendHelp(wrap, arg, defaultLine) {
+  if (arg.help) {
+    const h = document.createElement('div'); h.className = 'help'; h.textContent = arg.help;
+    wrap.appendChild(h);
+  }
+  const d = document.createElement('div'); d.className = 'default'; d.textContent = defaultLine;
+  wrap.appendChild(d);
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// Mirrors gui_app.py's build_argv() for display only -- the server rebuilds
+// the real argv itself from the same schema when /api/run is called, so a
+// mismatch here can only ever affect what the preview *shows*, never what
+// actually launches.
+function buildPreview(command) {
+  const cmdState = state[command];
+  const parts = ['python', 'cli.py', command];
+  for (const group of schema[command].groups) {
+    for (const arg of group.args) {
+      const v = cmdState[arg.dest];
+      if (arg.kind === 'bool_optional') {
+        parts.push(v ? arg.flag : arg.no_flag);
+      } else if (arg.kind === 'bool') {
+        if (v) parts.push(arg.flag);
+      } else if (arg.kind === 'optional') {
+        if (v === null || v === undefined) continue;
+        parts.push(arg.flag);
+        if (v !== '') parts.push(shellQuote(String(v)));
+      } else if (arg.kind === 'multi_choice') {
+        if (v && v.length) { parts.push(arg.flag); v.forEach(x => parts.push(x)); }
+      } else {
+        if (v !== null && v !== undefined && v !== '') parts.push(arg.flag, shellQuote(String(v)));
+      }
+    }
+  }
+  return parts.join(' ');
+}
+
+function shellQuote(s) {
+  return /[\s"]/.test(s) ? JSON.stringify(s) : s;
+}
+
+function updatePreview() {
+  document.getElementById('preview').textContent = buildPreview(activeCommand);
+}
+
+function setStatus(kind, text) {
+  const dot = document.getElementById('statusDot');
+  dot.className = 'status-dot' + (kind ? ' ' + kind : '');
+  document.getElementById('statusText').textContent = text;
+}
+
+function appendConsoleLine(text, cls) {
+  const c = document.getElementById('console');
+  const div = document.createElement('div');
+  div.className = 'line' + (cls ? ' ' + cls : '');
+  div.textContent = text;
+  c.appendChild(div);
+  if (document.getElementById('autoscroll').checked) c.scrollTop = c.scrollHeight;
+}
+
+async function startRun() {
+  if (currentRunId) return;
+  const command = activeCommand;
+  document.getElementById('startBtn').disabled = true;
+  document.getElementById('stopBtn').disabled = false;
+  setStatus('running', `running: ${command}`);
+  appendConsoleLine(`$ ${buildPreview(command)}`, 'sysmsg');
+  const res = await fetch('/api/run', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ command, values: state[command] }),
+  });
+  const data = await res.json();
+  if (data.error) {
+    appendConsoleLine('error: ' + data.error, 'errmsg');
+    setStatus('error', 'failed to start');
+    document.getElementById('startBtn').disabled = false;
+    document.getElementById('stopBtn').disabled = true;
+    return;
+  }
+  currentRunId = data.run_id;
+  const es = new EventSource(`/api/stream/${currentRunId}`);
+  currentEventSource = es;
+  es.onmessage = (ev) => {
+    const msg = JSON.parse(ev.data);
+    appendConsoleLine(msg.line);
+  };
+  es.addEventListener('done', (ev) => {
+    const msg = JSON.parse(ev.data);
+    appendConsoleLine(`[process exited: code ${msg.exit_code}]`, msg.exit_code ? 'errmsg' : 'sysmsg');
+    setStatus(msg.exit_code ? 'error' : '', msg.exit_code ? 'exited with error' : 'idle');
+    es.close();
+    currentEventSource = null;
+    currentRunId = null;
+    document.getElementById('startBtn').disabled = false;
+    document.getElementById('stopBtn').disabled = true;
+  });
+  es.onerror = () => {
+    // Connection drop distinct from a clean 'done' event.
+    if (currentRunId) {
+      appendConsoleLine('[stream disconnected]', 'errmsg');
+    }
+  };
+}
+
+async function stopRun() {
+  if (!currentRunId) return;
+  await fetch(`/api/stop/${currentRunId}`, { method: 'POST' });
+  appendConsoleLine('[stop requested]', 'sysmsg');
+}
+
+function resetTab() {
+  state[activeCommand] = defaultsFor(activeCommand);
+  renderForm(activeCommand);
+  updatePreview();
+}
+
+document.getElementById('startBtn').addEventListener('click', startRun);
+document.getElementById('stopBtn').addEventListener('click', stopRun);
+document.getElementById('resetBtn').addEventListener('click', resetTab);
+document.getElementById('clearBtn').addEventListener('click', () => { document.getElementById('console').innerHTML = ''; });
+
+boot();
+</script>
+</body>
+</html>

@@ -12,9 +12,32 @@ sys.path.insert(0, "src")
 
 from multiprocessing import set_start_method
 
+import curriculum_config
+import tunables
+from pokemon.Data import Data
+from pokemon.Emulator import Emulator
+
+
+def _int_list(s: str) -> list[int]:
+    return [int(x.strip()) for x in s.split(",") if x.strip()]
+
 
 def run(args):
     set_start_method("spawn", force=True)
+
+    # Apply --advance-success-threshold / --default-max-steps / etc. before
+    # anything else touches curriculum_config (resolve_stage_name,
+    # get_stage_max_steps, CURRICULUM, ...) so every lookup below sees the
+    # override, not the hardcoded default.
+    curriculum_config.configure_curriculum(
+        **tunables.kwargs_from_args(args, curriculum_config.CurriculumConfig)
+    )
+    # Reward-shaping (Data) / emulator-timing (Emulator) overrides, splatted
+    # into every PokemonRedEnv() below via its data_kwargs/emulator_kwargs
+    # params (kept separate -- Data(...) and Emulator(...) have disjoint
+    # constructor signatures).
+    data_kwargs = tunables.kwargs_from_args(args, Data)
+    emulator_kwargs = tunables.kwargs_from_args(args, Emulator)
 
     import torch
     from sb3_contrib import MaskablePPO
@@ -134,6 +157,8 @@ def run(args):
                 n_workers=args.workers,
                 collect_heatmap=args.heatmap,
                 save_checkpoints=args.save_checkpoints,
+                data_kwargs=data_kwargs,
+                emulator_kwargs=emulator_kwargs,
             )
             env.reset(seed=args.seed + rank)
             return env
@@ -172,6 +197,8 @@ def run(args):
                 # workers default to --no-save-checkpoints so there's only
                 # one writer per goal directory.
                 save_checkpoints=True,
+                data_kwargs=data_kwargs,
+                emulator_kwargs=emulator_kwargs,
             )
         ]
     )
@@ -179,8 +206,13 @@ def run(args):
 
     policy_kwargs = dict(
         features_extractor_class=PokemonFeaturesExtractor,
-        features_extractor_kwargs=dict(features_dim=256),
-        net_arch=dict(pi=[256, 256], vf=[256, 256]),
+        features_extractor_kwargs=dict(
+            features_dim=args.features_dim,
+            screen_cnn_channels=args.screen_cnn_channels,
+            visit_cnn_channels=args.visit_cnn_channels,
+            vector_mlp_hidden=args.vector_mlp_hidden,
+        ),
+        net_arch=dict(pi=args.net_arch_pi, vf=args.net_arch_vf),
     )
 
     if args.resume is not None:
@@ -207,11 +239,11 @@ def run(args):
             batch_size=args.batch_size,
             n_epochs=args.n_epochs,
             gamma=args.gamma,
-            gae_lambda=0.95,
-            clip_range=0.2,
+            gae_lambda=args.gae_lambda,
+            clip_range=args.clip_range,
             ent_coef=args.ent_coef,
-            vf_coef=0.5,
-            max_grad_norm=0.5,
+            vf_coef=args.vf_coef,
+            max_grad_norm=args.max_grad_norm,
             policy_kwargs=policy_kwargs,
             tensorboard_log=str(log_dir),
             device=device,
@@ -258,7 +290,7 @@ def run(args):
         render=False,
     )
     milestone_cb = MilestoneCallback(
-        window=100,
+        window=args.milestone_window,
         auto_curriculum=args.auto_curriculum,
         start_stage=stage,
         curriculum_mix=args.curriculum_mix,
@@ -277,6 +309,13 @@ def run(args):
             EntropyCoefScheduler(
                 ent_coef_min=args.ent_coef_min,
                 ent_coef_max=args.ent_coef_max,
+                window=args.entropy_window,
+                check_every=args.entropy_check_every,
+                loop_rate_high=args.loop_rate_high,
+                loop_rate_low=args.loop_rate_low,
+                increase_factor=args.entropy_increase_factor,
+                decay_factor=args.entropy_decay_factor,
+                cooldown_checks=args.entropy_cooldown_checks,
                 verbose=1,
             )
         )
@@ -411,6 +450,54 @@ def build_argparser(parent=None):
     p.add_argument(
         "--heatmap-frames", type=int, default=300_000,
         help="Rolling window size in frames, pooled across all runs (default: 300000)",
+    )
+
+    # PPO / policy-network hyperparameters that used to be hardcoded in
+    # MaskablePPO(...)/PokemonFeaturesExtractor construction below.
+    model_group = p.add_argument_group("PPO / model hyperparameters")
+    model_group.add_argument("--gae-lambda", type=float, default=0.95)
+    model_group.add_argument("--clip-range", type=float, default=0.2)
+    model_group.add_argument("--vf-coef", type=float, default=0.5)
+    model_group.add_argument("--max-grad-norm", type=float, default=0.5)
+    model_group.add_argument("--features-dim", type=int, default=256)
+    model_group.add_argument(
+        "--net-arch-pi", type=_int_list, default=[256, 256], metavar="N,N,...",
+        help="Policy-head hidden layer sizes, comma-separated (default: 256,256)",
+    )
+    model_group.add_argument(
+        "--net-arch-vf", type=_int_list, default=[256, 256], metavar="N,N,...",
+        help="Value-head hidden layer sizes, comma-separated (default: 256,256)",
+    )
+    model_group.add_argument(
+        "--screen-cnn-channels", type=_int_list, default=[32, 64, 64], metavar="N,N,...",
+        help="screen_tiles CNN channel widths, comma-separated (default: 32,64,64)",
+    )
+    model_group.add_argument(
+        "--visit-cnn-channels", type=_int_list, default=[16, 32], metavar="N,N,...",
+        help="visit_mask CNN channel widths, comma-separated (default: 16,32)",
+    )
+    model_group.add_argument(
+        "--vector-mlp-hidden", type=_int_list, default=[256, 128], metavar="N,N,...",
+        help="Flat-vector MLP hidden layer sizes, comma-separated (default: 256,128)",
+    )
+    model_group.add_argument(
+        "--milestone-window", type=int, default=100,
+        help="MilestoneCallback's rolling episode window (default: 100)",
+    )
+
+    entropy_group = p.add_argument_group("--auto-entropy scheduler")
+    entropy_group.add_argument("--entropy-window", type=int, default=50)
+    entropy_group.add_argument("--entropy-check-every", type=int, default=20_000)
+    entropy_group.add_argument("--loop-rate-high", type=float, default=0.3)
+    entropy_group.add_argument("--loop-rate-low", type=float, default=0.08)
+    entropy_group.add_argument("--entropy-increase-factor", type=float, default=1.5)
+    entropy_group.add_argument("--entropy-decay-factor", type=float, default=0.9)
+    entropy_group.add_argument("--entropy-cooldown-checks", type=int, default=5)
+
+    tunables.add_dataclass_args(p, Data, group_title="reward shaping (Data)")
+    tunables.add_dataclass_args(p, Emulator, group_title="emulator timing")
+    tunables.add_dataclass_args(
+        p, curriculum_config.CurriculumConfig, group_title="curriculum advance"
     )
     return p
 

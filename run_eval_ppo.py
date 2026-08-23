@@ -22,7 +22,10 @@ if hasattr(sys.stdout, "reconfigure"):
     except Exception:
         pass
 
+import tunables
 from ppo.checkpoints import resolve_model_path
+from pokemon.Data import Data
+from pokemon.Emulator import Emulator
 
 
 def _raw_env(env):
@@ -162,6 +165,8 @@ def run(args):
             args.heatmap_frames, title="Pokemon Red AI - Position Heatmap (eval)"
         )
 
+    data_kwargs = tunables.kwargs_from_args(args, Data)
+    emulator_kwargs = tunables.kwargs_from_args(args, Emulator)
     env = PokemonRedEnv(
         save_state=save_state,
         max_steps=max_steps,
@@ -176,6 +181,8 @@ def run(args):
         n_workers=1,
         collect_heatmap=args.heatmap,
         save_checkpoints=args.save_checkpoints,
+        data_kwargs=data_kwargs,
+        emulator_kwargs=emulator_kwargs,
     )
     # Monitor forbids step() after terminated; in-place advance keeps the
     # episode alive, so Monitor is fine. Still skip when auto for clarity.
@@ -619,6 +626,9 @@ def run_batch(args):
             args.heatmap_frames, title="Pokemon Red AI - Position Heatmap (eval)"
         )
 
+    data_kwargs = tunables.kwargs_from_args(args, Data)
+    emulator_kwargs = tunables.kwargs_from_args(args, Emulator)
+
     def _make(rank: int):
         return make_pokemon_env(
             save_state=save_state,
@@ -635,6 +645,8 @@ def run_batch(args):
             n_workers=n_workers,
             collect_heatmap=True,
             save_checkpoints=args.save_checkpoints,
+            data_kwargs=data_kwargs,
+            emulator_kwargs=emulator_kwargs,
         )
 
     if n_workers <= 1:
@@ -830,6 +842,8 @@ def main():
         "--seed", type=int, default=0,
         help="Base worker seed for --batch mode (each worker gets seed + rank)",
     )
+    tunables.add_dataclass_args(p, Data, group_title="reward shaping")
+    tunables.add_dataclass_args(p, Emulator, group_title="emulator timing")
     args = p.parse_args()
     if args.batch:
         run_batch(args)

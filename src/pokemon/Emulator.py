@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import io
 from multiprocessing.synchronize import RLock
 import os
@@ -50,7 +50,10 @@ class Emulator:
     # a held A stops advancing text after the first press. Ticking a couple
     # of frames with everything released between action holds restores that
     # edge.
-    RELEASE_GAP_TICKS = 2
+    release_gap_ticks: int = field(
+        default=2,
+        metadata={"cli": True, "help": "Frames ticked all-released between action holds"},
+    )
 
     __use_sdl: bool = False
     # SDL layout (set by PokemonRedEnv before first pyboy access).
@@ -58,6 +61,23 @@ class Emulator:
     window_x: int | None = None
     window_y: int | None = None
     window_title: str | None = None
+    # Splatted into Data(...) below -- lets a CLI/GUI reward-shaping override
+    # (see tunables.py / cli.py) reach the Data instance this Emulator lazily
+    # constructs.
+    data_kwargs: dict = field(default_factory=dict)
+    # Upper bound on a single _skip_locked_frames() call, in emulator frames
+    # (~34s at 60fps). Generous enough for the longest scripted walk in the
+    # game while still bounding worst-case blocking time if is_cutscene_locked
+    # somehow never clears (e.g. an unrecognized lock source).
+    max_cutscene_skip_frames: int = field(
+        default=2048, metadata={"cli": True, "help": "Safety cap on one cutscene-skip tick call (frames)"}
+    )
+    # Absolute safety-valve cap on a single _skip_battle_messages() call, in
+    # emulator frames -- only reached if the per-call cap argument passed in
+    # is left at its default. See _skip_battle_messages.
+    max_battle_message_skip_frames: int = field(
+        default=600, metadata={"cli": True, "help": "Safety cap on one battle-message-skip call (frames)"}
+    )
 
     @property
     def use_sdl(self) -> bool:
@@ -118,7 +138,9 @@ class Emulator:
     @property
     def data(self):
         if self.__data is None:
-            self.__data = Data(pyboy=self.pyboy, files_lock=self.files_lock)
+            self.__data = Data(
+                pyboy=self.pyboy, files_lock=self.files_lock, **self.data_kwargs
+            )
 
         return self.__data
 
@@ -249,13 +271,7 @@ class Emulator:
     def is_new_episode(self, memory: bytes):
         return ()
 
-    # Upper bound on a single _skip_locked_frames() call, in emulator frames
-    # (~34s at 60fps). Generous enough for the longest scripted walk in the
-    # game while still bounding worst-case blocking time if is_cutscene_locked
-    # somehow never clears (e.g. an unrecognized lock source).
-    MAX_CUTSCENE_SKIP = 2048
-
-    def _skip_locked_frames(self, max_frames: int = MAX_CUTSCENE_SKIP) -> int:
+    def _skip_locked_frames(self, max_frames: int | None = None) -> int:
         """Jump straight through a forced-walk / warp-transition window.
 
         Reads pokered's own frame-exact countdown registers (see
@@ -264,6 +280,8 @@ class Emulator:
         frame_skip-frames-at-a-time across many separate env.step() calls —
         every one of which discards its action anyway per _press_action.
         """
+        if max_frames is None:
+            max_frames = self.max_cutscene_skip_frames
         max_frames = max(1, int(max_frames))
         total = 0
         while total < max_frames and self.data.is_cutscene_locked(self.pyboy.memory):
@@ -273,12 +291,7 @@ class Emulator:
             total += n
         return total
 
-    # Absolute safety-valve cap on a single _skip_battle_messages() call, in
-    # emulator frames -- only reached if the per-call cap argument passed in
-    # is left at its default. See _skip_battle_messages.
-    MAX_BATTLE_MESSAGE_SKIP = 600
-
-    def _skip_battle_messages(self, max_frames: int = MAX_BATTLE_MESSAGE_SKIP) -> int:
+    def _skip_battle_messages(self, max_frames: int | None = None) -> int:
         """EXPERIMENTAL: auto-mash A through non-actionable battle text.
 
         Data.is_battle_message() ("X used TACKLE!", "It's super effective!",
@@ -297,6 +310,8 @@ class Emulator:
         this polls a press/tick/release/tick cycle instead of jumping
         straight to a known frame count.
         """
+        if max_frames is None:
+            max_frames = self.max_battle_message_skip_frames
         max_frames = max(1, int(max_frames))
         total = 0
         while total < max_frames and self.data.is_battle_message(self.pyboy.memory):
@@ -322,13 +337,13 @@ class Emulator:
         this, releasing at the end of one step and pressing the same button
         again at the start of the next (zero ticks in between) never
         produces an actually-released frame, so repeating an action across
-        steps reads as one continuous hold. See RELEASE_GAP_TICKS.
+        steps reads as one continuous hold. See release_gap_ticks.
         """
         if render_each:
-            for _ in range(self.RELEASE_GAP_TICKS):
+            for _ in range(self.release_gap_ticks):
                 self.pyboy.tick(1, render=True, sound=False)
         else:
-            self.pyboy.tick(self.RELEASE_GAP_TICKS, render=self.use_sdl, sound=False)
+            self.pyboy.tick(self.release_gap_ticks, render=self.use_sdl, sound=False)
 
     def ticks(self, meta_action: int, render_each: bool = False):
         action_idx = meta_action // len(DURATION_BINS)

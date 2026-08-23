@@ -48,50 +48,82 @@ from __future__ import annotations
 import os
 import random
 import warnings
+from dataclasses import dataclass, field
 
 from pokemon import event_constants as _event_constants
 from pokemon import event_graph as _event_graph
 from pokemon.Data import BADGE_GOALS, GOAL_CANDIDATES
 
-# Reassign the training goal when this fraction of recent episodes hit
-# *some* goal (any goal -- see pick_new_goal).
-ADVANCE_SUCCESS_THRESHOLD = 0.70
-ADVANCE_MIN_EPISODES = 40
-ADVANCE_CHECK_EVERY = 2048
 
-# Minimum recorded resume-attempts within a goal's rolling success window
-# (completed episodes run with that goal as the active base/resume
-# checkpoint, most recent up to MilestoneCallback.window -- see
-# MilestoneCallback._goal_success_windows / GOAL_SUCCESS_STATS_PATH) before
-# its windowed success rate is trusted enough to drive pick_next_goal_by_
-# success_rate's choice. Below this, a goal is treated the same as one with
-# zero data (the "untried" bucket) so a single lucky/unlucky early episode
-# can't dominate the pick.
-GOAL_SUCCESS_MIN_ATTEMPTS = 10
+@dataclass
+class CurriculumConfig:
+    """Every curriculum-advance tunable, CLI/GUI-overridable via
+    tunables.add_dataclass_args -- see configure_curriculum() for how an
+    override actually takes effect (it also refreshes the bare-name aliases
+    below and rebuilds CURRICULUM, since _stage() bakes default_max_steps
+    into every entry at construction time)."""
 
-# Generous flat safety-net ceiling on top of Data.py's live, size-scaled
-# per-map truncate budget (map_truncate_budget) — that budget grows as new
-# maps are visited instead of being precomputed per goal here, so this
-# constant only guards against a policy that never triggers any map's
-# budget/other fuses at all (e.g. standing still on the very first map
-# forever).
-DEFAULT_MAX_STEPS = 20_000
+    # Reassign the training goal when this fraction of recent episodes hit
+    # *some* goal (any goal -- see pick_new_goal).
+    advance_success_threshold: float = field(
+        default=0.70, metadata={"cli": True, "help": "Rolling success rate to trigger a curriculum reassignment"}
+    )
+    advance_min_episodes: int = field(
+        default=40, metadata={"cli": True, "help": "Min episodes in the rolling window before considering advance"}
+    )
+    advance_check_every: int = field(
+        default=2048, metadata={"cli": True, "help": "Step interval between curriculum reassignment checks"}
+    )
+    # Minimum recorded resume-attempts within a goal's rolling success window
+    # (completed episodes run with that goal as the active base/resume
+    # checkpoint, most recent up to MilestoneCallback.window -- see
+    # MilestoneCallback._goal_success_windows / GOAL_SUCCESS_STATS_PATH)
+    # before its windowed success rate is trusted enough to drive
+    # pick_next_goal_by_success_rate's choice. Below this, a goal is treated
+    # the same as one with zero data (the "untried" bucket) so a single
+    # lucky/unlucky early episode can't dominate the pick.
+    goal_success_min_attempts: int = field(
+        default=10,
+        metadata={"cli": True, "help": "Min windowed resume-attempts before a goal's success rate is trusted"},
+    )
+    # Generous flat safety-net ceiling on top of Data.py's live, size-scaled
+    # per-map truncate budget (map_truncate_budget) — that budget grows as
+    # new maps are visited instead of being precomputed per goal here, so
+    # this constant only guards against a policy that never triggers any
+    # map's budget/other fuses at all (e.g. standing still on the very first
+    # map forever).
+    default_max_steps: int = field(
+        default=20_000, metadata={"cli": True, "help": "Flat safety-net step ceiling per goal/stage"}
+    )
+    # Fallback stage/goal for any --stage value that resolve_stage_name can't
+    # place (not a live goal name, not a recognized _LEGACY_STAGE_ALIASES key
+    # -- e.g. the stale "stage_left_house" that used to be every CLI's
+    # --stage default: it has no wEventFlags equivalent at all, see
+    # _LEGACY_STAGE_ALIASES' docstring). Previously this silently substituted
+    # STAGE_ORDER[0] -- an arbitrary "lowest wEventFlags bit index" pick that
+    # resolved to EVENT_GOT_TOWN_MAP, a goal with no saves/ checkpoint and no
+    # geographic relationship to a fresh "start" save, so every episode run
+    # under it wasted its whole length wandering toward an unreachable goal
+    # and eating reward_active_map_presence's off-goal-map penalty the
+    # entire time. EVENT_GOT_STARTER is the actual earliest real milestone
+    # (picking a starter in Oak's Lab), already checkpointed from minutes
+    # into the game, so an episode assigned this can actually make progress
+    # instead of just being punished for existing.
+    default_stage: str = field(
+        default="EVENT_GOT_STARTER", metadata={"cli": True, "help": "Fallback/default curriculum stage"}
+    )
 
-# Fallback stage/goal for any --stage value that resolve_stage_name can't
-# place (not a live goal name, not a recognized _LEGACY_STAGE_ALIASES key --
-# e.g. the stale "stage_left_house" that used to be every CLI's --stage
-# default: it has no wEventFlags equivalent at all, see
-# _LEGACY_STAGE_ALIASES' docstring). Previously this silently substituted
-# STAGE_ORDER[0] -- an arbitrary "lowest wEventFlags bit index" pick that
-# resolved to EVENT_GOT_TOWN_MAP, a goal with no saves/ checkpoint and no
-# geographic relationship to a fresh "start" save, so every episode run
-# under it wasted its whole length wandering toward an unreachable goal and
-# eating reward_active_map_presence's off-goal-map penalty the entire time.
-# EVENT_GOT_STARTER is the actual earliest real milestone (picking a starter
-# in Oak's Lab), already checkpointed from minutes into the game, so an
-# episode assigned this can actually make progress instead of just being
-# punished for existing.
-DEFAULT_STAGE = "EVENT_GOT_STARTER"
+
+CURRICULUM_CFG = CurriculumConfig()
+# Bare-name aliases every existing internal reference keeps using -- kept in
+# sync with CURRICULUM_CFG by configure_curriculum() whenever an override is
+# applied.
+ADVANCE_SUCCESS_THRESHOLD = CURRICULUM_CFG.advance_success_threshold
+ADVANCE_MIN_EPISODES = CURRICULUM_CFG.advance_min_episodes
+ADVANCE_CHECK_EVERY = CURRICULUM_CFG.advance_check_every
+GOAL_SUCCESS_MIN_ATTEMPTS = CURRICULUM_CFG.goal_success_min_attempts
+DEFAULT_MAX_STEPS = CURRICULUM_CFG.default_max_steps
+DEFAULT_STAGE = CURRICULUM_CFG.default_stage
 
 # Badges have no wEventFlags bit of their own (wObtainedBadges instead — see
 # badges()/BADGE_GOALS), so they need a stand-in event to sort next to.
@@ -170,6 +202,37 @@ def _stage(goal: str) -> dict:
 STAGE_ORDER: list[str] = sorted(GOAL_CANDIDATES, key=_order_key)
 
 CURRICULUM: dict[str, dict] = {goal: _stage(goal) for goal in STAGE_ORDER}
+
+
+def configure_curriculum(**overrides) -> None:
+    """Apply CLI/GUI overrides (kwargs named after CurriculumConfig's own
+    fields, e.g. ``advance_success_threshold=0.5``) to CURRICULUM_CFG,
+    refresh the bare-name aliases, and rebuild CURRICULUM -- whose per-stage
+    max_steps bakes in default_max_steps at construction time (see
+    _stage()), so a default_max_steps override needs the dict rebuilt to
+    actually take effect.
+
+    Call once, before any other curriculum_config lookup -- train_ppo.run()
+    and run_eval_ppo.run() do this first thing. A value of None is skipped
+    (treated as "no override"), so this is safe to call with a full
+    argparse Namespace's worth of kwargs even when most weren't explicitly
+    passed on the command line.
+    """
+    global ADVANCE_SUCCESS_THRESHOLD, ADVANCE_MIN_EPISODES, ADVANCE_CHECK_EVERY
+    global GOAL_SUCCESS_MIN_ATTEMPTS, DEFAULT_MAX_STEPS, DEFAULT_STAGE, CURRICULUM
+
+    for key, value in overrides.items():
+        if value is not None:
+            setattr(CURRICULUM_CFG, key, value)
+
+    ADVANCE_SUCCESS_THRESHOLD = CURRICULUM_CFG.advance_success_threshold
+    ADVANCE_MIN_EPISODES = CURRICULUM_CFG.advance_min_episodes
+    ADVANCE_CHECK_EVERY = CURRICULUM_CFG.advance_check_every
+    GOAL_SUCCESS_MIN_ATTEMPTS = CURRICULUM_CFG.goal_success_min_attempts
+    DEFAULT_MAX_STEPS = CURRICULUM_CFG.default_max_steps
+    DEFAULT_STAGE = CURRICULUM_CFG.default_stage
+    CURRICULUM = {goal: _stage(goal) for goal in STAGE_ORDER}
+
 
 # Best-effort aliases from the old hand-picked stage ids (pre-generic-goal
 # system) to a new goal name, so an old --stage flag doesn't hard-crash.

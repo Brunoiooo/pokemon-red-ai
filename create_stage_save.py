@@ -34,13 +34,23 @@ from pathlib import Path
 
 import keyboard
 
+import tunables
 from curriculum_config import CURRICULUM, STAGE_ORDER
+from pokemon.Data import Data
 from pokemon.Emulator import DURATION_BINS, Emulator
 from ppo.callbacks import GOAL_HIT_COUNTS_PATH, GOAL_SUCCESS_STATS_PATH
 
 BUTTON_NAMES = ["A", "B", "Start", "Select", "Left", "Right", "Up", "Down", "None"]
 BIN_16_IDX = 0
 NONE_ACTION = 8
+
+# Data fields human play disables by default -- see run()'s data_kwargs
+# construction below (same rationale as debug_play.py's _FUSE_DISABLE_FIELDS).
+_FUSE_DISABLE_FIELDS = (
+    "max_useless_ticks",
+    "max_useless_dialog_ticks",
+    "max_useless_battle_ticks",
+)
 
 # name -> (label, action_idx | None for meta)
 KEY_MAP: dict[str, tuple[str, int | None]] = {
@@ -177,14 +187,24 @@ def run(args: argparse.Namespace) -> None:
 
     keyboard.hook(on_key, suppress=False)
 
-    files_lock = RLock()
-    emulator = Emulator(files_lock=files_lock)
-    emulator.use_sdl = True
+    # Human play: disable stuck truncation so standing still does not end the
+    # run -- unless a field was explicitly overridden on the command line
+    # (no longer equal to Data's own default), in which case that explicit
+    # choice wins.
+    data_kwargs = tunables.kwargs_from_args(args, Data)
+    emulator_kwargs = tunables.kwargs_from_args(args, Emulator)
+    import dataclasses as _dataclasses
 
-    # Human play: disable stuck truncation so standing still does not end the run.
-    emulator.data.max_useless_ticks = 10**9
-    emulator.data.max_useless_dialog_ticks = 10**9
-    emulator.data.max_useless_battle_ticks = 10**9
+    _true_defaults = {f.name: f.default for f in _dataclasses.fields(Data)}
+    for _name in _FUSE_DISABLE_FIELDS:
+        if data_kwargs.get(_name) == _true_defaults[_name]:
+            data_kwargs[_name] = 10**9
+
+    files_lock = RLock()
+    emulator = Emulator(
+        files_lock=files_lock, data_kwargs=data_kwargs, **emulator_kwargs
+    )
+    emulator.use_sdl = True
 
     print_sep()
     print("  Pokemon Red AI — Create stage save")
@@ -277,6 +297,8 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="List curriculum stages and which already have saves",
     )
+    tunables.add_dataclass_args(p, Data, group_title="reward shaping")
+    tunables.add_dataclass_args(p, Emulator, group_title="emulator timing")
     return p
 
 

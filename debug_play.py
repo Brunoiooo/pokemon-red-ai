@@ -43,6 +43,7 @@ from pathlib import Path
 
 import keyboard
 
+import tunables
 from curriculum_config import (
     CURRICULUM,
     DEFAULT_STAGE,
@@ -51,10 +52,20 @@ from curriculum_config import (
     stage_for_goal,
 )
 from pokemon import event_compass as _event_compass
+from pokemon.Data import Data
 from pokemon.Emulator import Emulator
 
 BUTTON_NAMES = ["A", "B", "Start", "Select", "Left", "Right", "Up", "Down", "None"]
 NONE_ACTION = 8
+
+# Data fields human play disables by default (--real-truncation restores
+# them) -- see run()'s data_kwargs construction below.
+_FUSE_DISABLE_FIELDS = (
+    "max_useless_ticks",
+    "max_useless_dialog_ticks",
+    "max_useless_battle_ticks",
+    "max_loop_streak",
+)
 
 # Same discrete indices as Emulator.buttons / PokemonRedEnv (N_ACTIONS=9).
 KEY_MAP: dict[str, tuple[str, int | None]] = {
@@ -408,8 +419,24 @@ def run(args: argparse.Namespace) -> None:
 
     keyboard.hook(on_key, suppress=False)
 
+    data_kwargs = tunables.kwargs_from_args(args, Data)
+    emulator_kwargs = tunables.kwargs_from_args(args, Emulator)
+    if not args.real_truncation:
+        # Human play: don't end the run while standing still / reading text
+        # -- unless the field was explicitly overridden on the command line
+        # (i.e. it no longer equals Data's own default), in which case that
+        # explicit choice wins over this blanket disable.
+        import dataclasses as _dataclasses
+
+        _true_defaults = {f.name: f.default for f in _dataclasses.fields(Data)}
+        for _name in _FUSE_DISABLE_FIELDS:
+            if data_kwargs.get(_name) == _true_defaults[_name]:
+                data_kwargs[_name] = 10**9
+
     files_lock = RLock()
-    emulator = Emulator(files_lock=files_lock)
+    emulator = Emulator(
+        files_lock=files_lock, data_kwargs=data_kwargs, **emulator_kwargs
+    )
     emulator.use_sdl = True
     emulator.data.goal = goal
 
@@ -429,15 +456,10 @@ def run(args: argparse.Namespace) -> None:
         model_path = resolve_model_path(args.model or None)
         print(f"  Loading model: {model_path}")
         model = MaskablePPO.load(str(model_path), device="cpu")
-        obs_env = PokemonRedEnv(save_state=from_ckpt, goal=goal, stage=stage)
+        obs_env = PokemonRedEnv(
+            save_state=from_ckpt, goal=goal, stage=stage, data_kwargs=data_kwargs
+        )
         obs_env._emu = emulator
-
-    if not args.real_truncation:
-        # Human play: don't end the run while standing still / reading text.
-        emulator.data.max_useless_ticks = 10**9
-        emulator.data.max_useless_dialog_ticks = 10**9
-        emulator.data.max_useless_battle_ticks = 10**9
-        emulator.data.max_loop_streak = 10**9
 
     print_sep()
     print("  Pokemon Red AI — Debug play (human + rewards)")
@@ -809,6 +831,8 @@ def build_parser() -> argparse.ArgumentParser:
              "you actually pressed -- read-only, never touches the controls. "
              "Bare --model auto-picks the newest models/ppo_*/best/best_model.zip.",
     )
+    tunables.add_dataclass_args(p, Data, group_title="reward shaping")
+    tunables.add_dataclass_args(p, Emulator, group_title="emulator timing")
     return p
 
 

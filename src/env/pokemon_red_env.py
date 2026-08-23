@@ -1,6 +1,7 @@
 """Gymnasium environment wrapping PyBoy + Data for PPO training."""
 from __future__ import annotations
 
+import dataclasses
 import os
 import sys
 import time
@@ -89,7 +90,14 @@ _BASE_VECTOR_DIM = (
     798 + 256 + 256 + len(REWARD_COMPONENT_NAMES) + 256 + 1 + 1 + 3
 )
 VECTOR_DIM = _BASE_VECTOR_DIM + N_GOALS
-VISIT_MASK_SIZE = 2 * 5 + 1  # map_vision_radius default
+# Derived from Data's own map_vision_radius field default (not a separately
+# hand-kept "5" literal) so the two never drift apart. A per-env override
+# (see PokemonRedEnv's data_kwargs) recomputes this per instance -- see
+# _visit_mask_size below; this module-level constant stays the *default*.
+DEFAULT_MAP_VISION_RADIUS: int = next(
+    f.default for f in dataclasses.fields(Data) if f.name == "map_vision_radius"
+)
+VISIT_MASK_SIZE = 2 * DEFAULT_MAP_VISION_RADIUS + 1
 
 
 class PokemonRedEnv(gym.Env):
@@ -112,8 +120,21 @@ class PokemonRedEnv(gym.Env):
         n_workers: int = 1,
         collect_heatmap: bool = False,
         save_checkpoints: bool = False,
+        data_kwargs: dict | None = None,
+        emulator_kwargs: dict | None = None,
     ):
         super().__init__()
+        # Splatted into Data(...) / Emulator(...) respectively -- lets a
+        # CLI/GUI reward-shaping (data_kwargs) or emulator-timing
+        # (emulator_kwargs) override (see tunables.py / cli.py) reach the
+        # actual running env. Recompute the visit-mask size from data_kwargs
+        # too so a map_vision_radius override doesn't drift out of sync
+        # with observation_space's declared shape (see VISIT_MASK_SIZE).
+        self.data_kwargs = dict(data_kwargs or {})
+        self.emulator_kwargs = dict(emulator_kwargs or {})
+        self._visit_mask_size = (
+            2 * int(self.data_kwargs.get("map_vision_radius", DEFAULT_MAP_VISION_RADIUS)) + 1
+        )
         self.save_state = save_state
         self.max_steps = int(max_steps)
         self.frame_skip = int(frame_skip)
@@ -159,7 +180,7 @@ class PokemonRedEnv(gym.Env):
                 "visit_mask": spaces.Box(
                     low=0.0,
                     high=1.0,
-                    shape=(1, VISIT_MASK_SIZE, VISIT_MASK_SIZE),
+                    shape=(1, self._visit_mask_size, self._visit_mask_size),
                     dtype=np.float32,
                 ),
                 "vector": spaces.Box(
@@ -174,7 +195,11 @@ class PokemonRedEnv(gym.Env):
     @property
     def emu(self) -> Emulator:
         if self._emu is None:
-            self._emu = Emulator(files_lock=self._lock)
+            self._emu = Emulator(
+                files_lock=self._lock,
+                data_kwargs=self.data_kwargs,
+                **self.emulator_kwargs,
+            )
             if self.render_mode == "human":
                 from utils.gui_layout import window_slot
 
@@ -219,7 +244,9 @@ class PokemonRedEnv(gym.Env):
         if "visit_mask" in inputs:
             visit = inputs["visit_mask"].detach().cpu().numpy().astype(np.float32)
         else:
-            visit = np.zeros((1, VISIT_MASK_SIZE, VISIT_MASK_SIZE), dtype=np.float32)
+            visit = np.zeros(
+                (1, self._visit_mask_size, self._visit_mask_size), dtype=np.float32
+            )
 
         return {
             "screen_tiles": screen,
@@ -724,6 +751,8 @@ def make_pokemon_env(
     n_workers: int = 1,
     collect_heatmap: bool = False,
     save_checkpoints: bool = False,
+    data_kwargs: dict | None = None,
+    emulator_kwargs: dict | None = None,
 ):
     """Factory for SubprocVecEnv workers."""
 
@@ -742,6 +771,8 @@ def make_pokemon_env(
             n_workers=n_workers,
             collect_heatmap=collect_heatmap,
             save_checkpoints=save_checkpoints,
+            data_kwargs=data_kwargs,
+            emulator_kwargs=emulator_kwargs,
         )
         env.reset(seed=seed + rank)
         return env

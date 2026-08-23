@@ -13,7 +13,23 @@ Commands:
 import sys
 sys.path.insert(0, "src")
 
+# Windows consoles default stdout to the system codepage (cp1250/cp1252,
+# ...), which can't encode compass arrow glyphs (debug-play/eval -vv) or
+# other non-ASCII output -- crashes mid-run otherwise, including when a GUI
+# (gui_app.py) pipes this process's stdout, which is never a real console.
+# No-op where stdout is already utf-8 or doesn't support reconfigure.
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 import argparse
+
+import curriculum_config
+import tunables
+from pokemon.Data import Data
+from pokemon.Emulator import Emulator
 
 _global = argparse.ArgumentParser(add_help=False)
 _g = _global.add_argument_group("global flags")
@@ -123,6 +139,57 @@ p_train.add_argument(
     help="Rolling window size in frames, pooled across all runs (default: 300000)",
 )
 
+
+def _int_list(s: str) -> list[int]:
+    return [int(x.strip()) for x in s.split(",") if x.strip()]
+
+
+_train_model = p_train.add_argument_group("PPO / model hyperparameters")
+_train_model.add_argument("--gae-lambda", type=float, default=0.95)
+_train_model.add_argument("--clip-range", type=float, default=0.2)
+_train_model.add_argument("--vf-coef", type=float, default=0.5)
+_train_model.add_argument("--max-grad-norm", type=float, default=0.5)
+_train_model.add_argument("--features-dim", type=int, default=256)
+_train_model.add_argument(
+    "--net-arch-pi", type=_int_list, default=[256, 256], metavar="N,N,...",
+    help="Policy-head hidden layer sizes, comma-separated (default: 256,256)",
+)
+_train_model.add_argument(
+    "--net-arch-vf", type=_int_list, default=[256, 256], metavar="N,N,...",
+    help="Value-head hidden layer sizes, comma-separated (default: 256,256)",
+)
+_train_model.add_argument(
+    "--screen-cnn-channels", type=_int_list, default=[32, 64, 64], metavar="N,N,...",
+    help="screen_tiles CNN channel widths, comma-separated (default: 32,64,64)",
+)
+_train_model.add_argument(
+    "--visit-cnn-channels", type=_int_list, default=[16, 32], metavar="N,N,...",
+    help="visit_mask CNN channel widths, comma-separated (default: 16,32)",
+)
+_train_model.add_argument(
+    "--vector-mlp-hidden", type=_int_list, default=[256, 128], metavar="N,N,...",
+    help="Flat-vector MLP hidden layer sizes, comma-separated (default: 256,128)",
+)
+_train_model.add_argument(
+    "--milestone-window", type=int, default=100,
+    help="MilestoneCallback's rolling episode window (default: 100)",
+)
+
+_train_entropy = p_train.add_argument_group("--auto-entropy scheduler")
+_train_entropy.add_argument("--entropy-window", type=int, default=50)
+_train_entropy.add_argument("--entropy-check-every", type=int, default=20_000)
+_train_entropy.add_argument("--loop-rate-high", type=float, default=0.3)
+_train_entropy.add_argument("--loop-rate-low", type=float, default=0.08)
+_train_entropy.add_argument("--entropy-increase-factor", type=float, default=1.5)
+_train_entropy.add_argument("--entropy-decay-factor", type=float, default=0.9)
+_train_entropy.add_argument("--entropy-cooldown-checks", type=int, default=5)
+
+tunables.add_dataclass_args(p_train, Data, group_title="reward shaping (Data)")
+tunables.add_dataclass_args(p_train, Emulator, group_title="emulator timing")
+tunables.add_dataclass_args(
+    p_train, curriculum_config.CurriculumConfig, group_title="curriculum advance"
+)
+
 # ---------------------------------------------------------------------------
 # eval (PPO)
 # ---------------------------------------------------------------------------
@@ -202,6 +269,8 @@ p_eval.add_argument(
     "--seed", type=int, default=0,
     help="Base worker seed for --batch mode (each worker gets seed + rank)",
 )
+tunables.add_dataclass_args(p_eval, Data, group_title="reward shaping")
+tunables.add_dataclass_args(p_eval, Emulator, group_title="emulator timing")
 
 # ---------------------------------------------------------------------------
 # save-stage / debug-play
@@ -229,6 +298,8 @@ p_save_stage.add_argument(
     action="store_true",
     help="List curriculum stages and which already have saves",
 )
+tunables.add_dataclass_args(p_save_stage, Data, group_title="reward shaping")
+tunables.add_dataclass_args(p_save_stage, Emulator, group_title="emulator timing")
 
 p_debug = sub.add_parser(
     "debug-play",
@@ -287,6 +358,8 @@ p_debug.add_argument(
          "table after every step, next to what you actually pressed. "
          "Bare --model auto-picks the newest best checkpoint.",
 )
+tunables.add_dataclass_args(p_debug, Data, group_title="reward shaping")
+tunables.add_dataclass_args(p_debug, Emulator, group_title="emulator timing")
 
 def main():
     args = parser.parse_args()
