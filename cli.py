@@ -5,10 +5,11 @@ Usage:
   python cli.py [--cpu] [--verbose] [--gui] <command> [command-args]
 
 Commands:
-  train       PPO training (Stable-Baselines3)
-  eval        Evaluate a PPO .zip checkpoint
-  save-stage  Play manually and save a mid-game state for a curriculum stage
-  debug-play  Human play with live reward / dialog / battle debug prints
+  train              PPO training (Stable-Baselines3)
+  eval               Evaluate a PPO .zip checkpoint
+  benchmark-hparams  Optuna PPO-hyperparameter search, racing curriculum milestones
+  save-stage         Play manually and save a mid-game state for a curriculum stage
+  debug-play         Human play with live reward / dialog / battle debug prints
 """
 import sys
 sys.path.insert(0, "src")
@@ -51,6 +52,7 @@ parser = argparse.ArgumentParser(
         "  python cli.py eval --gui\n"
         "  python cli.py eval --model models/ppo_<timestamp>/best/best_model.zip --gui\n"
         "  python cli.py eval --batch 300000 --batch-workers 8\n"
+        "  python cli.py benchmark-hparams --depth 3 --n-trials 40 --workers 8\n"
     ),
     parents=[_global],
 )
@@ -273,6 +275,48 @@ tunables.add_dataclass_args(p_eval, Data, group_title="reward shaping")
 tunables.add_dataclass_args(p_eval, Emulator, group_title="emulator timing")
 
 # ---------------------------------------------------------------------------
+# benchmark-hparams (Optuna PPO-hyperparameter search)
+# ---------------------------------------------------------------------------
+p_bench = sub.add_parser(
+    "benchmark-hparams",
+    parents=[_global],
+    help="Race curriculum-milestone candidates with per-candidate Optuna "
+         "PPO-hyperparameter sweeps to build a tuned target chain",
+)
+p_bench.add_argument("--depth", type=int, default=3,
+                      help="Frontier-walk steps to take (default: 3)")
+p_bench.add_argument("--n-trials", type=int, default=40,
+                      help="Optuna trials per candidate sweep (default: 40)")
+p_bench.add_argument("--timesteps-cap", type=int, default=400_000,
+                      help="Hard env-step budget per trial (default: 400000)")
+p_bench.add_argument("--success-threshold", type=float, default=0.9,
+                      help="Rolling-window success rate counted as 'saturated' (default: 0.9)")
+p_bench.add_argument("--min-attempts", type=int, default=15,
+                      help="Rolling-window size / min episodes before the rate is trusted (default: 15)")
+p_bench.add_argument("--eval-freq", type=int, default=20_000,
+                      help="Env-step interval between saturation checks / Optuna reports (default: 20000)")
+p_bench.add_argument("--workers", "-w", type=int, default=8,
+                      help="Fixed worker count for every trial -- see benchmark_workers.py (default: 8)")
+p_bench.add_argument("--frame-skip", type=int, default=16)
+p_bench.add_argument("--max-steps", type=int, default=None,
+                      help="Override per-episode step cap (default: curriculum_config's per-goal default)")
+p_bench.add_argument("--start-goal", default="start",
+                      help="Initial frontier checkpoint (default: start)")
+p_bench.add_argument("--max-candidates", type=int, default=6,
+                      help="Max event_compass-reachable candidates raced per frontier step (default: 6)")
+p_bench.add_argument("--compass-max-hops", type=int, default=300,
+                      help="BFS hop budget for event_compass candidate discovery (default: 300)")
+p_bench.add_argument("--n-confirm", type=int, default=3,
+                      help="Top-N configs of the final winner to re-run multi-seed (default: 3, 0 to skip)")
+p_bench.add_argument("--confirm-seeds", type=int, default=3,
+                      help="Seeds per confirmed config (default: 3)")
+p_bench.add_argument("--confirm-episodes", type=int, default=3,
+                      help="Deterministic episodes per post-race checkpoint confirmation (default: 3)")
+p_bench.add_argument("--storage-dir", default="logs/optuna",
+                      help="Dir for per-goal Optuna SQLite studies (default: logs/optuna)")
+p_bench.add_argument("--seed", type=int, default=0)
+
+# ---------------------------------------------------------------------------
 # save-stage / debug-play
 # ---------------------------------------------------------------------------
 p_save_stage = sub.add_parser(
@@ -377,6 +421,10 @@ def main():
             _m.run_batch(args)
         else:
             _m.run(args)
+
+    elif args.command == "benchmark-hparams":
+        import benchmark_hparams as _m
+        _m.run(args)
 
     elif args.command == "save-stage":
         import create_stage_save as _m
