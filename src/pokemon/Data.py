@@ -175,6 +175,14 @@ class Data:
     event_reward: float = field(
         default=2.0, metadata={"cli": True, "help": "Macro payout per story event"}
     )
+    # One-shot, non-repeating bonus the first time the party is healed at a
+    # Pokémon Center in a location not credited before (see
+    # reward_new_location_heal / healed_locations). Same scale as event_reward
+    # since it is a comparable macro story beat, not a micro exploration tick.
+    new_location_heal_reward: float = field(
+        default=2.0,
+        metadata={"cli": True, "help": "One-shot reward for healing at a new Pokémon Center location"},
+    )
     # One-shot new-map/new-dialog payouts (formerly new_screen_reward /
     # new_dialog_reward) are gone — reward_new_map_presence / reward_new_dialog_presence
     # (see reward()) now cover that ground with a decaying-by-visits shape
@@ -436,6 +444,14 @@ class Data:
 
     visited_positions: dict[tuple[int, int, int], int] = field(default_factory=dict)
     position_visit_counts: dict[tuple[int, int, int], int] = field(default_factory=dict)
+    # wLastBlackoutMap values (see reward_new_location_heal) already credited
+    # for the one-time "healed at a new location" milestone. Persisted via
+    # save()/load() like visited_positions -- clean() additionally seeds this
+    # with whatever wLastBlackoutMap already reads in the just-loaded save,
+    # so resuming from a checkpoint captured at the moment of a fresh heal
+    # cannot re-credit that same location again on step 1 (same reasoning as
+    # _milestones_hit's live-memory reseed below).
+    healed_locations: set[int] = field(default_factory=set)
     map_vision_radius: int = field(
         default=5, metadata={"cli": True, "help": "Visit-mask/local-grid observation radius (tiles)"}
     )
@@ -804,6 +820,8 @@ class Data:
                 pickle.dump(self.__visited_pokedex_seen, f)
             with open(f"{path}/visited_positions.pkl", "wb") as f:
                 pickle.dump(self.visited_positions, f)
+            with open(f"{path}/healed_locations.pkl", "wb") as f:
+                pickle.dump(self.healed_locations, f)
 
     def load(self, path: str):
         with self.files_lock:
@@ -813,6 +831,16 @@ class Data:
                 self.__visited_pokedex_seen = pickle.load(f)
             with open(f"{path}/visited_positions.pkl", "rb") as f:
                 self.visited_positions = pickle.load(f)
+            # Union, not replace -- clean() already seeded this with the
+            # live wLastBlackoutMap reading (see its docstring comment);
+            # a checkpoint predating this field (no healed_locations.pkl)
+            # falls back to just that live seed instead of aborting the
+            # whole load() and losing the three reads above.
+            try:
+                with open(f"{path}/healed_locations.pkl", "rb") as f:
+                    self.healed_locations |= pickle.load(f)
+            except FileNotFoundError:
+                pass
 
     def clean(self):
         self.__visited_pokedex_own = None
@@ -821,6 +849,14 @@ class Data:
         self.in_battle_ticks = 0
         self.in_dialog_ticks = 0
         self.visited_positions = {}
+        # Seed (not just clear) from the just-loaded save's live memory --
+        # same reflicker reasoning as _milestones_hit/_saw_oaks_parcel_in_bag
+        # below: whatever wLastBlackoutMap already shows must count as
+        # already-credited, or resuming from a checkpoint captured at the
+        # exact moment of a fresh heal would re-pay that same location on
+        # step 1 of every single episode reset from it. load() below unions
+        # in any pickled history on top of this baseline.
+        self.healed_locations = {int(self.pyboy.memory[RAM.wLastBlackoutMap])}
         self.position_visit_counts = {}
         self.direction_counts = {}
         self.map_transitions = {}
@@ -1557,6 +1593,14 @@ class Data:
         milestone += self._accum_reward(
             "generic_progress", self.reward_generic_progress(memory)
         )
+        # One-shot, non-repeating bonus for healing at a Pokémon Center in a
+        # location not credited before (see reward_new_location_heal) —
+        # same bucket as reward_generic_progress since it is the same kind
+        # of flat one-time story-progress payout, just keyed off
+        # wLastBlackoutMap instead of a wEventFlags bit.
+        milestone += self._accum_reward(
+            "generic_progress", self.reward_new_location_heal(memory)
+        )
         # Battle→overworld (or dialog) transition — win/lose/flee uses prev memory.
         milestone += self._accum_reward("battle_exit", self.reward_battle_exit(memory))
 
@@ -1729,6 +1773,41 @@ class Data:
             )
 
         return reward
+
+    def reward_new_location_heal(
+        self, memory: PyBoyMemoryView | bytes | None = None
+    ) -> float:
+        """One-shot, non-repeating bonus for healing at a Pokémon Center in
+        a location not credited before (see healed_locations / clean() /
+        save() / load()).
+
+        RAM.wLastBlackoutMap is written by pokered's SetLastBlackoutMap
+        (engine/events/set_blackout_map.asm), called from exactly one call
+        site: the "yes, heal my pokemon" branch of
+        DisplayPokemonCenterDialogue_ (engine/events/pokecenter.asm) —
+        declining healing, or standing in a Safari Zone rest house (excluded
+        inside SetLastBlackoutMap itself), never touches it. So any value
+        observed here is a genuine, accepted Pokémon Center heal, and it is
+        safe to treat every distinct value as one location. The byte itself
+        holds wLastMap, i.e. the outdoor town/route the Center's interior
+        warps back to on blackout/Dig/Teleport — not the Center's own
+        interior map id — which is exactly the granularity a per-town credit
+        wants (one payout per city, not one per building).
+        """
+        if memory is None:
+            memory = self.pyboy.memory
+        blackout_map = int(memory[RAM.wLastBlackoutMap])
+        if blackout_map in self.healed_locations:
+            return 0.0
+        self.healed_locations.add(blackout_map)
+        map_name = _map_constants.MAPS_BY_ID.get(blackout_map, (f"MAP_{blackout_map}",))[0]
+        name = f"HEALED_AT_{map_name}"
+        self.last_milestone_payouts.append((name, self.new_location_heal_reward))
+        if self.collect_heatmap and self._last_heatmap_pos is not None:
+            self.milestone_hit_counts[self._last_heatmap_pos] = (
+                self.milestone_hit_counts.get(self._last_heatmap_pos, 0) + 1
+            )
+        return self.new_location_heal_reward
 
     def reward_anti_loop(self, action: int, memory: bytes) -> float:
         """Three-layer anti-loop + menu-spam penalties (PokeRL-style)."""
