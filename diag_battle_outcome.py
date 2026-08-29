@@ -31,9 +31,13 @@ def make_data(mem: FakeMem) -> Data:
 
 
 def expect_difficulty_scale(enemy_lv: int, player_lv: int) -> float:
-    """Mirrors Data._battle_difficulty_scale's smoothstep(enemy_lv/player_lv)."""
+    """Mirrors Data._battle_difficulty_scale: max(floor, sqrt(enemy/player))
+    clamped to 1.0, with an unreadable level (<=0) dropping to the bad-read
+    fallback (below the floor)."""
+    if enemy_lv <= 0 or player_lv <= 0:
+        return 0.05  # Data.battle_difficulty_invalid_fallback default
     r = min(1.0, enemy_lv / player_lv)
-    return 3 * r**2 - 2 * r**3
+    return max(0.4, r**0.5)  # Data.battle_difficulty_scale_floor default
 
 
 def set_party(mem: FakeMem, levels: list[int]) -> None:
@@ -124,15 +128,15 @@ def run_mock_cases() -> None:
     data = make_data(curr)
     exit_r = data.reward_battle_exit(bytes(prev))
     print(f"WIN    CF0B=0 (fair): exit={exit_r} info={data.last_battle_exit_info}")
-    assert exit_r == data.battle_won_reward == 2.0
+    assert exit_r == data.battle_won_reward == 1.2
     assert data.last_battle_exit_info is not None
     assert data.last_battle_exit_info["kind"] == "win"
     assert data.last_battle_exit_info["difficulty_scale"] == 1.0
 
     # Win against a much weaker opponent, fought by the strong mon itself
-    # (active == party_max == 10 vs enemy 2) → discounted by
-    # smoothstep(enemy_lv/active_lv). This is the reported exploit: a
-    # lvl-10 one-shotting a lvl-2 wild Pokemon.
+    # (active == party_max == 10 vs enemy 2) -- the curbstomp case. Discounted
+    # by _battle_difficulty_scale down to its floor (sqrt(0.2) ~ 0.447 > 0.4,
+    # so here the sqrt curve wins). This is the farming case we want damped.
     prev = build_prev(
         in_battle=True, enemy_level=2, party_levels=[10], active_level=10
     )
@@ -141,11 +145,11 @@ def run_mock_cases() -> None:
     exit_r = data.reward_battle_exit(bytes(prev))
     expect_scale = expect_difficulty_scale(2, 10)
     print(
-        f"WIN    CF0B=0 (active lvl10 vs lvl2): exit={exit_r} "
+        f"WIN    CF0B=0 (active lvl10 vs lvl2, curbstomp): exit={exit_r} "
         f"info={data.last_battle_exit_info}"
     )
     assert abs(exit_r - data.battle_won_reward * expect_scale) < 1e-9
-    assert data.last_battle_exit_info["difficulty_scale"] == expect_scale
+    assert abs(data.last_battle_exit_info["difficulty_scale"] - expect_scale) < 1e-9
 
     # Deliberately leveling a weaker bench mon: it's the active battler and
     # the fight is fair *for it* (enemy_lv == its own level), even though a
@@ -161,7 +165,7 @@ def run_mock_cases() -> None:
         f"WIN    CF0B=0 (leveling weak mon, active lvl3 vs lvl3): exit={exit_r} "
         f"info={data.last_battle_exit_info}"
     )
-    assert exit_r == data.battle_won_reward == 2.0
+    assert exit_r == data.battle_won_reward == 1.2
     assert data.last_battle_exit_info["difficulty_scale"] == 1.0
 
     # Lose (blackout path — no separate blackout signal)
@@ -209,30 +213,36 @@ def run_level_soft_cap_cases() -> None:
         set_party(mem, levels)
         return mem
 
-    # One level-up below threshold: +0.5
+    _cfg = make_data(levels_mem([1]))
+    scale = _cfg.level_reward_scale
+    thr = _cfg.level_reward_threshold
+    div = _cfg.level_reward_post_threshold_divisor
+
+    # One level-up below threshold: full scale.
     prev = levels_mem([5])
     curr = levels_mem([6])
     data = make_data(curr)
     r = data.reward_party_levels(bytes(prev))
-    print(f"LEVEL 5->6 (sum=6 <=22): r={r}")
-    assert abs(r - 0.5) < 1e-6
+    print(f"LEVEL 5->6 (sum=6 <= {thr}): r={r}")
+    assert abs(r - scale) < 1e-6
 
-    # Crossing threshold: first level at/under full, next /4
-    # sum 21->23 = two level-ups: 22 gets 0.5, 23 gets 0.125
-    prev = levels_mem([21])
-    curr = levels_mem([23])
+    # Crossing the threshold: the level landing exactly on thr is still
+    # full, the next one is /div.
+    prev = levels_mem([thr - 1])
+    curr = levels_mem([thr + 1])
     data = make_data(curr)
     r = data.reward_party_levels(bytes(prev))
-    print(f"LEVEL sum 21->23: r={r} (expect 0.5+0.125=0.625)")
-    assert abs(r - 0.625) < 1e-6
+    expect = scale + scale / div
+    print(f"LEVEL sum {thr - 1}->{thr + 1}: r={r} (expect {expect})")
+    assert abs(r - expect) < 1e-6
 
-    # Well above threshold
-    prev = levels_mem([30])
-    curr = levels_mem([31])
+    # Well above threshold: /div.
+    prev = levels_mem([thr + 9])
+    curr = levels_mem([thr + 10])
     data = make_data(curr)
     r = data.reward_party_levels(bytes(prev))
-    print(f"LEVEL sum 30->31: r={r} (expect 0.125)")
-    assert abs(r - 0.125) < 1e-6
+    print(f"LEVEL sum {thr + 9}->{thr + 10}: r={r} (expect {scale / div})")
+    assert abs(r - scale / div) < 1e-6
 
     print("LEVEL_SOFT_CAP_OK=True")
     print()
@@ -283,7 +293,7 @@ def try_live_outcomes() -> None:
     pmax = max(test_party)
     assert force(max(1, pmax - 1), 2, "COWARD") == -1.0
     assert force(pmax + 5, 2, "SMART") == 0.4
-    assert force(pmax, 0, "WIN") == 2.0
+    assert force(pmax, 0, "WIN") == 1.2
     assert force(pmax, 1, "LOSE") == -1.0
     print("PYBOY_FORCED_OK=True")
     pyboy.stop(save=False)
@@ -293,8 +303,8 @@ def try_live_outcomes() -> None:
 def run_enemy_level_cache_case() -> None:
     """A hit landing on a frame where wEnemyMonLevel misreads 0 must still
 
-    be scaled using the level last seen this battle, not fall through to
-    the floor as if the fight were unreadable/unknown.
+    resolve to the level last seen this battle, not fall through to the
+    bad-read fallback as if the fight were unreadable/unknown.
     """
     print("=== ENEMY LEVEL CACHE (bad-frame fallback) ===")
     ADDR_ENEMY_HP = 0xCFE6

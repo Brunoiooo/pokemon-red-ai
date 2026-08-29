@@ -26,7 +26,13 @@ from curriculum_config import (
     get_stage_max_steps,
     stage_for_goal,
 )
-from pokemon.Data import BADGE_GOALS, REWARD_COMPONENT_NAMES, REWARD_MODE_NAMES, Data
+from pokemon.Data import (
+    BADGE_GOALS,
+    GOAL_CANDIDATES,
+    REWARD_COMPONENT_NAMES,
+    REWARD_MODE_NAMES,
+    Data,
+)
 from pokemon.Emulator import N_ACTIONS, Emulator
 
 # Flattened float feature groups from Data.inputs() (excluding images / raw ids).
@@ -668,6 +674,18 @@ class PokemonRedEnv(gym.Env):
             "loop_causes": sorted(self._episode_loop_causes | data.loop_causes),
             "milestone": data.current_milestone(),
             "milestones_hit": sorted(data._milestones_hit),
+            # GOAL_CANDIDATES already satisfied by the resume checkpoint this
+            # episode loaded from (see Data._episode_start_milestones), and
+            # the ones newly cleared *this step* (last_milestone_payouts,
+            # filtered to real goals — it also carries HEALED_AT_* pseudo
+            # milestones). MilestoneCallback uses these to score each goal's
+            # rolling success window only over episodes that actually started
+            # before that goal, crediting a 1/0 for reached/not-reached
+            # instead of a permanent 1 the first time it ever landed.
+            "milestones_at_start": sorted(data._episode_start_milestones),
+            "milestones_newly_hit": [
+                n for n, _ in data.last_milestone_payouts if n in GOAL_CANDIDATES
+            ],
             "goals_live": live_goals,
             "goals_live_count": len(live_goals),
             "goals_peak_count": self._goals_peak_count,

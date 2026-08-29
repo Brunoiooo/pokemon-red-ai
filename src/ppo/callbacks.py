@@ -303,20 +303,31 @@ class MilestoneCallback(BaseCallback):
         # letting a de facto exploration order emerge from what it's
         # actually learned rather than a fixed sequence.
         self._goal_hit_counts: Counter[str] = Counter()
-        # Per-goal rolling window (maxlen=self.window, same width as the
-        # global trigger window self._successes below) of 1/0 success. The
-        # active self.stage gets a real 1/0 entry at each episode's
-        # completion (whole-episode success/fail); every OTHER goal actually
-        # cleared during that same episode (order-free chaining -- see
-        # _ep_milestones) also gets a 1 appended to its own window, since a
-        # goal being hit is unambiguous positive evidence for that goal
-        # specifically, not just whichever goal happened to be self.stage
-        # (see GOAL_SUCCESS_STATS_PATH). Feeds curriculum_config.
-        # pick_next_goal_by_success_rate in _try_reassign: unlike
-        # _goal_hit_counts above (any goal touched, cumulative forever),
-        # this measures how often *recent* episodes went on to succeed at
-        # each goal -- i.e. that goal's own current success rate, not a
-        # lifetime average.
+        # Per-goal rolling window (maxlen=self.window) of 1/0 outcomes. Per
+        # completed episode:
+        #   * append a 1 for every goal actually cleared this episode
+        #     (info["milestones_newly_hit"]) -- positive evidence wherever it
+        #     lands, including a goal cleared only as a stepping stone;
+        #   * append a single 0 for the active stage goal iff the episode did
+        #     not already have it from its resume checkpoint
+        #     (info["milestones_at_start"]) and did not clear it.
+        # Nothing else gets a 0. Earlier attempts to also 0 out every goal
+        # "downstream of the checkpoint" mispunished reliably-cleared goals:
+        # STAGE_ORDER is only a rough story proxy (see curriculum_config), so
+        # a leg drilling an early checkpoint is not a failed attempt at
+        # everything nominally after it.
+        #
+        # An even earlier scheme appended a 1 for every *satisfied* goal and
+        # never a 0, so a goal baked into the resume checkpoint sat at 100%
+        # forever.
+        #
+        # Feeds curriculum_config.pick_next_goal_by_success_rate in
+        # _try_reassign, restricted to goals with at least
+        # GOAL_SUCCESS_MIN_ATTEMPTS entries so a sparsely-attempted goal
+        # falls back to the "untried" bucket instead of a noisy ratio.
+        # Persisted (schema v2) in GOAL_SUCCESS_STATS_PATH; a legacy
+        # (unversioned) file is discarded on load, since its 1s are the old
+        # broken semantics and indistinguishable from real ones.
         self._goal_success_windows: dict[str, deque[int]] = {}
         # Every map_id any episode has touched this run, whole-run cumulative
         # like _goal_hit_counts. No longer fed into pick_new_goal (see its
@@ -333,6 +344,12 @@ class MilestoneCallback(BaseCallback):
         self._ep_loop = None
         self._ep_loop_causes = None
         self._ep_milestones = None
+        # Goals newly cleared during the current episode (from
+        # info["milestones_newly_hit"]) and the goals already satisfied at
+        # its start (from info["milestones_at_start"], captured once on the
+        # episode's first step) -- see _goal_success_windows.
+        self._ep_newly_hit = None
+        self._ep_milestones_at_start = None
         self._ep_goal_hit = None
         self._ep_regressed = None
         self._ep_goals_peak = None
@@ -344,6 +361,8 @@ class MilestoneCallback(BaseCallback):
         self._ep_loop = [False] * n
         self._ep_loop_causes = [set() for _ in range(n)]
         self._ep_milestones = [set() for _ in range(n)]
+        self._ep_newly_hit = [set() for _ in range(n)]
+        self._ep_milestones_at_start = [None] * n
         self._ep_goal_hit = [False] * n
         self._ep_regressed = [False] * n
         self._ep_goals_peak = [0] * n
@@ -392,7 +411,12 @@ class MilestoneCallback(BaseCallback):
         -- same resume story as _load_goal_hit_counts. Each list is
         truncated to the most recent ``self.window`` entries (oldest first)
         so a resume with a smaller --window doesn't keep dragging in more
-        history than the deque can even hold."""
+        history than the deque can even hold.
+
+        Only schema-v2 files are honoured. A legacy (unversioned) file is
+        silently discarded: its entries were written by the old
+        append-a-1-for-every-satisfied-goal logic and can't be told apart
+        from real outcomes (see _goal_success_windows)."""
         if not GOAL_SUCCESS_STATS_PATH.is_file():
             return
         try:
@@ -400,15 +424,25 @@ class MilestoneCallback(BaseCallback):
                 data = json.load(f)
         except (OSError, ValueError):
             return
+        if not (isinstance(data, dict) and data.get("schema") == 2):
+            print(
+                f"MilestoneCallback: ignoring legacy {GOAL_SUCCESS_STATS_PATH} "
+                f"(pre-v2 goal success stats); starting fresh."
+            )
+            return
+        windows = data.get("windows", {})
         self._goal_success_windows = {
             g: deque((int(x) for x in outcomes[-self.window :]), maxlen=self.window)
-            for g, outcomes in data.items()
+            for g, outcomes in windows.items()
         }
 
     def _save_goal_success_stats(self) -> None:
         GOAL_SUCCESS_STATS_PATH.parent.mkdir(parents=True, exist_ok=True)
         tmp = GOAL_SUCCESS_STATS_PATH.with_suffix(".json.tmp")
-        data = {g: list(dq) for g, dq in self._goal_success_windows.items()}
+        data = {
+            "schema": 2,
+            "windows": {g: list(dq) for g, dq in self._goal_success_windows.items()},
+        }
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, sort_keys=True)
         os.replace(tmp, GOAL_SUCCESS_STATS_PATH)
@@ -578,6 +612,14 @@ class MilestoneCallback(BaseCallback):
             cur = info.get("milestone")
             if cur and cur != "start":
                 self._ep_milestones[i].add(cur)
+            # Freeze the checkpoint's already-done goals on the first step
+            # seen this episode; accumulate the ones newly cleared since.
+            if self._ep_milestones_at_start[i] is None:
+                self._ep_milestones_at_start[i] = frozenset(
+                    info.get("milestones_at_start") or ()
+                )
+            for m in info.get("milestones_newly_hit", []) or []:
+                self._ep_newly_hit[i].add(m)
 
             done = bool(dones[i]) if i < len(dones) else False
             cleared_stage = info.get("cleared_stage")
@@ -642,24 +684,30 @@ class MilestoneCallback(BaseCallback):
                     or info.get("terminated", False)
                 )
                 self._successes.append(1 if success else 0)
-                self._goal_success_windows.setdefault(
-                    self.stage, deque(maxlen=self.window)
-                ).append(1 if success else 0)
-                # Every OTHER goal actually cleared this episode (order-free
-                # chaining -- see _ep_milestones) is unambiguous positive
-                # evidence for that goal specifically, not just self.stage.
-                # Without this, a goal only ever accumulated windowed success
-                # data while it happened to be the globally-active
-                # self.stage, so goals the policy clears constantly as a
-                # stepping stone toward something harder stayed stuck at
-                # "untried" in pick_next_goal_by_success_rate forever even
-                # though the policy was demonstrably mastering them.
-                for name in self._ep_milestones[i]:
-                    if name == self.stage:
-                        continue
+                # Per-goal rolling success window (see _goal_success_windows):
+                #  * a 1 for every goal actually cleared this episode --
+                #    positive evidence wherever it happens (incl. as a
+                #    stepping stone toward a harder target);
+                #  * a single 0 for the *active stage goal* when the episode
+                #    had a real shot at it (did not already have it from the
+                #    resume checkpoint) and missed.
+                # A goal the episode merely started before but was NOT aiming
+                # at is deliberately NOT scored 0 -- STAGE_ORDER is only a
+                # rough story proxy (see curriculum_config), so "downstream
+                # of the checkpoint" says nothing about whether this episode
+                # was even trying for it. That over-broad 0 is what pinned a
+                # reliably-cleared early goal (e.g. EVENT_GOT_OAKS_PARCEL) at
+                # a low %.
+                start_set = self._ep_milestones_at_start[i] or frozenset()
+                newly = self._ep_newly_hit[i]
+                for name in newly:
                     self._goal_success_windows.setdefault(
                         name, deque(maxlen=self.window)
                     ).append(1)
+                if self.stage not in newly and self.stage not in start_set:
+                    self._goal_success_windows.setdefault(
+                        self.stage, deque(maxlen=self.window)
+                    ).append(0)
                 self._badges.append(int(info.get("badges", 0) or 0))
                 self._goals_live.append(live)
                 self._goals_peak.append(self._ep_goals_peak[i])
@@ -670,10 +718,16 @@ class MilestoneCallback(BaseCallback):
                     window.append(self._ep_reward_component_sums[i].get(name, 0.0))
                 for name, window in self._reward_mode_windows.items():
                     window.append(self._ep_reward_mode_sums[i].get(name, 0.0))
-                for name in self._ep_milestones[i]:
-                    self._goal_hit_counts[name] += 1
-                    from curriculum_config import stage_index
+                from curriculum_config import stage_index
 
+                # Cumulative "practiced" hits -- only goals actually cleared
+                # this episode, not ones the checkpoint already had done.
+                for name in self._ep_newly_hit[i]:
+                    self._goal_hit_counts[name] += 1
+                # Furthest point ever reached (incl. via a resume checkpoint)
+                # -- a pure TensorBoard gauge, so the full satisfied set is
+                # the right input here.
+                for name in self._ep_milestones[i]:
                     idx = stage_index(name)
                     if idx > self._best_stage_idx_ever:
                         self._best_stage_idx_ever = idx
@@ -698,6 +752,8 @@ class MilestoneCallback(BaseCallback):
                 self._ep_loop[i] = False
                 self._ep_loop_causes[i] = set()
                 self._ep_milestones[i] = set()
+                self._ep_newly_hit[i] = set()
+                self._ep_milestones_at_start[i] = None
                 self._ep_goal_hit[i] = False
                 self._ep_regressed[i] = False
                 self._ep_goals_peak[i] = 0

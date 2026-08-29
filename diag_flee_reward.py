@@ -137,7 +137,7 @@ def run_mock_cases() -> None:
     data = make_data(curr)
     flee = data.reward_battle_flee(bytes(prev))
     print(f"WIN exit (CF0B=0): exit={flee} (expect battle_won={data.battle_won_reward})")
-    assert flee == data.battle_won_reward == 2.0
+    assert flee == data.battle_won_reward == 1.2
 
     # Still in battle: no exit
     prev = build_prev(in_battle=True, enemy_level=5, party_levels=[8])

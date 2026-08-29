@@ -89,21 +89,23 @@ def _load_goal_hit_counts() -> dict[str, int]:
 
 def _load_goal_success_stats() -> dict[str, tuple[int, int]]:
     """Per-goal rolling success window (most recent up to
-    MilestoneCallback.window resume-attempts, as a list of 1/0) written by
-    MilestoneCallback while that goal was the active base/resume checkpoint
-    (see GOAL_SUCCESS_STATS_PATH) -- distinct from _load_goal_hit_counts's
-    "hits" (any goal touched by an episode, regardless of what was
-    assigned). Returns (attempts, successes) per goal, i.e. (window length,
-    window sum) -- NOT a lifetime total, just whatever's in the current
-    window. Empty if training hasn't run / hasn't persisted a snapshot yet."""
+    MilestoneCallback.window episodes that started before the goal, as a
+    list of 1/0 reached/not-reached) written by MilestoneCallback (see
+    GOAL_SUCCESS_STATS_PATH) -- distinct from _load_goal_hit_counts's "hits"
+    (any goal touched by an episode). Returns (attempts, successes) per goal,
+    i.e. (window length, window sum) -- NOT a lifetime total, just whatever's
+    in the current window. Empty if training hasn't run / hasn't persisted a
+    schema-v2 snapshot yet (a legacy unversioned file is ignored)."""
     if not GOAL_SUCCESS_STATS_PATH.is_file():
         return {}
     try:
         with open(GOAL_SUCCESS_STATS_PATH, encoding="utf-8") as f:
             data = json.load(f)
-        return {k: (len(v), sum(v)) for k, v in data.items()}
     except (OSError, ValueError):
         return {}
+    if not (isinstance(data, dict) and data.get("schema") == 2):
+        return {}
+    return {k: (len(v), sum(v)) for k, v in data.get("windows", {}).items()}
 
 
 def list_stages() -> None:

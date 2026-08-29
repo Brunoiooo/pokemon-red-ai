@@ -212,9 +212,16 @@ class Data:
         default=0.2, metadata={"cli": True, "help": "Meso reward for cleanly exiting a fresh dialog"}
     )
     # Battle exit (wBattleResult @ RAM.wBattleResult): 0=win, 1=lose, 2=fled.
-    # Win is mezzo (same scale as event); macro progress stays on event/badge.
+    # Win is mezzo (macro progress stays on event/badge). Kept BELOW
+    # event_reward (2.0) on purpose: at 2.0 a single repeatable wild kill on a
+    # fresh tile paid as much as a one-shot story event, so the agent learned
+    # to fill every episode with grass battles and stopped progressing
+    # (badges_mean flat at 0 across ~8.5M steps, best curriculum stage
+    # regressed). 1.2, further cut by _battle_difficulty_scale and the
+    # per-tile wild decay, keeps a fair fight worthwhile without making
+    # farming the dominant strategy.
     battle_won_reward: float = field(
-        default=2.0, metadata={"cli": True, "help": "Reward for winning a battle"}
+        default=1.2, metadata={"cli": True, "help": "Reward for winning a battle"}
     )
     # No penalty for losing a battle — a negative penalty here was making the
     # agent risk-averse enough to actively avoid fights (and exploit episode
@@ -222,32 +229,32 @@ class Data:
     battle_lost_penalty: float = field(
         default=0.0, metadata={"cli": True, "help": "Penalty for losing a battle (0 = disabled)"}
     )
-    # battle_won_reward and per-hit enemy-HP reward are both scaled by a
-    # smoothstep (3r^2-2r^3, r=enemy_lv/active_player_lv clamped to [0,1]) so
-    # stomping a far weaker wild Pokemon is no longer free farming (e.g.
-    # lvl-10 one-shotting a lvl-2 Pidgey paid the same +2 win bonus and +1.0
-    # HP-fraction hit as a genuinely hard fight). Smoothstep is 0 at r=0, 1 at
-    # r=1, with zero slope at both ends. See _battle_difficulty_scale.
+    # battle_won_reward and per-hit enemy-HP reward are both scaled by
+    # _battle_difficulty_scale (see its docstring). This scale was briefly
+    # removed entirely to fix an under-training symptom, but that let wild
+    # farming become the dominant strategy -- it is back, gentler than the
+    # old smoothstep: max(battle_difficulty_scale_floor, sqrt(enemy_lv /
+    # active_lv)), clamped to 1.0. A fair fight for the mon that actually
+    # fought pays full credit; a curbstomp (lvl-10 vs lvl-2) pays the floor.
+    #
+    # invalid_fallback: sits BELOW the floor -- an unreadable level (<=0) is a
+    # bad-read anti-exploit guard, not a real difficulty reading, and must
+    # never silently grant floor-level (or full) credit.
     battle_difficulty_invalid_fallback: float = field(
         default=0.05,
         metadata={"cli": True, "help": "Difficulty-scale fallback when a level read is bad"},
     )
-    # Floor on the smoothstep above (max(floor, smoothstep(...))) — without
-    # it, a big enough level gap scaled reward_enemy_hp/battle_won_reward
-    # toward 0 while battle_useless_step's per-tick waste cost (never scaled
-    # by anything battle-related) stayed full price, so a clean win against
-    # a sufficiently weak wild Pokemon could net negative overall. Same
-    # breakeven-point reasoning as wild_encounter_decay_floor (see its own
-    # docstring) and reuses its value — a win always clears the per-tick
-    # waste cost with margin, however lopsided the level gap, while staying
-    # far enough below 1.0 that farming a trivial fight on purpose is still
-    # clearly worse than a fair one. Deliberately NOT applied to
-    # battle_difficulty_invalid_fallback above — that path is a bad-read
-    # anti-exploit guard, not a real difficulty reading, and must stay able
-    # to sit below this floor.
+    # Floor on _battle_difficulty_scale's sqrt curve (max(floor, sqrt(r))) so
+    # even the most lopsided winnable fight still clears battle_useless_step's
+    # per-tick waste cost (never scaled by anything battle-related) with
+    # margin -- without a floor a big enough level gap could net a clean win
+    # negative. 0.4 (up from the old 0.15 under the steeper smoothstep) keeps
+    # deliberate pre-gym grinding of a fair matchup clearly ahead of the step
+    # cost, while a pure curbstomp still pays well under half. NOT applied to
+    # battle_difficulty_invalid_fallback above.
     battle_difficulty_scale_floor: float = field(
-        default=0.15,
-        metadata={"cli": True, "help": "Floor on the win/enemy-HP battle-difficulty smoothstep"},
+        default=0.4,
+        metadata={"cli": True, "help": "Floor on the win/enemy-HP battle-difficulty scale"},
     )
     # Successful RUN: compare enemy vs max party level so a lvl-1 sacrificial
     # slot cannot fake a "smart flee" while stronger Pokémon sit in the back.
@@ -258,13 +265,28 @@ class Data:
         default=-1.0, metadata={"cli": True, "help": "Penalty for fleeing a beatable enemy"}
     )
     # Soft-capped party level-ups (Pleines/Whidden): full credit until sum of
-    # party levels hits the threshold (~Misty-ready), then /4 to curb grinding.
+    # party levels hits the threshold, then /divisor to curb grinding.
+    # Bumped 0.5 -> 1.0 and the threshold 22 -> 28 so that deliberately
+    # training a starter into Brock/Misty range is clearly worth more than
+    # the step penalty of the wild fights it takes (the reported
+    # under-training symptom).
     level_reward_scale: float = field(
-        default=0.5, metadata={"cli": True, "help": "Reward scale per party level-up"}
+        default=1.0, metadata={"cli": True, "help": "Reward scale per party level-up"}
     )
     level_reward_threshold: int = field(
-        default=22,
+        default=28,
         metadata={"cli": True, "help": "Sum-of-party-levels threshold before level reward soft-caps"},
+    )
+    # Per-XP reward (reward_player_pokemons_experiences) = XP gained this step
+    # / this divisor -- the continuous "you are training" signal between
+    # discrete level-ups. Was a hard-coded / 0xFFFFFF (16.7M), which made it
+    # ~3e-6 per wild kill: totally drowned by base_reward. At 3000 the whole
+    # climb to ~L14 pays ~0.6 and a single wild kill pays ~0.02, comfortably
+    # above the step cost of the fight. Same past-threshold soft-cap as
+    # reward_party_levels so deep late grinding still doesn't dominate.
+    exp_reward_divisor: float = field(
+        default=3000.0,
+        metadata={"cli": True, "help": "XP gained per step is divided by this for the training reward"},
     )
     new_pokedex_seen_reward: float = field(
         default=0.5, metadata={"cli": True, "help": "Reward for a new Pokedex 'seen' entry"}
@@ -328,9 +350,13 @@ class Data:
     # Set well above new_position_decay_visits (4) — position_visit_counts
     # climbs from ordinary foot traffic (not just fights), so a threshold
     # this low would zero out wild rewards on any well-trodden route tile
-    # before the agent ever got its first fight there.
+    # before the agent ever got its first fight there. 4 was too tight (a
+    # legit grind session hit the floor almost immediately); 16 was too loose
+    # (farming one patch stayed net-positive long enough to become the
+    # dominant strategy -- badges regressed to 0). 8 is the compromise: room
+    # for a real grind, but repetition stops paying well within one episode.
     wild_visit_decay_visits: int = field(
-        default=4, metadata={"cli": True, "help": "Visits until wild-battle reward decay bottoms out"}
+        default=8, metadata={"cli": True, "help": "Visits until wild-battle reward decay bottoms out"}
     )
     # Floor for _wild_encounter_decay -- decaying all the way to 0 made every
     # wild-battle reward/cost on a tile past wild_visit_decay_visits net to
@@ -341,13 +367,13 @@ class Data:
     # footprint (spatial-loop behavior) -- tiles decay past this threshold
     # fast, so most of the agent's wild-encounter exposure ends up here,
     # teaching blanket combat avoidance instead of just curbing farming.
-    # 0.15 clears the breakeven point (waste_cost / undecayed_reward_sum,
-    # ~0.056 for a representative fair fight) with margin, while staying far
-    # enough below 1.0 that grinding a stale tile on purpose is still clearly
-    # worse than a fresh fight or fresh exploration -- farming stays
-    # unrewarding, it just stops being punished.
+    # 0.15 cleared the breakeven point but left a heavily-farmed tile's
+    # fights barely worth engaging; 0.35 overshot -- a well-worn tile still
+    # paid enough that farming beat progressing. 0.2 sits just above breakeven
+    # so a stale tile's fights are ~neutral (not punished, not worth
+    # repeating), while a fresh tile / fresh fight is always clearly better.
     wild_encounter_decay_floor: float = field(
-        default=0.15, metadata={"cli": True, "help": "Floor on wild-battle reward decay"}
+        default=0.2, metadata={"cli": True, "help": "Floor on wild-battle reward decay"}
     )
     # Brought down from -0.08/-0.10 (previously "stronger than before" per
     # the comment above -- tried against the same ~1.0 loop_episode_rate
@@ -677,6 +703,13 @@ class Data:
     # Paid-this-episode set for reward_generic_progress — every GOAL_CANDIDATES
     # event/badge pays out at most once per episode.
     _milestones_hit: set[str] = field(default_factory=set)
+    # GOAL_CANDIDATES already satisfied at episode start (i.e. baked into the
+    # resume checkpoint this episode loaded from). Frozen at clean(); exposed
+    # via env info as "milestones_at_start" so MilestoneCallback's per-goal
+    # success window only scores goals the episode actually started *before*
+    # -- a goal pre-satisfied by the checkpoint is neither a success nor a
+    # failure for this episode and must not be counted either way.
+    _episode_start_milestones: frozenset[str] = field(default_factory=frozenset)
     # Snapshot of GOAL_CANDIDATES satisfied last step, for the regression
     # diff in reward_generic_progress.
     _prev_satisfied_events: frozenset[str] = field(default_factory=frozenset)
@@ -901,6 +934,8 @@ class Data:
         # lands (same reasoning as _saw_oaks_parcel_in_bag just below).
         self._milestones_hit = {n for n in GOAL_CANDIDATES if self.is_goal_satisfied(n)}
         self._prev_satisfied_events = frozenset(self._milestones_hit)
+        # What the resume checkpoint already had done — see the field comment.
+        self._episode_start_milestones = frozenset(self._milestones_hit)
         self._compass_near_counts = {}
         self._compass_excluded = set()
         self.last_milestone_payouts = []
@@ -2127,34 +2162,24 @@ class Data:
     def reward_player_pokemons_current_hps(self, memory: bytes):
         """Fractional HP change this step, summed over the party.
 
-        Damage *taken* while in battle is scaled by ``_battle_difficulty_scale``
-        (enemy_lv vs active_lv), the same discount ``reward_enemy_hp``/
-        ``battle_won_reward`` already apply to damage *dealt* -- getting hit
-        by a same-level opponent pays full cost, but eating a big hit from
-        something far weaker (a bad roll on an otherwise easy, winnable
-        fight) no longer nearly cancels out the eventual win reward. Wild
-        battles further decay this cost by ``_wild_encounter_decay`` (same
-        per-tile repeat-visit decay as every other wild-battle reward
+        Damage *taken* in a wild battle is decayed by ``_wild_encounter_decay``
+        (same per-tile repeat-visit decay as every other wild-battle reward
         component, see its docstring) -- once a tile's win/HP-dealt rewards
-        have decayed to ~0 from repetition, the HP-taken cost decays with
-        them instead of staying full price forever, so a heavily-farmed
-        tile's battles trend toward ~0 net, not net-negative. Trainer
-        battles are exempt (one-shot per sprite, same as everywhere else
-        this decay applies). Healing (positive delta) and any HP change
-        outside battle (poison ticks, centre heals -- already separately
-        gated by _just_blacked_out in reward_core) are left at full,
-        undiscounted magnitude.
+        have decayed from repetition, the HP-taken cost decays with them
+        instead of staying full price forever, so a heavily-farmed tile's
+        battles trend toward ~0 net, not net-negative. Trainer battles are
+        exempt (one-shot per sprite, same as everywhere else this decay
+        applies). Damage taken is NOT scaled by ``_battle_difficulty_scale``
+        (only damage dealt / the win bonus are) -- eating a hit always costs
+        full fractional HP, which is itself mild anti-farm pressure. Healing
+        (positive delta) and any HP change outside battle (poison ticks,
+        centre heals
+        -- already separately gated by _just_blacked_out in reward_core) are
+        left at full, undiscounted magnitude.
         """
         reward = 0.0
         in_battle = self.is_battle(self.pyboy.memory)
-        scale = 1.0
-        wild = False
-        if in_battle:
-            scale = self._battle_difficulty_scale(
-                self.enemy_level(self.pyboy.memory),
-                self.pokemon_level(self.pyboy.memory),
-            )
-            wild = self.type_of_battle(self.pyboy.memory) == 1
+        wild = in_battle and self.type_of_battle(self.pyboy.memory) == 1
 
         for id_x, id_y, hp_x, hp_y, max_hp in zip(
             self.player_pokemons_ids(memory),
@@ -2165,10 +2190,8 @@ class Data:
         ):
             if id_x == id_y and id_x != 0:
                 delta = (hp_y - hp_x) / max_hp
-                if in_battle and delta < 0:
-                    delta *= scale
-                    if wild:
-                        delta *= self._wild_encounter_decay()
+                if wild and delta < 0:
+                    delta *= self._wild_encounter_decay()
                 reward += delta
 
         return reward
@@ -2193,6 +2216,13 @@ class Data:
         return reward
 
     def reward_player_pokemons_experiences(self, memory: bytes):
+        """Continuous "you are training" reward: XP gained this step over the
+        party, divided by ``exp_reward_divisor``. Past
+        ``level_reward_threshold`` (sum of party levels) it takes the same
+        ``level_reward_post_threshold_divisor`` soft-cap as
+        ``reward_party_levels`` so deep late grinding does not dominate
+        events/badges (without a cap, each successive level pays *more* here,
+        since XP-to-next-level keeps growing)."""
         reward = 0.0
 
         for id_x, id_y, experience_x, experience_y in zip(
@@ -2202,7 +2232,14 @@ class Data:
             self.player_pokemons_experiences(self.pyboy.memory),
         ):
             if id_x == id_y and id_x != 0:
-                reward += (experience_y - experience_x) / 0xFFFFFF
+                reward += (experience_y - experience_x) / self.exp_reward_divisor
+
+        if reward > 0:
+            party_sum = sum(
+                lv for lv in self.all_party_levels(self.pyboy.memory) if lv > 0
+            )
+            if party_sum > self.level_reward_threshold:
+                reward /= self.level_reward_post_threshold_divisor
 
         return reward
 
@@ -3788,30 +3825,26 @@ class Data:
         return max(levels) if levels else 0
 
     def _battle_difficulty_scale(self, enemy_lv: int, player_lv: int) -> float:
-        """max(battle_difficulty_scale_floor, smoothstep(enemy_lv / player_lv))
-        — a same-or-tougher opponent (ratio >= 1) pays full credit; below
-        that the reward eases down smoothly toward the floor as the level
-        gap grows, instead of a hard linear ramp or decaying all the way to
-        0. 3r^2-2r^3 has zero slope at both r=0 and r=1, so there is no kink
-        anywhere, including the seam into the ratio>=1 cap=1.0 branch.
+        """Battle-reward multiplier: ``max(battle_difficulty_scale_floor,
+        sqrt(enemy_lv / player_lv))``, clamped to 1.0.
 
-        Floored (not left to decay to 0) so a clean win against a far
-        weaker wild Pokemon can't net negative once battle_useless_step's
-        per-tick waste cost (never discounted by this scale) is netted
-        against it — see battle_difficulty_scale_floor's own docstring for
-        the reasoning, identical to wild_encounter_decay_floor's.
+        A same-or-tougher opponent (ratio >= 1) pays full credit; below that
+        the reward eases down toward the floor. sqrt is gentler than the old
+        3r^2-2r^3 smoothstep -- a fight against something ~half your level
+        still pays ~0.7, not ~0.5 -- because the steeper curve suppressed
+        legit pre-gym training (under-levelling into a gym leader was the
+        reported symptom), while removing the scale entirely swung the other
+        way and made wild farming the dominant strategy. The floor keeps even
+        a lopsided curbstomp above battle_useless_step's per-tick waste cost.
 
-        Unreadable/invalid levels (<=0) fall back to a small constant below
-        this floor, not 1.0 — this is an anti-farming discount, so a bad
-        read must never silently grant full (or even floor-level) credit
-        (that's exactly the failure mode that let the exploit through
-        undetected).
+        Unreadable/invalid levels (<=0) fall back to
+        ``battle_difficulty_invalid_fallback`` (below the floor, not 1.0) so a
+        misread frame can never silently grant full win / enemy-HP credit.
         """
         if player_lv <= 0 or enemy_lv <= 0:
             return self.battle_difficulty_invalid_fallback
         r = min(1.0, enemy_lv / player_lv)
-        smoothstep = 3 * r**2 - 2 * r**3
-        return max(self.battle_difficulty_scale_floor, smoothstep)
+        return max(self.battle_difficulty_scale_floor, r**0.5)
 
     def _wild_encounter_decay(self) -> float:
         """Per-tile decay factor for wild-battle rewards, keyed off ordinary
@@ -3891,13 +3924,13 @@ class Data:
             reward = self.battle_lost_penalty
             kind = "blackout"
         elif result == 0:
-            # The active battler's level, not party_max — a weaker party
-            # member fighting an appropriately-matched wild Pokemon (i.e.
-            # deliberately leveling it) is a fair fight and should pay full
-            # credit; only a curbstomp *for the mon that actually fought*
-            # (e.g. lvl-10 one-shotting a lvl-2) gets discounted. party_max
-            # is reserved for the flee smart/coward check above, where the
-            # question is whole-team risk, not this fight's difficulty.
+            # Scaled by the level gap for the mon that actually fought
+            # (active_lv, not party_max -- a weaker bench mon deliberately
+            # leveling against a matched wild is a fair fight and pays full;
+            # only a curbstomp for the battler itself gets discounted, down
+            # to battle_difficulty_scale_floor). party_max stays reserved for
+            # the flee smart/coward check above (whole-team risk, not this
+            # fight's difficulty). Invalid levels -> the bad-read guard.
             difficulty_scale = self._battle_difficulty_scale(enemy_lv, active_lv)
             reward = self.battle_won_reward * difficulty_scale
             kind = "win"
@@ -3984,9 +4017,10 @@ class Data:
     def reward_enemy_hp(self, memory: bytes):
         """Fractional enemy HP lost this step (positive when dealing damage).
 
-        Scaled by ``_battle_difficulty_scale`` — one-shotting a far weaker
-        wild Pokemon still costs its full HP bar, but no longer pays the
-        full fractional reward every time (see ``battle_won_reward``).
+        Scaled by ``_battle_difficulty_scale`` -- one-shotting a far weaker
+        wild Pokemon still costs it its full HP bar but pays only the floor
+        fraction of the reward; wild fights additionally decay per repeat
+        visit via ``_wild_encounter_decay``.
         """
         if (
             self.enemy_max_hp(self.pyboy.memory) == 0

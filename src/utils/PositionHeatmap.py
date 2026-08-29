@@ -1384,7 +1384,12 @@ def _run_window(q: "Queue", window_frames: int, title: str) -> None:
         if stats_mtime is not None:
             try:
                 with open(goal_success_stats_path, encoding="utf-8") as f:
-                    stats = json.load(f)
+                    raw = json.load(f)
+                # schema v2: {"schema": 2, "windows": {goal: [1/0, ...]}}.
+                # A legacy (unversioned) file is ignored -- its numbers were
+                # the old broken "100% forever" semantics.
+                if isinstance(raw, dict) and raw.get("schema") == 2:
+                    stats = raw.get("windows", {})
             except (OSError, ValueError):
                 stats = {}
         _goal_panel_state["mtime"] = combined_mtime
