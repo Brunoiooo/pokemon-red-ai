@@ -266,15 +266,24 @@ class Data:
     )
     # Soft-capped party level-ups (Pleines/Whidden): full credit until sum of
     # party levels hits the threshold, then /divisor to curb grinding.
-    # Bumped 0.5 -> 1.0 and the threshold 22 -> 28 so that deliberately
-    # training a starter into Brock/Misty range is clearly worth more than
-    # the step penalty of the wild fights it takes (the reported
-    # under-training symptom).
+    # History: 0.5 -> 1.0 and threshold 22 -> 28 to make deliberately training
+    # a starter into Brock/Misty range worth more than the step cost of the
+    # wild fights it takes. That still under-trained: the cap is on the *sum*
+    # of party levels, so catching 3-4 mons on Route 2/3/Mt Moon pushes the
+    # sum past 28 at avg level ~7-8 -- exactly when the party still needs
+    # ~L12-14 for Brock -- and every level-up past there pays only /4. Scale
+    # 1.0 -> 1.8 and threshold 28 -> 44 (a 4-mon party still gets full credit
+    # to avg L11) so a full pre-gym party can be trained to gym-ready without
+    # the soft-cap biting first. This is the safe lever: a level-up is
+    # rate-limited by the XP curve and cannot be re-triggered by pacing a
+    # grass tile, unlike battle_won_reward / reward_enemy_hp (see
+    # battle_reward_overshoot -- buffing those swung into wild farming and
+    # badges regressed to 0).
     level_reward_scale: float = field(
-        default=1.0, metadata={"cli": True, "help": "Reward scale per party level-up"}
+        default=1.8, metadata={"cli": True, "help": "Reward scale per party level-up"}
     )
     level_reward_threshold: int = field(
-        default=28,
+        default=44,
         metadata={"cli": True, "help": "Sum-of-party-levels threshold before level reward soft-caps"},
     )
     # Per-XP reward (reward_player_pokemons_experiences) = XP gained this step
@@ -353,10 +362,14 @@ class Data:
     # before the agent ever got its first fight there. 4 was too tight (a
     # legit grind session hit the floor almost immediately); 16 was too loose
     # (farming one patch stayed net-positive long enough to become the
-    # dominant strategy -- badges regressed to 0). 8 is the compromise: room
-    # for a real grind, but repetition stops paying well within one episode.
+    # dominant strategy -- badges regressed to 0). 8 was the compromise, but
+    # combined with the old map_truncate_budget_floor/wild_win_budget_credit
+    # (see those) it still cut deliberate pre-gym grinding sessions short of
+    # a useful average level -- 12 gives a longer grind room before the
+    # decay bites, now that map_truncate_budget/wild_win_budget_credit give
+    # that grind actual time to run (see their own comments).
     wild_visit_decay_visits: int = field(
-        default=8, metadata={"cli": True, "help": "Visits until wild-battle reward decay bottoms out"}
+        default=12, metadata={"cli": True, "help": "Visits until wild-battle reward decay bottoms out"}
     )
     # Floor for _wild_encounter_decay -- decaying all the way to 0 made every
     # wild-battle reward/cost on a tile past wild_visit_decay_visits net to
@@ -369,11 +382,17 @@ class Data:
     # teaching blanket combat avoidance instead of just curbing farming.
     # 0.15 cleared the breakeven point but left a heavily-farmed tile's
     # fights barely worth engaging; 0.35 overshot -- a well-worn tile still
-    # paid enough that farming beat progressing. 0.2 sits just above breakeven
+    # paid enough that farming beat progressing. 0.2 sat just above breakeven
     # so a stale tile's fights are ~neutral (not punished, not worth
-    # repeating), while a fresh tile / fresh fight is always clearly better.
+    # repeating), while a fresh tile / fresh fight is always clearly better --
+    # but that made a long, deliberate pre-gym grind (now that
+    # map_truncate_budget/wild_win_budget_credit give it room to actually run
+    # long, see those) pay almost nothing by its tail end. 0.28 keeps a
+    # heavily-farmed tile's fights modestly worthwhile instead of merely
+    # neutral, without getting back near 0.35's farming-beats-progressing
+    # regime.
     wild_encounter_decay_floor: float = field(
-        default=0.2, metadata={"cli": True, "help": "Floor on wild-battle reward decay"}
+        default=0.28, metadata={"cli": True, "help": "Floor on wild-battle reward decay"}
     )
     # Brought down from -0.08/-0.10 (previously "stronger than before" per
     # the comment above -- tried against the same ~1.0 loop_episode_rate
@@ -671,9 +690,33 @@ class Data:
     menu_loop_match_threshold: int = field(
         default=3, metadata={"cli": True, "help": "Matching menu states within the window that count as a loop"}
     )
+    # 64 -> 128: the smallest routes/areas have block area not far above the
+    # old floor, so it was effectively the whole per-map budget for those --
+    # a deliberate pre-gym grind (walking back onto known grass, never a
+    # brand-new tile, see _tick_map_budget) burned through it in well under
+    # what it takes to raise a starter's average level meaningfully. Doubling
+    # it buys a grind session real time on a small map before map_budget
+    # truncates the episode, on top of the win-credit below.
     map_truncate_budget_floor: int = field(
-        default=64,
+        default=128,
         metadata={"cli": True, "help": "Floor on the size-scaled per-map step budget (max(floor, area))"},
+    )
+    # Wild-battle win -> credit back onto the current map's stall counter
+    # (world_map_step_counts), same shape as count()'s existing blackout-
+    # recovery top-up. Without this, _tick_map_budget only resets on a
+    # brand-new tile (position_visit_counts == 1) -- grinding wild encounters
+    # necessarily happens on already-visited grass, so a training session
+    # never gets any of these resets and just burns down map_truncate_budget
+    # every step until the episode truncates, regardless of how well the
+    # training is going. Crediting a win ties the walking-based budget back
+    # to actual battle progress instead of only to new-tile exploration, so a
+    # deliberate grind on one patch can run considerably longer. Kept modest
+    # (a quarter of the new floor) and win-only (not every wild encounter) so
+    # it extends a genuine grind without coming close to funding indefinite
+    # stalling the way a bigger, unconditional credit would.
+    wild_win_budget_credit: int = field(
+        default=32,
+        metadata={"cli": True, "help": "Map stall-counter credit (steps) refunded per wild battle win"},
     )
     recent_actions_maxlen: int = field(
         default=20, metadata={"cli": True, "help": "History length of recent_actions used for loop detection"}
@@ -3971,6 +4014,17 @@ class Data:
             self._wild_decay_count += 1
             if decay <= self.wild_encounter_decay_floor + 1e-9:
                 self._wild_decay_floored_count += 1
+            # Win-only credit back onto this map's map_truncate_budget stall
+            # counter (see wild_win_budget_credit's own comment) — ties the
+            # walking-based budget to actual training progress instead of
+            # only to brand-new-tile exploration, which a grind session can
+            # never generate. self.pyboy.memory is back in the world here
+            # (left_battle above), so this is the tile the fight happened on.
+            if kind == "win":
+                mid = self.map_id(self.pyboy.memory)
+                self.world_map_step_counts[mid] = max(
+                    0, self.world_map_step_counts.get(mid, 0) - self.wild_win_budget_credit
+                )
 
         # Always-on (not collect_heatmap-gated) outcome tally for
         # pokemon/battle_*_rate / pokemon/battles_per_episode — see
